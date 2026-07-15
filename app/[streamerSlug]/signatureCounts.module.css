@@ -1,0 +1,196 @@
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 28px 18px 80px;
+}
+
+.head {
+  margin-bottom: 18px;
+}
+
+.title {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  color: var(--ink);
+}
+
+.sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* 현재 저장된 갯수 요약 칩 */
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 13px;
+  font-weight: 800;
+  border: 1px solid var(--paper-line);
+}
+
+/* 입력칸 목록 */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowInput {
+  flex: 1;
+  height: 44px;
+  padding: 0 14px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.rowInput:focus-visible {
+  border-color: var(--stamp);
+  outline: none;
+}
+
+.rowUnit {
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 14px;
+}
+
+.rowRemoveBtn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rowRemoveBtn:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+/* 갯수 추가 버튼 */
+.addBtn {
+  margin-top: 12px;
+  height: 40px;
+  padding: 0 16px;
+  border: 2px dashed var(--paper-line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.addBtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.addBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* save bar */
+.saveBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.tokenInput {
+  flex: 1;
+  min-width: 220px;
+  height: 46px;
+  padding: 0 14px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.tokenInput:focus-visible {
+  border-color: var(--stamp);
+  outline: none;
+}
+
+.saveBtn {
+  height: 46px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.saveBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ok {
+  margin: 12px 0 0;
+  color: #1f7a47;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.err {
+  margin: 12px 0 0;
+  color: #c0392b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.note {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.note code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--paper-line);
+  padding: 1px 5px;
+  border-radius: 5px;
+}

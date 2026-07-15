@@ -1,0 +1,260 @@
+.wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 18px 80px;
+}
+
+.head {
+  margin-bottom: 18px;
+}
+
+.title {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 28px;
+  color: var(--cover);
+}
+
+.sub {
+  margin: 0;
+  font-size: 14px;
+  color: #6b6b6b;
+  line-height: 1.6;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 860px) {
+  .layout {
+    grid-template-columns: 1.4fr 1fr;
+    align-items: start;
+  }
+}
+
+/* theme cards */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 8px 12px;
+  border: 2px solid #e7e7ea;
+  border-radius: 14px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.card:hover {
+  border-color: #c9c9cf;
+}
+
+.cardOn {
+  border-color: #111;
+  box-shadow: 0 0 0 2px #111 inset;
+}
+
+.swatch {
+  height: 56px;
+  border-radius: 9px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.cardLabel {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #222;
+}
+
+.cardBlurb {
+  font-size: 11.5px;
+  color: #8a8a8a;
+  line-height: 1.45;
+}
+
+/* preview */
+.previewCol {
+  position: sticky;
+  top: 18px;
+}
+
+.previewLabel {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #8a8a8a;
+}
+
+.preview {
+  border-radius: 16px;
+  padding: 16px;
+  background: var(--paper);
+  /* 실제 시트(.page)와 동일한 2겹: 줄무늬(위) + 테마 그라데이션(아래) */
+  background-image: repeating-linear-gradient(
+      180deg,
+      transparent,
+      transparent 23px,
+      var(--rule-line, var(--paper-line)) 23px,
+      var(--rule-line, var(--paper-line)) 24px
+    ),
+    var(--page-bg, none);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* 유리 모드 테마: 실제 시트처럼 미리보기 카드도 반투명 + 블러 */
+.preview[data-glass] .pvCover,
+.preview[data-glass] .pvCard {
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  backdrop-filter: blur(10px) saturate(1.2);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.16));
+}
+
+.pvCover {
+  padding: 16px 18px;
+  border-radius: 4px 14px 14px 4px;
+  background: var(--cover);
+  color: var(--on-cover);
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.pvCard {
+  margin-top: 14px;
+  padding: 14px 14px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  display: grid;
+  gap: 10px;
+}
+
+.pvRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--paper-line);
+  padding-bottom: 8px;
+}
+
+.pvName {
+  font-weight: 700;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.pvChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 9px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+}
+
+.pvItem {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.pvProb {
+  color: var(--stamp);
+  font-size: 13px;
+}
+
+.pvBtnRow {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pvBtn {
+  padding: 7px 18px;
+  border-radius: 11px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* save bar */
+.saveBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.tokenInput {
+  flex: 1;
+  min-width: 220px;
+  height: 46px;
+  padding: 0 14px;
+  border: 2px solid #e2e2e4;
+  border-radius: 12px;
+  font-size: 14px;
+  background: #fff;
+  color: #222;
+}
+
+.tokenInput:focus-visible {
+  border-color: #111;
+  outline: none;
+}
+
+.saveBtn {
+  height: 46px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 12px;
+  background: #111;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.saveBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ok {
+  margin: 12px 0 0;
+  color: #1f7a47;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.err {
+  margin: 12px 0 0;
+  color: #c0392b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.note {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: #9a9a9a;
+  line-height: 1.6;
+}
+
+.note code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 5px;
+  border-radius: 5px;
+}

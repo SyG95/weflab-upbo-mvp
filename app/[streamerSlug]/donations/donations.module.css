@@ -1,0 +1,1667 @@
+/* 후원집계(후원 원장) — 업보시트의 장부 언어를 그대로 잇는다.
+   괘선 종이 + 잉크/도장 토큰(globals.css :root) 사용. 팬 화면과 달리 관리자 열람 전용. */
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 20px 64px;
+  background-color: var(--paper);
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent,
+    transparent 27px,
+    var(--paper-line) 27px,
+    var(--paper-line) 28px
+  );
+}
+
+.shell {
+  width: 100%;
+  max-width: 880px;
+  display: grid;
+  gap: 16px;
+}
+
+/* 살아있는 배경(테마 fx): 페이지 배경을 비워 캔버스가 비치게 하고 내용은 위층으로 */
+.page[data-fx] {
+  background-color: transparent;
+  background-image: none;
+}
+
+.page[data-fx] .shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* 유리 카드(테마 glass): 팬 시트와 동일한 backdrop blur + 유리 테두리/그림자 */
+.page[data-glass] .periodPanel,
+.page[data-glass] .summaryStrip,
+.page[data-glass] .podiumCard,
+.page[data-glass] .ledgerCard,
+.page[data-glass] .subCard,
+.page[data-glass] .receiptCard,
+.page[data-glass] .condCard,
+.page[data-glass] .stateCard,
+.page[data-glass] .gateCard,
+.page[data-glass] .pwSection {
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  backdrop-filter: blur(16px) saturate(1.25);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  box-shadow: 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45));
+}
+
+/* ---------- 머리말 ---------- */
+
+.cover {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.kicker {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--stamp);
+}
+
+.title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.backLink {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 8px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.backLink:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+/* ---------- 기간 선택(첫 행동) ---------- */
+
+.periodPanel {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.presetRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.presetBtn {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.presetBtn:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.presetBtn:active {
+  transform: scale(0.95);
+}
+
+.presetActive {
+  background: var(--stamp);
+  border-color: var(--stamp);
+  color: var(--on-accent);
+}
+
+.customApply {
+  height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.12s ease;
+}
+
+.customApply:active {
+  transform: scale(0.96);
+}
+
+.customApply:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- 기간 직접 입력(연/월/일 시:분 타이핑) ---------- */
+
+.rangeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rangeTilde {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.dtField {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+}
+
+.dtFieldInvalid {
+  border-color: #c0392b;
+}
+
+.dtCell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+
+.dtInput {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 0;
+  -moz-appearance: textfield;
+}
+
+.dtInput:focus {
+  outline: none;
+  background: var(--stamp-soft);
+  border-radius: 4px;
+}
+
+.dtUnit {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dtGap {
+  width: 6px;
+}
+
+.dtColon {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.activeRange {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.activeRangeLabel {
+  display: inline-block;
+  padding: 2px 8px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* ---------- 상위 3명 시상대 ---------- */
+
+.podiumCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 30px 16px 0;
+  overflow: hidden;
+  animation: fadeUp 0.4s ease-out 0.12s backwards;
+}
+
+.podium {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 10px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.podiumCol,
+.podiumEmpty {
+  flex: 1;
+  min-width: 0;
+  max-width: 190px;
+  text-align: center;
+}
+
+/* 시상대 등장: 3위→2위→1위 순서로 이름이 떠오르고 단상이 바닥에서 솟는다 */
+.podiumCol {
+  animation: fadeUp 0.45s ease-out backwards;
+}
+
+.podiumRank3 { animation-delay: 0.05s; }
+.podiumRank2 { animation-delay: 0.15s; }
+.podiumRank1 { animation-delay: 0.25s; }
+
+.podiumName {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.podiumId {
+  margin: 0 0 2px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.podiumSum {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.podiumBar {
+  border-radius: 12px 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transform-origin: bottom;
+  animation: riseUp 0.55s cubic-bezier(0.22, 0.9, 0.35, 1) backwards;
+}
+
+.podiumRank3 .podiumBar { animation-delay: 0.15s; }
+.podiumRank2 .podiumBar { animation-delay: 0.25s; }
+.podiumRank1 .podiumBar { animation-delay: 0.4s; }
+
+.podiumRankNum {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.podiumBarMeta {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+/* 1등: 가장 높고 도장 배지 */
+.podiumRank1 {
+  position: relative;
+}
+
+.podiumRank1 .podiumName {
+  font-size: 17px;
+}
+
+.podiumRank1 .podiumSum {
+  font-size: 19px;
+}
+
+.podiumRank1 .podiumBar {
+  height: 132px;
+  background: var(--stamp);
+  color: var(--on-accent);
+}
+
+.podiumRank1 .podiumRankNum {
+  font-size: 32px;
+}
+
+.podiumBadge {
+  display: inline-block;
+  margin-bottom: 4px;
+  transform: rotate(-4deg);
+  padding: 3px 12px;
+  border: 2px solid var(--stamp);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--stamp);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  animation: popIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.9s backwards;
+}
+
+.podiumRank2 .podiumBar {
+  height: 98px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+/* 3위 단상: paper 색이 다크 테마에서 배경에 묻혀 안 보이던 것 → 은은한 도장색 틴트로 */
+.podiumRank3 .podiumBar {
+  height: 74px;
+  background: color-mix(in srgb, var(--stamp-soft) 55%, transparent);
+  border: 1px solid var(--paper-line);
+  border-bottom: 0;
+  color: var(--muted);
+}
+
+.condChips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 룰렛 갯수 조건별 집계 카드 ---------- */
+
+.condCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 12px 18px 10px;
+  animation: fadeUp 0.4s ease-out backwards;
+}
+
+.condHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+}
+
+.condBadge {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.condMeta {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.condMeta b {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.condError {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c0392b;
+}
+
+.condEmpty {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.evidence {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.evidenceWarn {
+  color: #b3541e;
+  font-weight: 700;
+}
+
+/* ---------- 기간 요약 띠(카드 나열 대신 한 줄 원장 합계) ---------- */
+
+.summaryStrip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  overflow: hidden;
+  animation: fadeUp 0.4s ease-out backwards;
+}
+
+.sumCell {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 18px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+}
+
+.sumCell + .sumCell {
+  border-left: 1px dashed var(--paper-line);
+}
+
+.sumLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.sumValue {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.sumHero {
+  background: var(--stamp-soft);
+}
+
+.sumHero .sumValue {
+  color: var(--stamp);
+}
+
+.sumUnit {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 3px;
+}
+
+/* ---------- 비중 막대 ---------- */
+
+.shareTrack {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  overflow: hidden;
+}
+
+.shareFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--stamp);
+  min-width: 6px;
+  animation: barGrow 0.7s cubic-bezier(0.22, 0.9, 0.35, 1) backwards;
+}
+
+/* ---------- 순위 원장 표 ---------- */
+
+.ledgerCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 6px 18px 14px;
+  animation: fadeUp 0.4s ease-out 0.18s backwards;
+}
+
+.ledgerTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.ledgerTable th {
+  padding: 12px 8px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: left;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.ledgerTable td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--paper-line);
+  font-size: 14px;
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.ledgerTable tr:last-child td {
+  border-bottom: 0;
+}
+
+.thRank { width: 52px; }
+.thSum { width: 110px; text-align: right; }
+.thCount { width: 64px; text-align: right; }
+.thShare { width: 170px; }
+
+.rankNum {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rankTop {
+  background: var(--stamp-soft);
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.fanCell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fanName {
+  font-weight: 700;
+}
+
+.fanId {
+  margin-left: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.numCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.countCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.shareCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sharePct {
+  min-width: 44px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledgerFoot {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- 상태(비어있음/로딩/오류) ---------- */
+
+.stateCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 36px 24px;
+  text-align: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.stateTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.stateDesc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+  max-width: 420px;
+}
+
+.retryBtn {
+  margin-top: 4px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.skeleton {
+  display: grid;
+  gap: 10px;
+}
+
+.skelBar {
+  height: 16px;
+  border-radius: 6px;
+  background: var(--paper-line);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+/* ---------- 잠금 화면 ---------- */
+
+.gateCard {
+  max-width: 420px;
+  margin: 40px auto;
+  padding: 28px 24px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  text-align: center;
+}
+
+.gateLock {
+  font-size: 34px;
+  margin-bottom: 8px;
+}
+
+.gateTitle {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.gateDesc {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.gateForm {
+  display: grid;
+  gap: 10px;
+}
+
+.gateInput {
+  height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.gateButton {
+  height: 42px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gateButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.gateError {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #c0392b;
+}
+
+/* ---------- 탭 바 (총후원/룰렛/미션) ---------- */
+
+.tabBar {
+  display: flex;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.tabBtn {
+  flex: 1;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.tabBtn:hover {
+  color: var(--ink);
+}
+
+.tabActive {
+  background: var(--stamp);
+  color: var(--on-accent);
+}
+
+/* ---------- 룰렛 탭: 갯수 칩 ---------- */
+
+.rouletteHint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.rouletteChip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
+}
+
+.rouletteChip:active {
+  transform: scale(0.95);
+}
+
+.rouletteChip:hover {
+  border-color: var(--stamp);
+}
+
+.rouletteChipOn {
+  background: var(--stamp);
+  border-color: var(--stamp);
+  color: var(--on-accent);
+}
+
+.rouletteChipCount {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.75;
+  margin-left: 3px;
+}
+
+/* ---------- "그 외 N명" 요약 행 ---------- */
+
+.othersRow td {
+  color: var(--muted);
+  font-weight: 700;
+  background: var(--paper);
+}
+
+.shareFillMuted {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--paper-line);
+  min-width: 6px;
+  animation: barGrow 0.7s cubic-bezier(0.22, 0.9, 0.35, 1) backwards;
+}
+
+/* ---------- 미션 표: 종류/시각 열 폭 고정(열 깨짐 방지) ---------- */
+
+.thKind { width: 56px; }
+.thTime { width: 120px; }
+
+.timeCell {
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 스트리머 실수령 총계 ---------- */
+
+.receiptCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 16px 18px 14px;
+  animation: fadeUp 0.4s ease-out 0.06s backwards;
+}
+
+.receiptMain {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.receiptLabel {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.receiptValue {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.receiptBreak {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.receiptNote {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- 미션 정산 종류 배지 ---------- */
+
+.missionKind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.missionVs {
+  background: var(--stamp-soft);
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+/* ---------- 구독 별도 집계(개월 단위) ---------- */
+
+.subCard {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 14px 18px 8px;
+  animation: fadeUp 0.4s ease-out 0.24s backwards;
+}
+
+.subHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.subBadge {
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.subNote {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.subTotals {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--paper-line);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.subTotals b {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 비밀번호 변경(접힘 섹션) ---------- */
+
+.pwSection {
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 12px 18px;
+}
+
+.pwSummary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.pwSummary:hover {
+  color: var(--ink);
+}
+
+.pwForm {
+  display: grid;
+  gap: 10px;
+  padding: 14px 2px 6px;
+  max-width: 360px;
+}
+
+.pwHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.pwField {
+  display: grid;
+  gap: 4px;
+}
+
+.pwLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.pwOk {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f7a4d;
+}
+
+/* ---------- 좁은 화면 ---------- */
+
+@media (max-width: 640px) {
+  .summaryStrip {
+    flex-direction: column;
+  }
+
+  .sumCell + .sumCell {
+    border-left: 0;
+    border-top: 1px dashed var(--paper-line);
+  }
+
+  /* 좁은 화면 원칙: "누가"(닉네임)가 최우선. 보조 열을 줄여 이름 칸을 살린다. */
+  .thRank { width: 34px; }
+  .thSum { width: 88px; }
+  .thShare { width: 64px; }
+  .sharePct { display: none; }
+  .thCount, .countCell { display: none; }
+  .fanId { display: none; }
+
+  .rankNum {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+  }
+
+  .ledgerTable th { padding: 10px 6px 6px; }
+  .ledgerTable td { padding: 10px 6px; font-size: 13px; }
+
+  .thKind { width: 50px; }
+  .thTime { width: 96px; }
+  .timeCell { font-size: 11px; }
+}
+
+/* ---------- 🧪 실험실(베타) ---------- */
+
+.betaLab {
+  display: block;
+  animation: fadeUp 0.4s ease-out 0.3s backwards;
+}
+
+/* 실험실 헤더(정적 배너 — 열고닫음은 열쇠 게이트가 담당) */
+.betaBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px dashed var(--stamp);
+  background: color-mix(in srgb, var(--stamp-soft) 60%, transparent);
+}
+
+.betaBannerLead {
+  flex: 1;
+  min-width: 160px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* 실험실 열쇠 잠금 게이트 */
+.labLocked {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px dashed var(--paper-line);
+  background: var(--surface);
+  animation: fadeUp 0.4s ease-out 0.3s backwards;
+}
+
+.labLockedHead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.labLockedTag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.labLockedText {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.labKeyRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.labKeyInput {
+  flex: 1;
+  min-width: 120px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.labKeyInput:focus {
+  outline: none;
+  border-color: var(--stamp);
+}
+
+.labKeyInputErr {
+  border-color: #c0392b;
+}
+
+.labKeyBtn {
+  height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.labKeyBtn:active {
+  transform: scale(0.96);
+}
+
+.labKeyErr {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #c0392b;
+}
+
+.labWrap {
+  display: grid;
+  gap: 10px;
+}
+
+.labRelock {
+  justify-self: start;
+  padding: 6px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.labRelock:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.betaBody {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  animation: fadeUp 0.3s ease-out;
+}
+
+.betaTag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.betaBannerText {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+.betaCard {
+  background: var(--surface);
+  border: 1px dashed var(--paper-line);
+  border-radius: 16px;
+  padding: 14px 18px;
+}
+
+.betaHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.betaTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.betaSub {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 수식 타일 */
+.formulaGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.formulaTile {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+}
+
+.formulaLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.formulaExpr {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.formulaExpr b {
+  color: var(--ink);
+}
+
+.formulaResult {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.formulaUnit {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 3px;
+}
+
+/* 집중도 게이지(도넛) */
+.gaugeRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.gaugeRing {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(var(--stamp) calc(var(--pct, 0) * 1%), var(--paper-line) 0);
+}
+
+.gaugeRing::after {
+  content: "";
+  position: absolute;
+  inset: 13px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.gaugeCenter {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.gaugePct {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.gaugeCap {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.gaugeNote {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.gaugeNote b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 추격 대결 미터 */
+.race {
+  display: grid;
+  gap: 12px;
+}
+
+.raceRow {
+  display: grid;
+  gap: 4px;
+}
+
+.raceTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.raceName {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raceAmt {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.raceTrack {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  overflow: hidden;
+}
+
+.raceFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--stamp);
+  min-width: 6px;
+  animation: barGrow 0.7s cubic-bezier(0.22, 0.9, 0.35, 1) backwards;
+}
+
+.raceGap {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.raceGap b {
+  color: var(--ink);
+}
+
+/* 순위 변동 */
+.deltaList {
+  display: grid;
+  gap: 0;
+}
+
+.deltaItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.deltaItem:last-child {
+  border-bottom: 0;
+}
+
+.deltaRankNow {
+  width: 26px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.deltaName {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deltaMark {
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.deltaUp {
+  color: #1f9d55;
+}
+
+.deltaDown {
+  color: #c0392b;
+}
+
+.deltaFlat {
+  color: var(--muted);
+}
+
+.deltaNew {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.deltaMuted {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* 후원 스타일 산점도 */
+.scatterWrap {
+  display: grid;
+  gap: 10px;
+}
+
+.scatterSvg {
+  width: 100%;
+  height: auto;
+}
+
+.scatterAxis {
+  stroke: var(--paper-line);
+  stroke-width: 1;
+}
+
+.scatterAxisLabel {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.scatterDotNum {
+  fill: var(--on-accent);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.dotHit {
+  fill: var(--stamp);
+}
+
+.dotSteady {
+  fill: color-mix(in srgb, var(--stamp) 45%, var(--paper-line));
+}
+
+.dotBalanced {
+  fill: var(--muted);
+}
+
+.scatterLegend {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.styleBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* 베팅 금액 구성(100% 스택 막대) */
+.distBar {
+  display: flex;
+  height: 22px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--paper-line);
+  margin-bottom: 12px;
+}
+
+.distSeg {
+  height: 100%;
+  min-width: 2px;
+  animation: barGrow 0.7s cubic-bezier(0.22, 0.9, 0.35, 1) backwards;
+}
+
+.distLegend {
+  display: grid;
+  gap: 7px;
+}
+
+.distRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.distSwatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.distLabel {
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.distVal {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.seg0 { background: var(--stamp); }
+.seg1 { background: color-mix(in srgb, var(--stamp) 78%, var(--paper-line)); }
+.seg2 { background: color-mix(in srgb, var(--stamp) 56%, var(--paper-line)); }
+.seg3 { background: color-mix(in srgb, var(--stamp) 38%, var(--paper-line)); }
+.seg4 { background: color-mix(in srgb, var(--stamp) 22%, var(--paper-line)); }
+
+/* 좁은 화면: 수식 타일 1열(베타 기본 규칙보다 뒤에 둬 소스 순서로 이기게) */
+@media (max-width: 640px) {
+  .formulaGrid { grid-template-columns: 1fr; }
+}
+
+/* ---------- 살아있는 대시보드: 등장/차오름 애니메이션 ---------- */
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes riseUp {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes barGrow {
+  from {
+    width: 0;
+  }
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5) rotate(6deg);
+  }
+}
+
+/* 움직임 줄이기 설정 사용자는 애니메이션 없이 즉시 최종 화면 */
+@media (prefers-reduced-motion: reduce) {
+  .page *,
+  .page *::before,
+  .page *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

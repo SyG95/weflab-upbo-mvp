@@ -1,0 +1,54 @@
+@import url("https://fonts.googleapis.com/css2?family=Gaegu:wght@400;700&display=swap");
+
+:root {
+  --font-base: Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", Inter, Arial, sans-serif;
+  --font-display: Gaegu, var(--font-base);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --ink: #4a2440;
+  --paper: #fff5fa;
+  --paper-line: #f3c9dc;
+  --stamp: #e8407e;
+  --stamp-soft: #fbdce8;
+  --cover: #c23472;
+  --muted: #9c7e94;
+  --destructive: #c0392b;
+
+  /* 테마 프리셋용 추가 토큰 (기본값 = 종이 영수증). lib/themes.ts 에서 갈아끼움. */
+  --surface: #ffffff;
+  --on-cover: #ffffff;
+  --on-accent: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-base);
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

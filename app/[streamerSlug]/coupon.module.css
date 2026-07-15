@@ -1,0 +1,472 @@
+/* 쿠폰 장부 — 종이장부 테마 토큰 재사용(signatureCounts.module.css 톤) */
+
+.block {
+  margin-top: 22px;
+}
+
+.block:first-child {
+  margin-top: 0;
+}
+
+.blockTitle {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.blockSub {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* 쿠폰 종류 정의 */
+.itemRows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input {
+  height: 42px;
+  padding: 0 12px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.input:focus-visible {
+  border-color: var(--stamp);
+  outline: none;
+}
+
+.itemNameInput {
+  composes: input;
+  flex: 1;
+  min-width: 160px;
+}
+
+.itemKeyTag {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.removeBtn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.removeBtn:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.addBtn {
+  margin-top: 12px;
+  height: 40px;
+  padding: 0 16px;
+  border: 2px dashed var(--paper-line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.addBtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.addBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 기록 폼 */
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.nickInput {
+  composes: input;
+  width: 150px;
+}
+
+.idInput {
+  composes: input;
+  width: 140px;
+}
+
+.select {
+  composes: input;
+  width: auto;
+  min-width: 120px;
+}
+
+.qtyInput {
+  composes: input;
+  width: 90px;
+}
+
+.noteInput {
+  composes: input;
+  flex: 1;
+  min-width: 160px;
+}
+
+.saveBtn {
+  height: 42px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 12px;
+  background: var(--stamp);
+  color: var(--stamp-ink, #fff);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ok {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--stamp);
+  font-weight: 700;
+}
+
+.err {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #c0392b;
+  font-weight: 700;
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 잔액 표 */
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--paper-line);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--paper-line);
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.viewerName {
+  font-weight: 700;
+}
+
+.viewerId {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.balanceValue {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.pickBtn {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pickBtn:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+/* 이력 */
+.eventList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.eventRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  font-size: 13px;
+  background: var(--surface);
+}
+
+.eventTime {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  border: 1px solid var(--paper-line);
+}
+
+.badgeGrant {
+  composes: badge;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.badgeUse {
+  composes: badge;
+  background: transparent;
+  color: var(--ink);
+}
+
+.badgeSet {
+  composes: badge;
+  background: transparent;
+  color: var(--muted);
+}
+
+.eventDelta {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.eventNote {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 자동 적립 연결(매핑) */
+.mapList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mapItem {
+  padding: 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.mapItemHead {
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.mapRows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mapRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mapSourceName {
+  flex: 1;
+  min-width: 140px;
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.mapEmpty {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mapAddRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  padding: 2px;
+  background: var(--surface);
+}
+
+.stepperBtn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stepperBtn:hover:not(:disabled) {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.stepperBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.stepperVal {
+  min-width: 30px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.perUnit {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 지난 기록 소급 적립 */
+.dateInput {
+  composes: input;
+  width: 210px;
+}
+
+.backfillActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.previewBox {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.previewTotal {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.previewWarn {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #c0392b;
+}
+
+.previewMuted {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.splitVal {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tableNote {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}

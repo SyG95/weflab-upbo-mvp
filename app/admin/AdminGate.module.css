@@ -1,0 +1,74 @@
+.card {
+  max-width: 420px;
+  margin: 64px auto;
+  background: #fff;
+  border: 1px solid var(--paper-line);
+  border-radius: 16px;
+  padding: 34px 28px;
+  text-align: center;
+}
+
+.lock {
+  font-size: 36px;
+  line-height: 1;
+}
+
+.title {
+  margin: 12px 0 6px;
+  font-family: var(--font-display);
+  font-size: 24px;
+  color: var(--cover);
+}
+
+.desc {
+  margin: 0 0 22px;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.desc code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.input {
+  padding: 11px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.button {
+  padding: 11px 14px;
+  border: none;
+  border-radius: 10px;
+  background: var(--cover);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.error {
+  margin: 4px 0 0;
+  color: var(--destructive);
+  font-size: 13px;
+}

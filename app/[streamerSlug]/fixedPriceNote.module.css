@@ -1,0 +1,317 @@
+/* 정가기록(시그니처 후원) 전용 스타일 — DeliveryManager 배송관리 화면.
+   룰렛 확률(dmItemProb)과 표기를 명확히 구분하기 위해, 같은 포인트색(--stamp) 계열이지만
+   "꽉 찬 알약" 형태로 대비를 준다. 새 CSS 변수는 추가하지 않고 기존 테마 변수만 사용한다. */
+
+.fixedBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* 정가 메모 블록 전체 — 시청자 상세(dmDetail) 안, 업보 목록 아래에 붙는다 */
+.noteWrap {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--paper-line);
+  display: grid;
+  gap: 10px;
+}
+
+.noteBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.noteLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.noteLabelTime {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.noteTextarea {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 2px solid var(--paper-line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.noteTextarea:focus-visible {
+  outline: none;
+  border-color: var(--stamp);
+}
+
+.noteFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.noteCounter {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.noteSaveBtn {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.noteSaveBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.noteMsgOk {
+  font-size: 11px;
+  color: #2f7d4f;
+  font-weight: 700;
+}
+
+.noteMsgErr {
+  font-size: 11px;
+  color: var(--destructive);
+  font-weight: 700;
+}
+
+/* 공용 토큰 입력칸 — 정가 메모 블록 하단(DeliveryManager 내 다른 곳에 토큰 입력 UI가 없을 때) */
+.tokenBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--paper-line);
+}
+
+.tokenInput {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.tokenHint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 배송 중 / 배송완료 탭 — DeliveryManager 목록 위. page.module.css 의 ieTab 톤을 그대로 따른다. */
+.dmTabs {
+  display: flex;
+  gap: 6px;
+}
+
+.dmTab,
+.dmTabOn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.dmTab {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.dmTab:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.dmTabOn {
+  background: var(--stamp);
+  color: var(--on-accent);
+  border-color: var(--stamp);
+}
+
+/* 배송완료 탭 상단 — 토큰 입력 + 일괄 보관 버튼 + 결과 메시지 */
+.archiveBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.archiveBtn {
+  height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--destructive);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.archiveBtn:hover {
+  filter: brightness(0.92);
+}
+
+.archiveBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── 메모 이미지 첨부(시청자/정가 공용) — 관리자 전용, 팬 화면 미노출 ── */
+.memoImgWrap {
+  display: grid;
+  gap: 6px;
+}
+
+.memoThumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.memoThumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+}
+
+.memoThumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.memoThumbDel {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.memoThumbDel:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.memoImgBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.memoAddBtn {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px dashed var(--paper-line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.memoAddBtn:hover {
+  border-color: var(--stamp);
+}
+
+.memoAddBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.memoImgHint {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* ── 배송관리: 저장된 완료 상품 접기 바 — 시청자 상세 안, 기본 접힘 ── */
+.foldBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border: 1px dashed var(--paper-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+
+.foldBar:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.foldHint {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}

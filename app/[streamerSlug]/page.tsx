@@ -1,0 +1,1772 @@
+import styles from "./page.module.css";
+import ThresholdForm from "./ThresholdForm";
+import CatalogManager from "./CatalogManager";
+import DeliveryManager from "./DeliveryManager";
+import ItemEventManager from "./ItemEventManager";
+import ItemHistoryLog from "./ItemHistoryLog";
+import SpecialRuleManager from "./SpecialRuleManager";
+import {
+  computeHoldings,
+  DEFAULT_FAN_LAYOUT,
+  fanLayoutBlocksInSlot,
+  filterEntriesByCatalogUsage,
+  matchFanTabLabel,
+  matchFanTabLabelWhole,
+  matchGroupToConfig,
+  normalizeAccountId,
+  productColorById,
+  type FanLayoutBlock,
+  type FanLayoutSlot,
+  type AggItem,
+  type Catalog,
+  type CatalogGroup,
+  type CatalogItem,
+  type FanDeliveryReflect,
+  type ImportBatch,
+  type StateResult,
+  type StreamerState,
+  type UpboEntry,
+  type ViewerHolding,
+  type ViewerSummary,
+} from "../../lib/api";
+import {
+  getStreamerState,
+  getShowcaseBySlug,
+  getCouponStateBySlug,
+  getCouponExcludedNamesBySlug,
+  couponExcludedNameSet,
+  filterHoldingsByExcludedNames,
+  type ShowcaseState,
+  type CouponState,
+} from "../../lib/upboSupabase";
+import CouponManager from "./CouponManager";
+import { resolveTheme } from "../../lib/themes";
+import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
+import ThemeLiveBackground from "./ThemeLiveBackground";
+import ShowcaseManager from "./ShowcaseManager";
+import SignatureCountsManager from "./SignatureCountsManager";
+import ManualEntryManager from "./ManualEntryManager";
+import RouletteConfigManager, {
+  type GroupForManager,
+  type NamedRouletteForManager,
+} from "./RouletteConfigManager";
+import FanDeliveryModeForm from "./FanDeliveryModeForm";
+import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
+import ProductColorManager from "./ProductColorManager";
+import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
+import FanTabNameManager, { type FanTabForNaming } from "./FanTabNameManager";
+import WeflabLinkManager from "./WeflabLinkManager";
+import FanLayoutEditor from "./FanLayoutEditor";
+import SheetAdminGate from "./SheetAdminGate";
+import SheetAdminPasswordForm from "./SheetAdminPasswordForm";
+import AdminTabEditor from "./AdminTabEditor";
+import SortableSections from "./SortableSections";
+import { AdminCollapseProvider, CollapsibleCard } from "./AdminCollapse";
+import ShowcasePosterRail from "./ShowcasePosterRail";
+import { sheetAdminAccessState } from "../../lib/sheetAdminAuth";
+import { shouldShowRouletteTabs, splitProbabilityFamilies } from "../../lib/fanRouletteView";
+import type { CSSProperties } from "react";
+
+type PageProps = {
+  params: Promise<{ streamerSlug: string }>;
+  searchParams: Promise<{
+    admin?: string;
+    q?: string;
+    tab?: string;
+    atab?: string;
+    theme?: string;
+    rtab?: string;
+  }>;
+};
+
+type FanTab = "ledger" | "history";
+type AdminTab = "delivery" | "items" | "history" | "coupon" | "manual" | "roulettes" | "reveal" | "promo" | "signature" | "settings";
+
+// 시스템 시간(끝에 Z 붙은 UTC ISO)을 Asia/Seoul 기준으로 변환해 "YYYY-MM-DD HH:mm KST"로 표시.
+// donateTimeText 같은 위플랩 원문 시간에는 쓰지 않는다(그건 변환 없이 그대로 표시).
+function fmtKst(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} KST`;
+}
+
+function groupAmountLabel(g: CatalogGroup): string {
+  return g.amountMin === g.amountMax ? `${g.amountMin}` : `${g.amountMin}~${g.amountMax}`;
+}
+
+// entry의 룰렛 세트 표시 라벨(있을 때만). amountRangeLabel 우선, 없으면 donationAmount 숫자.
+// 둘 다 없으면 undefined → 화면에서 숨긴다(억지 추론 금지).
+function rouletteSetLabel(e: UpboEntry): string | undefined {
+  if (e.amountRangeLabel) return e.amountRangeLabel;
+  if (e.donationAmount != null) return String(e.donationAmount);
+  return undefined;
+}
+
+function tabHref(slug: string, tab: FanTab, q: string): string {
+  const params = new URLSearchParams();
+  if (tab === "history") params.set("tab", "history");
+  if (q) params.set("q", q);
+  const qs = params.toString();
+  return `/${slug}${qs ? `?${qs}` : ""}`;
+}
+
+// 같은 시청자의 같은 업보 항목은 ×횟수로 합치고, 확률 높은 순으로 정렬.
+// 룰렛 세트 라벨이 있으면 같은 상품·확률이라도 세트별로 따로 묶는다(없으면 기존과 동일).
+function aggregateItems(arr: UpboEntry[]): AggItem[] {
+  const map = new Map<string, AggItem>();
+  for (const e of arr) {
+    const label = rouletteSetLabel(e);
+    const k = `${e.itemName}@@${e.probability}@@${label ?? ""}`;
+    const cur = map.get(k);
+    const count = Math.max(1, Number(e.effectiveCount ?? 1));
+    if (cur) cur.count += count;
+    else
+      map.set(k, {
+        itemName: e.itemName,
+        probability: e.probability,
+        count,
+        amountRangeLabel: label,
+      });
+  }
+  return [...map.values()].sort((a, b) => b.probability - a.probability || b.count - a.count);
+}
+
+// entries를 계정ID(없으면 닉네임) 기준으로 통합. 시트는 확률 높은 순 내림차순.
+// (히스토리 탭 등 원본 entry 기반 집계에서만 사용)
+function groupByViewer(entries: UpboEntry[]): ViewerSummary[] {
+  const map = new Map<string, UpboEntry[]>();
+  for (const e of entries) {
+    const key = (e.fanId && e.fanId.trim()) || e.fanNickname || e.id;
+    const arr = map.get(key);
+    if (arr) arr.push(e);
+    else map.set(key, [e]);
+  }
+
+  const groups: ViewerSummary[] = [];
+  for (const [key, arr] of map) {
+    const items = aggregateItems(arr);
+    const top = [...arr].sort((a, b) => b.probability - a.probability)[0];
+    const maxProb = items.reduce((m, it) => Math.max(m, it.probability), 0);
+    groups.push({
+      key,
+      fanId: top.fanId,
+      fanNickname: top.fanNickname,
+      items,
+      maxProb,
+      total: arr.reduce((sum, entry) => sum + Math.max(1, Number(entry.effectiveCount ?? 1)), 0),
+    });
+  }
+
+  groups.sort(
+    (a, b) =>
+      b.maxProb - a.maxProb ||
+      b.total - a.total ||
+      a.fanNickname.localeCompare(b.fanNickname),
+  );
+  return groups;
+}
+
+// ViewerHolding(computeHoldings 결과) → ViewerSummary(LedgerTable/DeliveryManager 공용 shape) 변환.
+// mergeSets=false(기본): 같은 (itemName, probability, amountRangeLabel) 조각을 합산 — 배송관리는
+//   처리수량을 세트 포함 itemKey로 저장하므로 기존 키 보존을 위해 이 모드를 유지한다.
+// mergeSets=true(팬 시트 표시용): 세트(33/330)·확률 구분 없이 "상품명"만으로 합산.
+//   sy 확정(2026-07-07): 같은 상품이 단차/연차 확률 차이로 칩이 갈라지던 것 통합, %는 표기 안 함
+//   (확률표 공개가 정보를 담당). 정가 기록만은 "정가" 배지를 위해 별도 칩으로 유지한다.
+//   probability는 화면에 안 보여도 "귀한 순" 정렬용으로 대푯값(최대)을 유지한다.
+function holdingsToViewerSummaries(
+  holdings: ViewerHolding[],
+  opts?: { mergeSets?: boolean },
+): ViewerSummary[] {
+  const mergeSets = opts?.mergeSets ?? false;
+  return holdings.map((h) => {
+    const aggMap = new Map<string, AggItem>();
+    for (const it of h.items) {
+      const isFixed = it.amountRangeLabel === "정가";
+      const k = mergeSets
+        ? `${it.itemName}@@${isFixed ? "정가" : ""}`
+        : `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
+      const cur = aggMap.get(k);
+      if (cur) {
+        cur.count += it.quantity;
+        if (mergeSets && it.probability > cur.probability) cur.probability = it.probability;
+      } else {
+        aggMap.set(k, {
+          itemName: it.itemName,
+          probability: it.probability,
+          count: it.quantity,
+          amountRangeLabel: mergeSets ? (isFixed ? "정가" : undefined) : it.amountRangeLabel,
+        });
+      }
+    }
+    const items = [...aggMap.values()].sort(
+      (a, b) => b.probability - a.probability || b.count - a.count,
+    );
+    return {
+      key: h.key,
+      fanId: h.ownerId,
+      fanNickname: h.ownerName,
+      items,
+      maxProb: h.maxProb,
+      total: h.total,
+    };
+  });
+}
+
+function matchesQuery(e: UpboEntry, needle: string): boolean {
+  return (
+    (e.fanId ?? "").toLowerCase().includes(needle) ||
+    (e.fanNickname ?? "").toLowerCase().includes(needle)
+  );
+}
+
+function filterViewers(groups: ViewerSummary[], q: string): ViewerSummary[] {
+  if (!q) return groups;
+  const needle = q.toLowerCase();
+  return groups.filter(
+    (g) =>
+      g.fanId.toLowerCase().includes(needle) ||
+      g.fanNickname.toLowerCase().includes(needle),
+  );
+}
+
+// 획득 기록: 업보 목록과 별개로 상품 1건씩, 후원시간(원문) 포함. 최근순.
+function historyRows(entries: UpboEntry[], q: string): UpboEntry[] {
+  const needle = q.toLowerCase();
+  const filtered = q ? entries.filter((e) => matchesQuery(e, needle)) : entries;
+  return [...filtered].sort((a, b) =>
+    a.donateTimeText < b.donateTimeText ? 1 : a.donateTimeText > b.donateTimeText ? -1 : 0,
+  );
+}
+
+async function loadStreamerState(slug: string): Promise<StateResult> {
+  try {
+    const state = (await getStreamerState(slug)) as unknown as StreamerState;
+    return { ok: true, state };
+  } catch (error) {
+    const status = (error as Error & { status?: number }).status;
+    if (status === 404) return { ok: false, reason: "notfound" };
+    return { ok: false, reason: "error" };
+  }
+}
+
+export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
+  const { streamerSlug } = await params;
+  const { admin, q, tab, atab, theme: themePreview, rtab } = await searchParams;
+  const isAdminMode = admin === "1";
+  const searchQuery = (q ?? "").trim();
+  const activeTab: FanTab = tab === "history" ? "history" : "ledger";
+  const activeAdminTab: AdminTab =
+    atab === "settings"
+      ? "settings"
+      : atab === "items"
+        ? "items"
+        : atab === "history"
+          ? "history"
+          : atab === "coupon"
+            ? "coupon"
+            : atab === "manual"
+            ? "manual"
+            : atab === "roulettes"
+              ? "roulettes"
+              : atab === "reveal"
+                ? "reveal"
+                : atab === "promo"
+            ? "promo"
+            : atab === "signature"
+              ? "signature"
+              : "delivery";
+
+  const result = await loadStreamerState(streamerSlug);
+  // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
+  const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
+  const theme = resolveTheme(themePreview || savedThemeId);
+  const themeStyle = theme.vars as CSSProperties;
+
+  // 쇼케이스(홍보): 배너/포스터/공지를 등록한 스트리머만 팬 화면 레이아웃이 확장된다.
+  // 조회 실패는 페이지를 죽이지 않고 "미표시"로 처리한다.
+  const showcase: ShowcaseState | null = result.ok
+    ? await getShowcaseBySlug(streamerSlug).catch(() => null)
+    : null;
+  // 쿠폰 장부(관리자 탭 전용). 테이블 미적용/조회 실패는 페이지를 죽이지 않고 탭 안에서 안내한다.
+  const couponState: CouponState | null =
+    result.ok && isAdminMode ? await getCouponStateBySlug(streamerSlug).catch(() => null) : null;
+  // 조각 4: 쿠폰에 연결(등록)한 룰렛 상품명 집합 → 팬 시트/배송에서 표시상 제외.
+  // 팬 모드는 공개 화면이라 잔액/이벤트 없이 source map 만 얇게 로드한다(실패/미적용=빈 Set=회귀 0).
+  // 관리자 모드는 이미 읽은 couponState.sourceMap 에서 바로 뽑아 추가 조회가 없다.
+  const fanCouponExcluded: Set<string> =
+    result.ok && !isAdminMode
+      ? await getCouponExcludedNamesBySlug(streamerSlug).catch(() => new Set<string>())
+      : new Set<string>();
+  // 룰렛 확률표 공개(오른쪽 레일에 표시). 쇼케이스 콘텐츠가 없어도 확률표만으로 레일을 띄운다.
+  const revealTables: FanRevealTable[] =
+    result.ok && !isAdminMode ? buildFanRevealTables(result.state) : [];
+  const hasProbRail = revealTables.length > 0;
+  const showcaseContent = Boolean(
+    showcase &&
+      (showcase.bannerUrl || showcase.posterUrls?.some(Boolean) || showcase.noticeText?.trim()),
+  );
+  const showcaseOn = !isAdminMode && (showcaseContent || hasProbRail);
+  const posterItems = showcaseOn
+    ? (showcase?.posterUrls ?? []).map((url, i) => ({ url, i })).filter((p) => Boolean(p.url))
+    : [];
+  const noticeText = showcase?.noticeText?.trim() ?? "";
+  // 공지 전용 폰트(기본이면 사이트 글씨체 그대로). 비기본일 때만 구글폰트를 로드한다.
+  const noticeFont = showcase?.noticeFont ?? "";
+  const noticeFontLink = noticeFontHref(noticeFont);
+
+  // 블록 배치(스트리머별): 포스터/확률표/공지를 어느 슬롯에 둘지. 내용 없는 블록은 표시 안 함.
+  const fanLayout = (result.ok ? result.state.fanLayout : undefined) ?? DEFAULT_FAN_LAYOUT;
+  const blockPresent: Record<FanLayoutBlock, boolean> = {
+    posters: posterItems.length > 0,
+    reveal: revealTables.length > 0,
+    notice: Boolean(showcaseOn && noticeText),
+  };
+  const slotBlocks = (slot: FanLayoutSlot): FanLayoutBlock[] =>
+    fanLayoutBlocksInSlot(fanLayout, slot).filter((b) => blockPresent[b]);
+  const topBlocks = slotBlocks("top");
+  const leftBlocks = slotBlocks("left");
+  const rightBlocks = slotBlocks("right");
+  const bottomBlocks = slotBlocks("bottom");
+
+  // 블록 1개 렌더. horizontal=가로 슬롯(시트 위/아래) — 포스터는 가로 나열로 변형.
+  const renderFanBlock = (block: FanLayoutBlock, horizontal: boolean) =>
+    block === "posters" ? (
+      <ShowcasePosterRail
+        key="posters"
+        horizontal={horizontal}
+        posters={posterItems.map(({ url, i }) => ({
+          url: url as string,
+          i,
+          link: showcase?.posterLinks?.[i] ?? null,
+        }))}
+      />
+    ) : block === "reveal" ? (
+      <FanRevealCard key="reveal" tables={revealTables} />
+    ) : (
+      <section key="notice" className={styles.showcaseNotice} aria-label="공지사항">
+        {/* 비기본 공지 폰트일 때만 구글폰트 로드(Next가 head로 hoist·중복 제거). */}
+        {noticeFontLink ? <link rel="stylesheet" href={noticeFontLink} /> : null}
+        <h3>공지사항</h3>
+        <p style={noticeFont ? { fontFamily: noticeFontCss(noticeFont) } : undefined}>{noticeText}</p>
+      </section>
+    );
+
+  // 관리자 모드 잠금: 스트리머(슬러그)별 비밀번호 확인 전엔 화면을 열지 않는다.
+  const sheetAccess = isAdminMode ? await sheetAdminAccessState(streamerSlug) : null;
+  const sheetAdminLocked = sheetAccess === "locked" || sheetAccess === "blocked-unconfigured";
+
+  return (
+    <main
+      className={styles.page}
+      style={themeStyle}
+      data-fx={theme.fx?.background}
+      data-glass={theme.fx?.glass ? "1" : undefined}
+      data-showcase={showcaseOn ? "1" : undefined}
+    >
+      <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />
+      <div className={styles.shell}>
+        {showcaseOn && showcase?.bannerUrl ? (
+          <section className={styles.showcaseBanner} aria-label={`${streamerSlug} 배너`}>
+            {/* 원본 비율 유지가 핵심이라 next/image 대신 img 사용(외부 도메인 설정 불요) */}
+            {showcase.bannerLink ? (
+              <a href={showcase.bannerLink} target="_blank" rel="noopener noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={showcase.bannerUrl} alt={`${streamerSlug} 배너`} />
+              </a>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={showcase.bannerUrl} alt={`${streamerSlug} 배너`} />
+            )}
+          </section>
+        ) : null}
+        <header className={styles.cover}>
+          <div className={styles.coverTop}>
+            <div>
+              <h1 className={styles.coverName}>{streamerSlug} 업보시트</h1>
+            </div>
+            <a
+              className={styles.adminTab}
+              href={isAdminMode ? `/${streamerSlug}` : `/${streamerSlug}?admin=1`}
+            >
+              {isAdminMode ? "팬 화면으로" : "관리자"}
+            </a>
+          </div>
+        </header>
+
+        {isAdminMode && sheetAdminLocked ? (
+          <SheetAdminGate
+            slug={streamerSlug}
+            blocked={sheetAccess === "blocked-unconfigured"}
+            returnTo={`/${streamerSlug}?admin=1${activeAdminTab !== "delivery" ? `&atab=${activeAdminTab}` : ""}`}
+          />
+        ) : !result.ok ? (
+          <ConnectionNotice reason={result.reason} slug={streamerSlug} />
+        ) : isAdminMode ? (
+          <AdminPanel state={result.state} activeAdminTab={activeAdminTab} showcase={showcase} coupon={couponState} />
+        ) : showcaseOn ? (
+          <div
+            className={styles.showcaseLayout}
+            data-top={topBlocks.length > 0 ? "1" : undefined}
+            data-bottom={bottomBlocks.length > 0 ? "1" : undefined}
+            data-rails-head={fanLayout.railsAtHead ? "1" : undefined}
+          >
+            {topBlocks.length > 0 ? (
+              <div className={styles.slotTop}>{topBlocks.map((b) => renderFanBlock(b, true))}</div>
+            ) : null}
+            {leftBlocks.length > 0 ? (
+              <aside className={styles.slotLeft}>{leftBlocks.map((b) => renderFanBlock(b, false))}</aside>
+            ) : null}
+            <div className={styles.showcaseMain}>
+              <FanView
+                state={result.state}
+                slug={streamerSlug}
+                searchQuery={searchQuery}
+                activeTab={activeTab}
+                activeRoulette={rtab ?? ""}
+                excludedNames={fanCouponExcluded}
+              />
+            </div>
+            {rightBlocks.length > 0 ? (
+              <aside className={styles.slotRight}>{rightBlocks.map((b) => renderFanBlock(b, false))}</aside>
+            ) : null}
+            {bottomBlocks.length > 0 ? (
+              <div className={styles.slotBottom}>{bottomBlocks.map((b) => renderFanBlock(b, true))}</div>
+            ) : null}
+          </div>
+        ) : (
+          <FanView
+            state={result.state}
+            slug={streamerSlug}
+            searchQuery={searchQuery}
+            activeTab={activeTab}
+            activeRoulette={rtab ?? ""}
+            excludedNames={fanCouponExcluded}
+          />
+        )}
+      </div>
+    </main>
+  );
+}
+
+function ConnectionNotice({
+  reason,
+  slug,
+}: {
+  reason: "offline" | "notfound" | "error";
+  slug: string;
+}) {
+  const text =
+    reason === "notfound"
+      ? `아직 '${slug}' 데이터가 없어요. Extension으로 룰렛표와 결과를 먼저 수집해 주세요.`
+      : "업보 데이터를 불러오지 못했어요. 잠시 후 새로고침하거나 서버 표시 API 연결을 확인해 주세요.";
+  return (
+    <section className={styles.ledger}>
+      <div className={styles.emptyState}>
+        <span className={`${styles.stamp} ${styles.stampGhost}`}>대기</span>
+        <p>{text}</p>
+      </div>
+    </section>
+  );
+}
+
+// 룰렛 인덱스(관리자·팬 공용). 스트리머가 직접 묶은 룰렛(config)을 우선하고, 안 묶인 그룹은
+// 자동 클러스터(자카드 ≥ 0.5)로 잠정 묶어 팬 탭을 만든다. 자동 클러스터는 관리자 화면의 "추천"으로도 쓴다.
+type RouletteIndex = {
+  rouletteByGroupIndex: Record<number, string>;
+  rouletteLabelById: Record<string, string>;
+  rouletteArchivedById: Record<string, boolean>;
+  // 원본 상품명 → 룰렛(rid, 표시라벨, 보관여부). 같은 이름이 여러 룰렛이면 먼저 잡힌 것 우선.
+  itemRoulette: Map<string, { rid: string; label: string; archived: boolean }>;
+  // 팬 탭 순서: 보관 안 됐고 상품이 있는 룰렛만, 표시라벨 순.
+  fanRouletteOrder: Array<{ rid: string; label: string }>;
+  // 관리자 "룰렛 관리" 탭 데이터
+  managerGroups: GroupForManager[];
+  managerRoulettes: NamedRouletteForManager[];
+  // 확률 공개 하위탭 토글 목록(보관 제외한 모든 룰렛).
+  revealRoulettes: RevealRoulette[];
+  // 관리자 "팬 탭 이름" 섹션 데이터 — 팬 탭 순서와 같은 목록(보관 제외) + 지문/현재 이름.
+  fanTabManager: FanTabForNaming[];
+  // 정가/기타 탭 표시 이름(팬 탭 이름 오버레이 적용 결과. 기본 "정가"/"기타").
+  fixedTabLabel: string;
+  otherTabLabel: string;
+};
+
+function buildRouletteIndex(state: StreamerState): RouletteIndex {
+  const catalogs = [...(state.catalogs ?? [])].sort((a, b) => a.version - b.version);
+  const activeCatalog =
+    catalogs.find((c) => c.version === state.currentCatalogVersion) ?? catalogs.at(-1);
+  const groups = activeCatalog?.groups ?? [];
+  const config = state.rouletteConfig ?? [];
+
+  const groupItems = groups.map((g) => [
+    ...new Set((g.items ?? []).map((it) => it.itemName).filter(Boolean)),
+  ]);
+
+  // 1) 각 그룹을 스트리머가 만든 룰렛(config)에 매칭(멤버 그룹과 자카드 ≥ 0.5). 없으면 -1.
+  const assignedCfg = groupItems.map((items) => matchGroupToConfig(items, config));
+
+  // 2) 자동 클러스터(자카드 ≥ 0.5) — 추천 도우미 + 미분류 그룹 잠정 묶기용.
+  const autoRoot: number[] = groups.map((_, i) => i);
+  {
+    const sets = groupItems.map((a) => new Set(a));
+    const find = (x: number): number => {
+      while (autoRoot[x] !== x) {
+        autoRoot[x] = autoRoot[autoRoot[x]];
+        x = autoRoot[x];
+      }
+      return x;
+    };
+    const similar = (a: Set<string>, b: Set<string>): boolean => {
+      if (a.size === 0 && b.size === 0) return true;
+      const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+      let inter = 0;
+      for (const n of small) if (large.has(n)) inter++;
+      const union = a.size + b.size - inter;
+      return union > 0 && inter / union >= 0.5;
+    };
+    for (let i = 0; i < sets.length; i++) {
+      for (let j = i + 1; j < sets.length; j++) {
+        if (similar(sets[i], sets[j])) {
+          const ri = find(i);
+          const rj = find(j);
+          if (ri !== rj) autoRoot[ri] = rj;
+        }
+      }
+    }
+    for (let i = 0; i < autoRoot.length; i++) autoRoot[i] = find(i);
+  }
+
+  // 3) rid: 스트리머 룰렛 우선("named:<cfgIdx>"), 미분류는 자동 클러스터("auto:<root>").
+  const ridOf = (i: number): string =>
+    assignedCfg[i] >= 0 ? `named:${assignedCfg[i]}` : `auto:${autoRoot[i]}`;
+  const rouletteByGroupIndex: Record<number, string> = {};
+  const amountsByRid: Record<string, Set<string>> = {};
+  const itemsByRid: Record<string, Set<string>> = {};
+  // rid별 멤버 그룹 지문(확률 공개 config 생성 + 팬 탭 이름 매칭 공용).
+  const groupsByRid: Record<string, string[][]> = {};
+  groups.forEach((g, i) => {
+    const rid = ridOf(i);
+    rouletteByGroupIndex[g.groupIndex] = rid;
+    if (!amountsByRid[rid]) amountsByRid[rid] = new Set();
+    if (g.amountRangeLabel) amountsByRid[rid].add(String(g.amountRangeLabel));
+    if (!itemsByRid[rid]) itemsByRid[rid] = new Set();
+    for (const n of groupItems[i]) itemsByRid[rid].add(n);
+    if (!groupsByRid[rid]) groupsByRid[rid] = [];
+    groupsByRid[rid].push(groupItems[i]);
+  });
+
+  const rouletteLabelById: Record<string, string> = {};
+  const rouletteArchivedById: Record<string, boolean> = {};
+  const nameOfRid: Record<string, string | undefined> = {};
+  for (const rid of Object.keys(itemsByRid)) {
+    rouletteLabelById[rid] = [...(amountsByRid[rid] ?? [])].join("/");
+    if (rid.startsWith("named:")) {
+      const cfg = config[Number(rid.slice(6))];
+      nameOfRid[rid] = cfg?.name;
+      rouletteArchivedById[rid] = cfg?.archived === true;
+    } else {
+      rouletteArchivedById[rid] = false;
+    }
+  }
+  // 팬 탭 이름 오버레이(묶기와 독립, sy 확정 2026-07-08). 탭의 상품 지문으로 매칭해서 캡처가 바뀌거나
+  // 묶음을 해제해도 이름이 따라온다. 표시 이름 우선순위(sy 2026-07-08 확장):
+  //   1) 이 탭 전체에 직접 지은 오버레이 이름(팬 탭 이름)
+  //   2) 이 묶음에 지은 이름(룰렛 묶기)
+  //   3) 구성 룰렛들에 지은 이름 이어붙이기 — 이름 지은 룰렛들을 묶었을 때 "봄·여름"처럼 자동 표시
+  //   4) 자동(금액 나열) → 그것도 없으면 "기타"
+  const fanLabels = state.fanTabLabels;
+  const overlayWholeOfRid: Record<string, string | undefined> = {};
+  const overlayJoinOfRid: Record<string, string | undefined> = {};
+  for (const rid of Object.keys(itemsByRid)) {
+    const members = groupsByRid[rid] ?? [];
+    overlayWholeOfRid[rid] = matchFanTabLabelWhole(members, fanLabels?.entries);
+    const names: string[] = [];
+    for (const g of members) {
+      const nm = matchFanTabLabel([g], fanLabels?.entries);
+      if (nm && !names.includes(nm)) names.push(nm);
+    }
+    overlayJoinOfRid[rid] = names.length > 0 ? names.join("·") : undefined;
+  }
+  const displayLabel = (rid: string): string =>
+    overlayWholeOfRid[rid] ||
+    nameOfRid[rid] ||
+    overlayJoinOfRid[rid] ||
+    rouletteLabelById[rid] ||
+    "기타";
+
+  const itemRoulette = new Map<string, { rid: string; label: string; archived: boolean }>();
+  for (const rid of Object.keys(itemsByRid)) {
+    const info = { rid, label: displayLabel(rid), archived: rouletteArchivedById[rid] ?? false };
+    for (const n of itemsByRid[rid]) if (!itemRoulette.has(n)) itemRoulette.set(n, info);
+  }
+
+  const fanRouletteOrder = Object.keys(itemsByRid)
+    .filter((rid) => itemsByRid[rid].size > 0 && !(rouletteArchivedById[rid] ?? false))
+    .map((rid) => ({ rid, label: displayLabel(rid) }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+
+  // 관리자 "팬 탭 이름" 섹션 — 팬 탭과 같은 목록. 정가/기타 이름은 별도 필드(키 고정).
+  const fanTabManager: FanTabForNaming[] = fanRouletteOrder.map(({ rid, label }) => ({
+    rid,
+    currentLabel: label,
+    autoLabel: rouletteLabelById[rid] || "",
+    overlayName: overlayWholeOfRid[rid],
+    configName: nameOfRid[rid],
+    groups: groupsByRid[rid] ?? [],
+  }));
+  const fixedTabLabel = fanLabels?.fixedLabel || "정가";
+  const otherTabLabel = fanLabels?.otherLabel || "기타";
+
+  // 관리자 UI 데이터 — 실제 그룹 목록 + 스트리머가 만든 룰렛.
+  const managerGroups: GroupForManager[] = groups.map((g, i) => ({
+    index: g.groupIndex,
+    amountLabel: g.amountRangeLabel ? String(g.amountRangeLabel) : "",
+    itemCount: groupItems[i].length,
+    sampleItems: groupItems[i].slice(0, 5),
+    items: groupItems[i],
+    assignedConfigIndex: assignedCfg[i],
+    assignedName: assignedCfg[i] >= 0 ? config[assignedCfg[i]]?.name ?? "" : undefined,
+    suggestKey: `auto:${autoRoot[i]}`,
+  }));
+  const managerRoulettes: NamedRouletteForManager[] = config
+    .map((c, ci) => ({
+      configIndex: ci,
+      name: c.name ?? "",
+      archived: c.archived === true,
+      revealed: c.revealed === true,
+      groupIndices: groups.filter((_, i) => assignedCfg[i] === ci).map((g) => g.groupIndex),
+    }))
+    .filter((r) => r.groupIndices.length > 0);
+
+  // 확률 공개 토글 목록: rid별 멤버 그룹 지문(위에서 계산한 groupsByRid) + 현재 공개 여부.
+  const revealRoulettes: RevealRoulette[] = Object.keys(itemsByRid)
+    .filter((rid) => itemsByRid[rid].size > 0 && !(rouletteArchivedById[rid] ?? false))
+    .map((rid) => ({
+      rid,
+      label: displayLabel(rid),
+      itemCount: itemsByRid[rid].size,
+      groupsItemSets: groupsByRid[rid] ?? [],
+      configIndex: rid.startsWith("named:") ? Number(rid.slice(6)) : null,
+      revealed: rid.startsWith("named:") ? config[Number(rid.slice(6))]?.revealed === true : false,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+
+  return {
+    rouletteByGroupIndex,
+    rouletteLabelById,
+    rouletteArchivedById,
+    itemRoulette,
+    fanRouletteOrder,
+    managerGroups,
+    managerRoulettes,
+    revealRoulettes,
+    fanTabManager,
+    fixedTabLabel,
+    otherTabLabel,
+  };
+}
+
+// 팬 화면 확률표 카드 데이터: fanRevealEnabled 마스터 on + 공개(revealed) 룰렛만.
+// 업보 탭용 룰렛 묶음은 유지하되, 묶음 안에서 전체 상품명+확률표가 다른 그룹은 실제 확률군별로 분리한다.
+// 목록은 "기록되는 상품"만(기록 on + 업보 기준 이하 = 팬 칩으로 뜰 수 있는 것). 확률 높은순.
+function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
+  if (!state.fanRevealEnabled) return [];
+  const config = state.rouletteConfig ?? [];
+  const revealedIdx = config.map((c, i) => (c.revealed ? i : -1)).filter((i) => i >= 0);
+  if (revealedIdx.length === 0) return [];
+  const catalogs = [...(state.catalogs ?? [])].sort((a, b) => a.version - b.version);
+  const activeCatalog =
+    catalogs.find((c) => c.version === state.currentCatalogVersion) ?? catalogs.at(-1);
+  const groups = activeCatalog?.groups ?? [];
+  const groupItemSets = groups.map((g) => [
+    ...new Set((g.items ?? []).map((it) => it.itemName).filter(Boolean)),
+  ]);
+  const groupCfg = groupItemSets.map((s) => matchGroupToConfig(s, config));
+  // "기록되는 상품" 판정: 사용설정 오버라이드(상품>그룹>캡처값) + 기준 확률 이하(CatalogManager 규칙 동일).
+  const usage = activeCatalog ? state.catalogUsageByVersion?.[activeCatalog.version] ?? {} : {};
+  const threshold = Number(state.settings?.thresholdPercent ?? 2);
+  const recorded = (g: CatalogGroup, it: CatalogItem, idx: number): boolean => {
+    if (it.probability > threshold) return false;
+    const itemKey = `g${g.groupIndex}-i${it.sortOrder ?? idx}`;
+    const groupKey = `g${g.groupIndex}`;
+    if (usage[itemKey] !== undefined) return usage[itemKey];
+    if (usage[groupKey] !== undefined) return usage[groupKey];
+    return it.enabled !== false && g.enabled !== false;
+  };
+  const tables: FanRevealTable[] = [];
+  for (const k of revealedIdx) {
+    // 확률표 카드 제목도 팬 탭과 같은 이름 규칙: 팬 탭 이름 오버레이 > 묶음 이름 > 금액 나열.
+    const memberSets = groupItemSets.filter((_, gi) => groupCfg[gi] === k);
+    const matchedGroups = groups.filter((_, gi) => groupCfg[gi] === k);
+    const families = splitProbabilityFamilies(matchedGroups);
+    const parentLabel =
+      matchFanTabLabel(memberSets, state.fanTabLabels?.entries) ||
+      config[k].name ||
+      matchedGroups.map((g) => g.amountRangeLabel).filter(Boolean).join("/") ||
+      "룰렛";
+    const familyTables: Array<{
+      key: string;
+      suffix: string;
+      items: Array<{ name: string; prob: number }>;
+    }> = [];
+
+    families.forEach((family, familyIndex) => {
+      // 같은 실제 확률군 안에서는 (상품, 확률) 중복을 한 줄로 합치고 금액 라벨만 모은다.
+      const rows: Array<{ name: string; prob: number; amounts: Set<string> }> = [];
+      const byKey = new Map<string, { name: string; prob: number; amounts: Set<string> }>();
+      family.groups.forEach((g) => {
+        (g.items ?? []).forEach((it, idx) => {
+          if (!it.itemName) return;
+          if (!recorded(g, it, idx)) return;
+          const key = `${it.itemName} ${it.probability}`;
+          let entry = byKey.get(key);
+          if (!entry) {
+            entry = { name: it.itemName, prob: it.probability, amounts: new Set() };
+            byKey.set(key, entry);
+            rows.push(entry);
+          }
+          if (g.amountRangeLabel) entry.amounts.add(String(g.amountRangeLabel));
+        });
+      });
+      if (rows.length === 0) return;
+
+      const probCount = new Map<string, number>();
+      for (const row of rows) probCount.set(row.name, (probCount.get(row.name) ?? 0) + 1);
+      const items = rows
+        .map((row) => ({
+          name:
+            (probCount.get(row.name) ?? 0) > 1 && row.amounts.size > 0
+              ? `${row.name} (${[...row.amounts].join("·")})`
+              : row.name,
+          prob: row.prob,
+        }))
+        .sort((a, b) => b.prob - a.prob);
+      familyTables.push({
+        key: `named:${k}:family:${familyIndex}`,
+        suffix: family.amountLabels.join("/") || `확률군 ${familyIndex + 1}`,
+        items,
+      });
+    });
+
+    for (const familyTable of familyTables) {
+      tables.push({
+        key: familyTable.key,
+        label: familyTables.length > 1 ? `${parentLabel} · ${familyTable.suffix}` : parentLabel,
+        items: familyTable.items,
+      });
+    }
+  }
+  return tables;
+}
+
+// 배송 진행(처리 수량)을 팬 표시용으로 합산: (현재보유자 fanId, 상품명) → 배송완료 수량.
+// 팬 화면은 세트(33/330)·확률 구분 없이 상품명으로 합쳐 보여주므로 배송 수량도 같은 기준으로 합산한다.
+function buildProcessedByFanItem(state: StreamerState): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const d of state.deliveryProgress ?? []) {
+    const n = Math.max(0, Math.floor(Number(d.processedCount) || 0));
+    if (n <= 0) continue;
+    const key = `${normalizeAccountId(d.fanId)}@@${d.itemName}`;
+    map.set(key, (map.get(key) ?? 0) + n);
+  }
+  return map;
+}
+
+// 배송 반영을 팬 뷰어 요약에 적용한다.
+// remaining     : (a) 남은 개수(당첨−배송완료), 다 배송된 상품/시청자는 제외.
+// remaining_done : (b) 남은 개수 + 다 배송되면 사라지지 않고 "배송완료(done)"로 남김.
+// mark          : (c) 총량 유지 + delivered(배송완료 수량) 표시 부여.
+function applyDeliveryToSummaries(
+  viewers: ViewerSummary[],
+  processed: Map<string, number>,
+  mode: FanDeliveryReflect,
+): ViewerSummary[] {
+  if (mode === "off" || processed.size === 0) return viewers;
+  const out: ViewerSummary[] = [];
+  for (const v of viewers) {
+    const items: AggItem[] = [];
+    for (const it of v.items) {
+      const delivered = processed.get(`${v.fanId}@@${it.itemName}`) ?? 0;
+      if (delivered <= 0) {
+        items.push(it);
+        continue;
+      }
+      if (mode === "mark") {
+        items.push({ ...it, delivered });
+        continue;
+      }
+      const remaining = it.count - delivered;
+      if (remaining > 0) {
+        items.push({ ...it, count: remaining });
+      } else if (mode === "remaining_done") {
+        // 다 배송됨: 개수 0으로 두되 "배송완료"로 남긴다.
+        items.push({ ...it, count: 0, done: true });
+      }
+      // remaining(a): 다 배송된 상품은 아예 제외(위 조건에서 push 안 함).
+    }
+    // remaining(a): 남은 상품이 없으면 시청자 자체를 숨긴다.
+    if (mode === "remaining" && items.length === 0) continue;
+    const total = items.reduce((s, it) => s + it.count, 0);
+    if (mode === "remaining" && total <= 0) continue;
+    out.push({
+      ...v,
+      items,
+      total: mode === "mark" ? v.total : total,
+      maxProb: items.reduce((m, it) => Math.max(m, it.probability), 0),
+    });
+  }
+  return out;
+}
+
+// 보유 현황을 룰렛별로 나눈다. 보관 룰렛 상품은 팬 화면에서 제외, 매칭 안 되는 상품은 "기타".
+function partitionHoldingsByRoulette(
+  holdings: ViewerHolding[],
+  index: RouletteIndex,
+): Array<{ key: string; label: string; holdings: ViewerHolding[] }> {
+  const OTHER = "__other__";
+  const FIXED = "__fixed__";
+  // rid → (ownerKey → ViewerHolding)
+  const byRid = new Map<string, Map<string, ViewerHolding>>();
+  for (const vh of holdings) {
+    for (const it of vh.items) {
+      // 정가(시그니처) 기록은 룰렛과 무관 — "기타"에 섞지 않고 전용 "정가" 탭으로(sy 2026-07-07).
+      const isFixed = it.amountRangeLabel === "정가";
+      const info = isFixed ? undefined : index.itemRoulette.get(it.originalItemName);
+      if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
+      const rid = isFixed ? FIXED : info?.rid ?? OTHER;
+      let owners = byRid.get(rid);
+      if (!owners) {
+        owners = new Map();
+        byRid.set(rid, owners);
+      }
+      let g = owners.get(vh.key);
+      if (!g) {
+        g = { ...vh, items: [], maxProb: 0, total: 0 };
+        owners.set(vh.key, g);
+      }
+      g.items.push(it);
+    }
+  }
+  const finalize = (rid: string): ViewerHolding[] => {
+    const owners = byRid.get(rid);
+    if (!owners) return [];
+    const list: ViewerHolding[] = [];
+    for (const g of owners.values()) {
+      g.total = g.items.reduce((s, it) => s + it.quantity, 0);
+      g.maxProb = g.items.reduce((m, it) => Math.max(m, it.probability), 0);
+      if (g.total > 0) list.push(g);
+    }
+    return list;
+  };
+  const result: Array<{ key: string; label: string; holdings: ViewerHolding[] }> = [];
+  for (const { rid, label } of index.fanRouletteOrder) {
+    const list = finalize(rid);
+    if (list.length > 0) result.push({ key: rid, label, holdings: list });
+  }
+  // 정가(시그니처) 탭은 룰렛 탭들 뒤, 기타 앞에.
+  const fixed = finalize(FIXED);
+  if (fixed.length > 0) result.push({ key: FIXED, label: index.fixedTabLabel, holdings: fixed });
+  const other = finalize(OTHER);
+  if (other.length > 0) result.push({ key: OTHER, label: index.otherTabLabel, holdings: other });
+  return result;
+}
+
+// 룰렛 그룹들을 하나로 합친다(룰렛 탭을 안 쓰는 "전체" 화면용). 보관 상품은 이미 partition 에서
+// 빠진 상태이므로, 남은 조각만 시청자별로 다시 모아 총량을 재계산한다.
+function flattenGroups(
+  groups: Array<{ key: string; label: string; holdings: ViewerHolding[] }>,
+): ViewerHolding[] {
+  const byKey = new Map<string, ViewerHolding>();
+  for (const grp of groups) {
+    for (const vh of grp.holdings) {
+      const cur = byKey.get(vh.key);
+      if (cur) cur.items.push(...vh.items);
+      else byKey.set(vh.key, { ...vh, items: [...vh.items] });
+    }
+  }
+  const list = [...byKey.values()];
+  for (const g of list) {
+    g.total = g.items.reduce((s, it) => s + it.quantity, 0);
+    g.maxProb = g.items.reduce((m, it) => Math.max(m, it.probability), 0);
+  }
+  return list;
+}
+
+// 팬 화면에 실제로 렌더되는 룰렛 탭 목록. FanView 표시와 관리자 "팬 탭 이름" 목록이 이 함수를 공유해
+// 항상 일치한다 — 당첨 기록이 있어 탭으로 뜨는 룰렛만. 일반 룰렛 하나뿐이면 기존처럼 "전체"지만,
+// 정가/기타가 함께 있으면 서로 섞이지 않도록 별도 탭을 보여준다.
+// computeHoldings가 취소/완료/무효 항목을 이미 제외한다. 보관 시청자는 숨기되 보관 시각 이후 새 당첨은
+// 다시 보인다. 룰렛표 off 상품 기록도 숨긴다(정가·수동은 항상 표시). 전부 표시 계산 — 원본 불변.
+function computeFanRouletteTabs(
+  state: StreamerState,
+  index: RouletteIndex,
+  excludedNames: Set<string>,
+): {
+  showRouletteTabs: boolean;
+  groups: Array<{ key: string; label: string; viewers: ViewerSummary[] }>;
+  allEntries: UpboEntry[];
+  deliveryMode: FanDeliveryReflect;
+} {
+  const archivedFanAt = state.archivedFanAt ?? {};
+  const visibleUnderArchive = (e: UpboEntry): boolean => {
+    const at = archivedFanAt[e.fanId];
+    if (!at) return true;
+    return Date.parse(e.createdAt ?? "") > Date.parse(at);
+  };
+  const allEntries = filterEntriesByCatalogUsage(
+    (state.upboEntries ?? []).filter(visibleUnderArchive),
+    state.catalogs ?? [],
+    state.catalogUsageByVersion,
+  );
+  // 조각 4: 쿠폰에 연결한 상품은 표시상 제외(원본·판정 불변, excludedNames 빈 Set이면 그대로).
+  const holdings = filterHoldingsByExcludedNames(
+    computeHoldings(allEntries, state.itemEvents ?? []),
+    excludedNames,
+  );
+  const deliveryMode: FanDeliveryReflect = state.fanDeliveryReflect ?? "off";
+  const processed = deliveryMode === "off" ? new Map<string, number>() : buildProcessedByFanItem(state);
+  const parts = partitionHoldingsByRoulette(holdings, index);
+  const toViewers = (h: ViewerHolding[]) =>
+    applyDeliveryToSummaries(holdingsToViewerSummaries(h, { mergeSets: true }), processed, deliveryMode);
+  const showRouletteTabs = shouldShowRouletteTabs(parts);
+  const groups = showRouletteTabs
+    ? parts
+        .map((p) => ({ key: p.key, label: p.label, viewers: toViewers(p.holdings) }))
+        .filter((g) => g.viewers.length > 0)
+    : [{ key: "__all__", label: "전체", viewers: toViewers(flattenGroups(parts)) }];
+  return { showRouletteTabs, groups, allEntries, deliveryMode };
+}
+
+function FanView({
+  state,
+  slug,
+  searchQuery,
+  activeTab,
+  activeRoulette,
+  excludedNames,
+}: {
+  state: StreamerState;
+  slug: string;
+  searchQuery: string;
+  activeTab: FanTab;
+  activeRoulette: string;
+  excludedNames: Set<string>;
+}) {
+  const rouletteIndex = buildRouletteIndex(state);
+  const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
+    computeFanRouletteTabs(state, rouletteIndex, excludedNames);
+  const activeGroup = rouletteGroups.find((g) => g.key === activeRoulette) ?? rouletteGroups[0];
+  const rtabKey = activeGroup?.key;
+  const activeViewers = activeGroup?.viewers ?? [];
+  const shownViewers = filterViewers(activeViewers, searchQuery);
+  // 전체 고유 시청자 수(여러 룰렛에 걸친 사람은 1명으로).
+  const allViewerCount = new Set(rouletteGroups.flatMap((g) => g.viewers.map((v) => v.key))).size;
+
+  // 획득 기록은 원본 entry 기반(전체 기록, 룰렛탭·배송반영과 무관).
+  const history = historyRows(allEntries, searchQuery);
+  const lastApplied = state.importBatches?.[state.importBatches.length - 1]?.appliedAt;
+
+  const countPill =
+    activeTab === "ledger"
+      ? searchQuery
+        ? `${shownViewers.length} / ${activeViewers.length}명`
+        : `${activeViewers.length}명`
+      : searchQuery
+        ? `${history.length} / ${allEntries.length}건`
+        : `${allEntries.length}건`;
+
+  return (
+    <>
+      <section className={styles.finder} aria-labelledby="finder-title">
+        <h2 id="finder-title">내 업보 확인</h2>
+        <form className={styles.searchRow} action={`/${slug}`} method="get">
+          {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
+          {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
+            <input type="hidden" name="rtab" value={rtabKey} />
+          ) : null}
+          <input
+            defaultValue={searchQuery}
+            name="q"
+            placeholder="예: 닉네임 또는 계정ID 일부"
+            type="search"
+          />
+          <button type="submit">찾기</button>
+        </form>
+        <p className={styles.summaryLine}>
+          시청자 {allViewerCount}명 · 자동 기록 {allEntries.length}건 · 기준{" "}
+          {state.settings?.thresholdPercent ?? "—"}% · 마지막 반영 {fmtKst(lastApplied)}
+          {deliveryMode !== "off" ? " · 배송 반영 중" : ""}
+        </p>
+      </section>
+
+      <div className={styles.perforation} aria-hidden="true" />
+
+      <section className={styles.ledger} aria-label="업보 시트">
+        <div className={styles.ledgerHeader}>
+          <div className={styles.tabs} role="tablist">
+            <a
+              className={activeTab === "ledger" ? styles.tabActiveLink : styles.tabLink}
+              href={tabHref(slug, "ledger", searchQuery)}
+            >
+              업보 목록
+            </a>
+            <a
+              className={activeTab === "history" ? styles.tabActiveLink : styles.tabLink}
+              href={tabHref(slug, "history", searchQuery)}
+            >
+              획득 기록
+            </a>
+          </div>
+          <span className={styles.countPill}>{countPill}</span>
+        </div>
+
+        {activeTab === "ledger" && showRouletteTabs ? (
+          <div className={styles.rouletteTabs} role="tablist" aria-label="룰렛 구분">
+            {rouletteGroups.map((g) => (
+              <a
+                key={g.key}
+                className={g.key === rtabKey ? styles.rouletteTabActive : styles.rouletteTab}
+                href={`/${slug}?rtab=${encodeURIComponent(g.key)}${
+                  searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
+                }`}
+              >
+                {g.label}
+                <span className={styles.rouletteTabCount}>{g.viewers.length}</span>
+              </a>
+            ))}
+          </div>
+        ) : null}
+
+        {activeTab === "ledger" ? (
+          <LedgerTable viewers={shownViewers} searchQuery={searchQuery} colors={state.productColors} />
+        ) : (
+          <HistoryTable rows={history} searchQuery={searchQuery} />
+        )}
+      </section>
+    </>
+  );
+}
+
+function LedgerTable({
+  viewers,
+  searchQuery,
+  colors,
+}: {
+  viewers: ViewerSummary[];
+  searchQuery: string;
+  colors?: Record<string, string>;
+}) {
+  if (viewers.length === 0) {
+    return (
+      <div className={styles.emptyState}>
+        <span className={`${styles.stamp} ${styles.stampGhost}`}>대기</span>
+        <p>
+          {searchQuery
+            ? `'${searchQuery}'에 해당하는 시청자가 없어요.`
+            : "아직 기록된 업보가 없어요."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.tableWrap}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th className={styles.nameCol}>닉네임</th>
+            <th>계정ID</th>
+            <th>업보</th>
+            <th className={styles.countCol}>건수</th>
+          </tr>
+        </thead>
+        <tbody>
+          {viewers.map((v) => (
+            <tr key={v.key}>
+              <td className={styles.nameCell}>{v.fanNickname}</td>
+              <td className={styles.idCell}>{v.fanId}</td>
+              <td>
+                <div className={styles.upboCell}>
+                  {v.items.map((it) => {
+                    // 정가기록(시그니처 후원): 룰렛 업보와 표기를 구분한다 — %가 아니라 "정가" 배지.
+                    const isFixed = it.amountRangeLabel === "정가";
+                    // 상품별 색상(스트리머가 정한 것만). 정가 칩은 자체 스타일 유지.
+                    const col = isFixed ? undefined : productColorById(colors?.[it.itemName]);
+                    return (
+                      <span
+                        key={`${it.itemName}@${it.amountRangeLabel ?? ""}`}
+                        className={isFixed ? `${styles.upboChip} ${styles.upboChipFixed}` : styles.upboChip}
+                        style={col ? { background: col.bg, borderColor: col.border } : undefined}
+                      >
+                        {isFixed ? (
+                          <span className={styles.upboFixedBadge}>정가</span>
+                        ) : it.amountRangeLabel ? (
+                          <span className={styles.upboSet}>{it.amountRangeLabel}</span>
+                        ) : null}
+                        <span className={styles.upboItem} style={col ? { color: col.text } : undefined}>
+                          {isFixed ? it.itemName.replace(/^정가\s*/, "") : it.itemName}
+                        </span>
+                        {/* % 배지는 표기하지 않는다(sy 확정 2026-07-07 — 확률표 공개가 정보 담당). 정렬은 확률 기준 유지. */}
+                        {it.count > 1 ? <span className={styles.upboCount}>×{it.count}</span> : null}
+                        {it.done ? (
+                          <span className={styles.upboDelivered}>배송완료</span>
+                        ) : it.delivered ? (
+                          <span className={styles.upboDelivered}>{it.delivered}개 배송완료</span>
+                        ) : null}
+                      </span>
+                    );
+                  })}
+                </div>
+              </td>
+              <td className={styles.countCell}>{v.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function HistoryTable({ rows, searchQuery }: { rows: UpboEntry[]; searchQuery: string }) {
+  if (rows.length === 0) {
+    return (
+      <div className={styles.emptyState}>
+        <span className={`${styles.stamp} ${styles.stampGhost}`}>대기</span>
+        <p>
+          {searchQuery
+            ? `'${searchQuery}'에 해당하는 획득 기록이 없어요.`
+            : "아직 획득 기록이 없어요."}
+        </p>
+      </div>
+    );
+  }
+
+  // 룰렛 세트 라벨이 한 줄이라도 있을 때만 컬럼을 보여준다(없으면 기존과 동일한 5열).
+  const showSet = rows.some((e) => rouletteSetLabel(e));
+
+  return (
+    <div className={styles.tableWrap}>
+      <table className={styles.table}>
+        <thead>
+          <tr>
+            <th className={styles.nameCol}>닉네임</th>
+            <th>계정ID</th>
+            <th>상품</th>
+            {showSet ? <th className={styles.probCol}>룰렛 세트</th> : null}
+            <th className={styles.donateCol} title="위플랩 표시시간 원문">
+              후원 시간
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((e) => (
+            <tr key={e.id}>
+              <td className={styles.nameCell}>{e.fanNickname}</td>
+              <td className={styles.idCell}>{e.fanId}</td>
+              <td>
+                {/* 확률 열은 표기하지 않는다(sy 확정 2026-07-07). 정가는 배지+이름(접두어 제거)으로 표기. */}
+                {e.sourceKey.startsWith("fixed:") ? (
+                  <>
+                    <span className={styles.upboFixedBadge}>정가</span>{" "}
+                    {e.itemName.replace(/^정가\s*/, "")}
+                  </>
+                ) : (
+                  e.itemName
+                )}
+                {Number(e.multiplier ?? 1) > 1 ? (
+                  <span className={styles.multiplierBadge}>×{e.multiplier} 적용</span>
+                ) : null}
+              </td>
+              {showSet ? (
+                <td className={styles.probCell}>
+                  {e.sourceKey.startsWith("fixed:") ? "—" : rouletteSetLabel(e) ?? "—"}
+                </td>
+              ) : null}
+              <td className={styles.donateCell}>{e.donateTimeText}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AdminPanel({
+  state,
+  activeAdminTab,
+  showcase,
+  coupon,
+}: {
+  state: StreamerState;
+  activeAdminTab: AdminTab;
+  showcase: ShowcaseState | null;
+  coupon: CouponState | null;
+}) {
+  // 룰렛표에서 꺼진 상품의 기록은 배송·교환·양도(보유현황 전체)에서도 숨긴다(정가·수동은 항상 표시).
+  const entries = filterEntriesByCatalogUsage(
+    state.upboEntries ?? [],
+    state.catalogs ?? [],
+    state.catalogUsageByVersion,
+  );
+  // 조각 4: 쿠폰에 연결한 룰렛 상품은 배송관리·팬탭 표시에서 제외(관리자 모드는 이미 읽은
+  // couponState.sourceMap 재사용 — 추가 조회 없음, 매핑 0개면 빈 Set=회귀 0).
+  const excludedNames = couponExcludedNameSet(coupon?.sourceMap ?? []);
+  const events = state.itemEvents ?? [];
+  const batches = state.importBatches ?? [];
+  const latest: ImportBatch | undefined = batches[batches.length - 1];
+  const catalogs = [...(state.catalogs ?? [])].sort((a, b) => a.version - b.version);
+  const activeCatalog = catalogs.find((c) => c.version === state.currentCatalogVersion);
+  const activeGroups = activeCatalog?.groups ?? [];
+  const specialItemRules = state.specialItemRules ?? [];
+
+  // 배송 관리: holdings 기반 시청자 목록(취소/완료 제외, 양도 후 현재 보유자 반영).
+  // 팬 화면과 동일하게 "보관(배송완료 숨김) 시각 이후의 새 당첨"만 살린다(sy 2026-07-08 후속).
+  // → 완전 보관 시청자는 목록에서 사라지고, 재당첨자는 새 기록만 들고 배송 목록에 다시 오른다.
+  const deliveryArchivedFanAt = state.archivedFanAt ?? {};
+  const isDeliveryVisible = (e: UpboEntry): boolean => {
+    const at = deliveryArchivedFanAt[e.fanId];
+    if (!at) return true;
+    return Date.parse(e.createdAt ?? "") > Date.parse(at);
+  };
+  const deliveryVisibleEntries = entries.filter(isDeliveryVisible);
+  const deliveryHiddenEntries = entries.filter((e) => !isDeliveryVisible(e));
+  const holdings = filterHoldingsByExcludedNames(
+    computeHoldings(deliveryVisibleEntries, events),
+    excludedNames,
+  );
+  const viewers = holdingsToViewerSummaries(holdings);
+  // 숨긴 옛 당첨분의 (fanId,itemKey)별 개수. 이미 배송완료로 저장된 처리수량이 "옛 기록 몫"이므로,
+  // 새 당첨이 같은 itemKey일 때 새 기록을 "이미 배송됨"으로 오인시키지 않도록 배송관리에서 이 값만큼
+  // 처리수량 기준선을 보정한다(표시 계산 전용 — 원본/스키마 불변, 현재 채루 데이터엔 충돌 없어 대개 무효).
+  // 숨긴 시청자의 옛 기록 — 배송관리 "숨긴 시청자" 탭(목록·복구 미리보기)과 아래 기준선 보정이 공유.
+  const hiddenViewerSummaries = holdingsToViewerSummaries(
+    filterHoldingsByExcludedNames(computeHoldings(deliveryHiddenEntries, events), excludedNames),
+  );
+  const archivedHiddenCounts: Record<string, Record<string, number>> = {};
+  for (const hv of hiddenViewerSummaries) {
+    const perItem: Record<string, number> = {};
+    for (const it of hv.items) {
+      const k = `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
+      perItem[k] = (perItem[k] ?? 0) + it.count;
+    }
+    if (Object.keys(perItem).length > 0) archivedHiddenCounts[hv.fanId] = perItem;
+  }
+
+  // ── 룰렛(교환 후보) 계산 ──────────────────────────────────────────────
+  // 룰렛 클러스터링·이름/보관 매칭은 팬 화면과 공용이라 buildRouletteIndex 로 뽑아 쓴다.
+  const rouletteIndex = buildRouletteIndex(state);
+  const { rouletteByGroupIndex, rouletteLabelById, rouletteArchivedById, managerGroups, managerRoulettes, revealRoulettes, fanTabManager } =
+    rouletteIndex;
+  // 팬 탭 이름 관리 목록 = 카탈로그 전체가 아니라 "팬 화면에 실제 탭으로 구분 표시되는 룰렛"만(sy 2026-07-08).
+  // 팬 화면과 동일 계산(computeFanRouletteTabs)을 공유해 목록이 항상 팬 탭과 일치한다.
+  const { groups: fanTabGroups } = computeFanRouletteTabs(state, rouletteIndex, excludedNames);
+  const fanTabByRid = new Map(fanTabManager.map((t) => [t.rid, t]));
+  const activeFanTabs = fanTabGroups
+    .map((g) => fanTabByRid.get(g.key))
+    .filter((t): t is FanTabForNaming => Boolean(t));
+  // 정가/기타 탭은 팬 화면에 실제로 떴을 때만 이름칸을 보여준다(안 뜨는데 이름 받는 혼란 방지).
+  const showFixedTab = fanTabGroups.some((g) => g.key === "__fixed__");
+  const showOtherTab = fanTabGroups.some((g) => g.key === "__other__");
+  const activeGroupsForExchange = activeCatalog?.groups ?? [];
+  // 사용설정(catalogUsage) 오버라이드: sy가 켜고 끈 값. 없으면 위플랩 캡처 값을 그대로 따른다.
+  const usageOverrides: Record<string, boolean> = activeCatalog
+    ? state.catalogUsageByVersion?.[activeCatalog.version] ?? {}
+    : {};
+  // 효과적 사용여부: 상품 오버라이드 > 그룹 오버라이드 > 위플랩 캡처 값(CatalogManager와 동일 규칙).
+  const effectiveEnabled = (g: CatalogGroup, item: CatalogItem, idxInGroup: number): boolean => {
+    const itemKey = `g${g.groupIndex}-i${item.sortOrder ?? idxInGroup}`;
+    const groupKey = `g${g.groupIndex}`;
+    if (usageOverrides[itemKey] !== undefined) return usageOverrides[itemKey];
+    if (usageOverrides[groupKey] !== undefined) return usageOverrides[groupKey];
+    return item.enabled !== false && g.enabled !== false;
+  };
+
+  // ItemEventManager에 넘길 교환 후보: "룰렛기록 on(sy 사용설정 반영)" + 당첨 기준(thresholdPercent)
+  // 이하 상품만. 룰렛(rouletteId)별로 상품명 중복을 제거한다(단차/연차 중복 합치기).
+  const exchangeThreshold = Number(state.settings?.thresholdPercent ?? 2);
+  const catalogItems: {
+    itemName: string;
+    probability: number;
+    amountRangeLabel?: string;
+    catalogGroupIndex?: number;
+    rouletteId: string;
+    rouletteLabel?: string;
+  }[] = [];
+  {
+    const seen = new Set<string>();
+    for (const g of activeGroupsForExchange) {
+      const rid = rouletteByGroupIndex[g.groupIndex];
+      if (rouletteArchivedById[rid]) continue; // 보관(숨김)된 룰렛은 교환·수동기록 후보에서 제외.
+      (g.items ?? []).forEach((it, idx) => {
+        if (!effectiveEnabled(g, it, idx)) return;
+        if (it.probability > exchangeThreshold) return;
+        const dedupeKey = `${rid}::${it.itemName}`;
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        catalogItems.push({
+          itemName: it.itemName,
+          probability: it.probability,
+          amountRangeLabel: g.amountRangeLabel ?? undefined,
+          catalogGroupIndex: g.groupIndex,
+          rouletteId: rid,
+          rouletteLabel: rouletteLabelById[rid] || undefined,
+        });
+      });
+    }
+  }
+
+  // 쿠폰 자동 적립 "연결" 후보: 교환 후보와 같은 규칙(on·기준 이하)에서 상품명만 중복 제거.
+  // 계산은 서버(page)에서 끝내고 이름 목록만 CouponManager에 내려준다(손타이핑 금지 — 후보에서만 고르기).
+  const couponSourceCandidates = [...new Set(catalogItems.map((c) => c.itemName))];
+
+  // 상품 색상 지정 대상: 팬에 뜨는 상품(교환 후보 = on·기준 이하) 상품명 중복 제거, 확률 높은순.
+  const colorableProducts = (() => {
+    const seen = new Map<string, number>();
+    for (const it of catalogItems) if (!seen.has(it.itemName)) seen.set(it.itemName, it.probability);
+    // 직접 입력·교환 등 룰렛표 밖 상품도 보유 중이면 색을 입힐 수 있게 추가(정가는 자체 스타일이라 제외).
+    for (const g of holdings)
+      for (const it of g.items) {
+        if (it.amountRangeLabel === "정가") continue;
+        if (!seen.has(it.itemName)) seen.set(it.itemName, it.probability);
+      }
+    return [...seen.entries()]
+      .map(([name, prob]) => ({ name, prob }))
+      .sort((a, b) => b.prob - a.prob);
+  })();
+
+  // 관리자 상위탭: 기본 순서·이름. 스트리머 오버레이(adminUiPrefs)로 순서/이름만 바꾼다.
+  // 오버레이가 없으면 아래 기본 배열 그대로 = 지금과 100% 동일(안 만진 스트리머 무변화).
+  const ADMIN_TABS: Array<{ id: string; label: string; href: string; activeWhen: AdminTab[] }> = [
+    { id: "delivery", label: "배송 관리", href: `/${state.slug}?admin=1`, activeWhen: ["delivery"] },
+    { id: "items", label: "교환·양도", href: `/${state.slug}?admin=1&atab=items`, activeWhen: ["items", "history"] },
+    { id: "coupon", label: "쿠폰", href: `/${state.slug}?admin=1&atab=coupon`, activeWhen: ["coupon"] },
+    { id: "manual", label: "수동기록", href: `/${state.slug}?admin=1&atab=manual`, activeWhen: ["manual"] },
+    { id: "roulettes", label: "룰렛 관리", href: `/${state.slug}?admin=1&atab=roulettes`, activeWhen: ["roulettes", "reveal"] },
+    { id: "promo", label: "포스터 및 배너", href: `/${state.slug}?admin=1&atab=promo`, activeWhen: ["promo"] },
+    { id: "signature", label: "정가 설정", href: `/${state.slug}?admin=1&atab=signature`, activeWhen: ["signature"] },
+    { id: "settings", label: "설정", href: `/${state.slug}?admin=1&atab=settings`, activeWhen: ["settings"] },
+    { id: "donations", label: "후원집계", href: `/${state.slug}/donations`, activeWhen: [] },
+  ];
+  const uiPrefs = state.adminUiPrefs ?? { tabOrder: [], tabLabels: {}, collapsed: {}, sectionOrder: {} };
+  const orderedTabs = (() => {
+    const byId = new Map(ADMIN_TABS.map((t) => [t.id, t] as const));
+    const seen = new Set<string>();
+    const out: typeof ADMIN_TABS = [];
+    for (const id of uiPrefs.tabOrder) {
+      const t = byId.get(id);
+      if (t && !seen.has(id)) {
+        out.push(t);
+        seen.add(id);
+      }
+    }
+    // 오버레이에 없는(빠진) 탭은 기본 순서 그대로 뒤에 붙인다 — 탭이 사라지는 사고 방지.
+    for (const t of ADMIN_TABS) if (!seen.has(t.id)) out.push(t);
+    return out.map((t) => ({ ...t, label: uiPrefs.tabLabels[t.id]?.trim() || t.label }));
+  })();
+
+  return (
+    <AdminCollapseProvider slug={state.slug} initialCollapsed={uiPrefs.collapsed}>
+    <div className={styles.adminPanel}>
+      <div className={styles.adminHead}>
+        <span className={styles.adminBadge}>관리자</span>
+        <p className={styles.adminHeadNote}>
+          스트리머/운영자용 화면이에요. 배송 관리가 메인이고, 나머지는 설정 탭에 모았어요. 실제
+          로그인·권한은 다음 단계입니다.
+        </p>
+        <p className={styles.fieldHint}>마지막 반영 {fmtKst(latest?.appliedAt)}</p>
+      </div>
+
+      <div className={styles.tabs} role="tablist">
+        {orderedTabs.map((t) => (
+          <a
+            key={t.id}
+            className={t.activeWhen.includes(activeAdminTab) ? styles.tabActiveLink : styles.tabLink}
+            href={t.href}
+          >
+            {t.label}
+          </a>
+        ))}
+      </div>
+
+      {activeAdminTab === "delivery" ? (
+        <CollapsibleCard sectionKey="delivery" title="배송 관리">
+          {/* 시청자가 전부 숨김 처리된 경우에도 "숨긴 시청자" 탭(복구)은 열 수 있어야 한다. */}
+          {viewers.length > 0 || hiddenViewerSummaries.length > 0 ? (
+            <DeliveryManager
+              slug={state.slug}
+              viewers={viewers}
+              fixedEntries={entries
+                .filter((e) => e.sourceKey.startsWith("fixed:"))
+                .map((e) => ({
+                  sourceKey: e.sourceKey,
+                  fanId: e.fanId,
+                  fanNickname: e.fanNickname,
+                  itemName: e.itemName,
+                  donateTimeText: e.donateTimeText,
+                }))}
+              fixedPriceNotes={state.fixedPriceNotes ?? []}
+              archivedHiddenCounts={archivedHiddenCounts}
+              hiddenViewers={hiddenViewerSummaries}
+              archivedFanAt={deliveryArchivedFanAt}
+            />
+          ) : (
+            <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>
+          )}
+        </CollapsibleCard>
+      ) : activeAdminTab === "items" || activeAdminTab === "history" ? (
+        <CollapsibleCard sectionKey="items" title="교환·양도">
+          {/* 하위탭: 기존 상위탭 두 개(items/history)를 한 상위탭 아래로 묶었다.
+              atab 값은 그대로 유지 — 기존 북마크/링크(atab=history 포함)가 계속 동작한다. */}
+          <div className={styles.subTabs} role="tablist">
+            <a
+              className={activeAdminTab === "items" ? styles.subTabActiveLink : styles.subTabLink}
+              href={`/${state.slug}?admin=1&atab=items`}
+            >
+              업보 항목 관리
+            </a>
+            <a
+              className={activeAdminTab === "history" ? styles.subTabActiveLink : styles.subTabLink}
+              href={`/${state.slug}?admin=1&atab=history`}
+            >
+              양도·교환 이력
+            </a>
+          </div>
+          {activeAdminTab === "items" ? (
+            entries.length > 0 ? (
+              <ItemEventManager
+                slug={state.slug}
+                entries={entries}
+                events={events}
+                catalogItems={catalogItems}
+                rouletteByGroupIndex={rouletteByGroupIndex}
+                catalogVersion={activeCatalog?.version ?? state.currentCatalogVersion ?? null}
+              />
+            ) : (
+              <p className={styles.fieldHint}>아직 관리할 업보 항목이 없어요.</p>
+            )
+          ) : (
+            <>
+              <p className={styles.fieldHint}>
+                누가 누구에게 어떤 상품을 양도/교환/취소했는지 최근순으로 모아서 보여줘요. 원본 당첨 기록은 그대로예요.
+              </p>
+              <ItemHistoryLog slug={state.slug} entries={entries} events={events} />
+            </>
+          )}
+        </CollapsibleCard>
+      ) : activeAdminTab === "coupon" ? (
+        <CollapsibleCard sectionKey="coupon" title="쿠폰 장부">
+          <p className={styles.fieldHint}>
+            배송할 업보와 별개로, 시청자가 모아 두는 쿠폰(교환권·티켓·코인)을 적는 장부예요. 룰렛에서
+            나왔든 상품 대신 바꿔 줬든, 지급/사용만 적으면 잔액이 자동으로 계산됩니다. 어디에 쓸 수
+            있는지는 스트리머 마음 — 여기는 장부만 정확하게 지켜요.
+          </p>
+          {coupon ? (
+            <CouponManager
+              slug={state.slug}
+              initialItems={coupon.items}
+              initialBalances={coupon.balances}
+              initialEvents={coupon.events}
+              initialSourceMap={coupon.sourceMap}
+              couponSources={couponSourceCandidates}
+              viewerSuggestions={viewers
+                .filter((v) => v.fanNickname)
+                .map((v) => ({ fanId: v.fanId, fanNickname: v.fanNickname }))}
+            />
+          ) : (
+            <p className={styles.fieldHint}>
+              쿠폰 장부를 불러오지 못했어요. DB에 쿠폰 테이블
+              (supabase/migrations/20260707_coupon_ledger.sql)이 아직 적용되지 않았을 수 있어요.
+            </p>
+          )}
+        </CollapsibleCard>
+      ) : activeAdminTab === "manual" ? (
+        <CollapsibleCard sectionKey="manual" title="수동기록">
+          <p className={styles.fieldHint}>
+            위플랩에 안 잡히는 룰렛 결과를 직접 넣는 곳이에요. 넣은 기록은 배송·양도/교환·팬 화면에서 자동수집분과
+            똑같이 다뤄지고, 같은 상품은 자동으로 합산돼요. 여기서 넣고, 실제 관리는 배송 관리에서 하세요.
+          </p>
+          <ManualEntryManager
+            slug={state.slug}
+            entries={entries}
+            catalogItems={catalogItems}
+            catalogVersion={activeCatalog?.version ?? state.currentCatalogVersion ?? null}
+          />
+        </CollapsibleCard>
+      ) : activeAdminTab === "roulettes" || activeAdminTab === "reveal" ? (
+        <>
+          {/* 룰렛 관리 하위탭 */}
+          <div className={styles.subTabs}>
+            <a
+              className={activeAdminTab === "roulettes" ? styles.subTabActiveLink : styles.subTabLink}
+              href={`/${state.slug}?admin=1&atab=roulettes`}
+            >
+              룰렛 설정
+            </a>
+            <a
+              className={activeAdminTab === "reveal" ? styles.subTabActiveLink : styles.subTabLink}
+              href={`/${state.slug}?admin=1&atab=reveal`}
+            >
+              확률 공개
+            </a>
+          </div>
+
+          {activeAdminTab === "reveal" ? (
+            <CollapsibleCard sectionKey="reveal" title="확률 공개 (팬 화면 룰렛 확률표)">
+              <p className={styles.fieldHint}>
+                공개할 룰렛만 켜면 그 룰렛 확률표가 팬 화면 오른쪽에 떠요. 기록 on/off와 무관하게,
+                방송에서 도는 룰렛의 확률을 팬에게 보여줄 수 있어요.
+              </p>
+              <FanRevealManager
+                slug={state.slug}
+                roulettes={revealRoulettes}
+                master={state.fanRevealEnabled ?? false}
+                existingConfig={state.rouletteConfig ?? []}
+              />
+            </CollapsibleCard>
+          ) : (
+            <SortableSections tabId="roulettes" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
+              {/* 위플랩 공개 링크 — 확프 없이 룰렛표 수집(sy 확정 2026-07-08, 확프와 병행). */}
+              <CollapsibleCard sectionKey="weflab-link" title="위플랩 룰렛표 링크">
+                <WeflabLinkManager slug={state.slug} initial={state.weflabLink ?? {}} />
+              </CollapsibleCard>
+
+              {/* 팬 탭 이름 — 묶기와 독립(sy 확정 2026-07-08). 탭의 상품 지문에 이름을 매단다. */}
+              <CollapsibleCard sectionKey="fan-tab-names" title="팬 탭 이름 (팬 화면 룰렛 탭)">
+                <p className={styles.fieldHint}>
+                  팬 화면 룰렛 탭에 보일 이름을 정하세요. 이름은 룰렛 묶기와 별개로 탭의 상품 구성에
+                  붙어서, 묶거나 해제해도 유지되고 새 룰렛표가 들어와도 따라옵니다.
+                </p>
+                <FanTabNameManager
+                  slug={state.slug}
+                  tabs={activeFanTabs}
+                  showFixed={showFixedTab}
+                  showOther={showOtherTab}
+                  fixedLabel={state.fanTabLabels?.fixedLabel ?? ""}
+                  otherLabel={state.fanTabLabels?.otherLabel ?? ""}
+                  existingEntries={state.fanTabLabels?.entries ?? []}
+                />
+              </CollapsibleCard>
+
+              {/* 룰렛 상품 · 사용 설정 + 룰렛 이름/묶기 + 상품 색상 */}
+              <CollapsibleCard sectionKey="roulette-usage" title="룰렛 상품 · 사용 설정">
+                {activeGroups.length > 0 ? (
+                  <CatalogManager
+                    slug={state.slug}
+                    groups={activeGroups}
+                    threshold={state.settings?.thresholdPercent ?? 0}
+                    version={activeCatalog?.version ?? state.currentCatalogVersion}
+                    catalogs={catalogs}
+                    usageByVersion={state.catalogUsageByVersion ?? {}}
+                  />
+                ) : (
+                  <p className={styles.fieldHint}>
+                    현재 사용 중인 룰렛표(v{state.currentCatalogVersion})에서 상품을 찾지 못했어요.
+                    Extension으로 룰렛표를 먼저 저장해 주세요.
+                  </p>
+                )}
+                <RouletteConfigManager
+                  slug={state.slug}
+                  groups={managerGroups}
+                  roulettes={managerRoulettes}
+                  existingConfig={state.rouletteConfig ?? []}
+                />
+                <div style={{ marginTop: 14, borderTop: "1px solid var(--paper-line)", paddingTop: 14 }}>
+                  <p className={styles.fieldHint} style={{ marginTop: 0 }}>
+                    팬 화면에서 상품마다 배경색으로 구분해요(선택사항).
+                  </p>
+                  <ProductColorManager
+                    slug={state.slug}
+                    products={colorableProducts}
+                    initial={state.productColors ?? {}}
+                  />
+                </div>
+              </CollapsibleCard>
+
+              {/* 기준 확률 설정 */}
+              <CollapsibleCard sectionKey="threshold" title="기준 확률 설정">
+                <ThresholdForm slug={state.slug} current={state.settings?.thresholdPercent ?? 0} />
+              </CollapsibleCard>
+
+              {/* 두배권/특수 보상 확인 */}
+              <CollapsibleCard sectionKey="special" title="두배권 후보 확인">
+                <SpecialRuleManager slug={state.slug} rules={specialItemRules} />
+              </CollapsibleCard>
+
+              {/* 룰렛표(catalog) 버전 이력 */}
+              <CollapsibleCard sectionKey="catalog-history" title="룰렛표 버전 이력">
+                <ul className={styles.catalogList}>
+                  {catalogs.map((c) => (
+                    <CatalogRow key={c.version} catalog={c} isActive={c.version === state.currentCatalogVersion} />
+                  ))}
+                </ul>
+              </CollapsibleCard>
+            </SortableSections>
+          )}
+        </>
+      ) : activeAdminTab === "signature" ? (
+        <CollapsibleCard sectionKey="signature" title="정가 설정 (시그니처 후원 갯수)">
+          <p className={styles.fieldHint}>
+            여기 등록한 갯수와 일치하는 후원은 다음 수집 반영부터 &quot;정가기록&quot;으로 남아요. 룰렛
+            업보와 별도로 표시되고, 상품 내용은 배송 관리의 정가 메모에서 적으면 됩니다.
+          </p>
+          <SignatureCountsManager slug={state.slug} initial={state.signatureCounts ?? []} />
+        </CollapsibleCard>
+      ) : activeAdminTab === "promo" ? (
+        <SortableSections tabId="promo" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
+          {/* 팬 화면 배치 편집기: 포스터/확률표/공지 블록을 원하는 자리로 */}
+          <CollapsibleCard sectionKey="fan-layout" title="팬 화면 배치">
+            <FanLayoutEditor
+              slug={state.slug}
+              initial={state.fanLayout}
+              available={{
+                posters: Boolean(showcase?.posterUrls?.some(Boolean)),
+                reveal: Boolean(
+                  state.fanRevealEnabled && (state.rouletteConfig ?? []).some((c) => c.revealed),
+                ),
+                notice: Boolean(showcase?.noticeText?.trim()),
+              }}
+            />
+          </CollapsibleCard>
+
+          <CollapsibleCard sectionKey="showcase" title="포스터 및 배너 (배너·포스터·공지)">
+            <p className={styles.fieldHint}>
+              여기서 등록한 배너·포스터·공지사항이 팬 화면에 그대로 보여요. 하나라도 등록하면 팬 화면
+              레이아웃이 배너 + 포스터 형태로 바뀝니다. 비우고 저장하면 원래 화면으로 돌아가요.
+            </p>
+            <ShowcaseManager slug={state.slug} initial={showcase} />
+          </CollapsibleCard>
+        </SortableSections>
+      ) : (
+        <SortableSections tabId="settings" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
+          {/* 관리자 상위탭 순서·이름 커스텀 */}
+          <CollapsibleCard sectionKey="tab-editor" title="탭 순서·이름 설정">
+            <AdminTabEditor
+              slug={state.slug}
+              tabs={ADMIN_TABS.map((t) => ({ id: t.id, defaultLabel: t.label }))}
+              initialOrder={orderedTabs.map((t) => t.id)}
+              initialLabels={uiPrefs.tabLabels}
+            />
+          </CollapsibleCard>
+
+          {/* 이 시트 관리자 비밀번호 */}
+          <CollapsibleCard sectionKey="password" title="관리자 비밀번호 (이 시트 전용)">
+            <SheetAdminPasswordForm slug={state.slug} />
+          </CollapsibleCard>
+
+          {/* 팬 화면 배송 반영 */}
+          <CollapsibleCard sectionKey="delivery-reflect" title="팬 화면 배송 반영">
+            <p className={styles.fieldHint}>
+              배송 관리에서 처리한 수량을 팬 화면에 어떻게 보여줄지 정해요. 이 스트리머에게만
+              적용됩니다. 기본은 &quot;반영 안 함&quot;이라, 바꾸지 않으면 지금 그대로예요.
+            </p>
+            <FanDeliveryModeForm slug={state.slug} initial={state.fanDeliveryReflect ?? "off"} />
+          </CollapsibleCard>
+
+          {/* 최신 결과 반영 요약 */}
+          <CollapsibleCard sectionKey="latest" title="최신 결과 반영">
+            {latest ? (
+              <>
+                <div className={styles.metaRow}>
+                  <span className={styles.tag}>catalog v{latest.catalogVersion}</span>
+                  <span className={styles.tag}>적용 기준 {latest.thresholdPercent}%</span>
+                  <span className={styles.tagMuted}>캡처 {fmtKst(latest.capturedAt)}</span>
+                  <span className={styles.tagMuted}>반영 {fmtKst(latest.appliedAt)}</span>
+                </div>
+                <div className={styles.statGrid}>
+                  <Stat label="자동 기록" value={latest.summary.recordCount} accent />
+                  <Stat label="최종 카운트" value={latest.summary.effectiveRecordCount ?? latest.summary.recordCount} />
+                  <Stat label="두배권 감지" value={latest.summary.modifierCount ?? 0} />
+                  <Stat label="제외(기준 초과)" value={latest.summary.ignoreCount} />
+                  <Stat label="중복" value={latest.summary.duplicateCount} />
+                  <Stat label="확인 필요" value={latest.summary.needsReviewCount} />
+                </div>
+                <p className={styles.fieldHint}>
+                  전체 결과 {latest.summary.totalResults.toLocaleString()}건 중 기준 이하{" "}
+                  {latest.entryCount}건이 업보 후보로 기록됐어요.
+                </p>
+              </>
+            ) : (
+              <p className={styles.fieldHint}>아직 반영된 결과 배치가 없어요.</p>
+            )}
+          </CollapsibleCard>
+
+        </SortableSections>
+      )}
+    </div>
+    </AdminCollapseProvider>
+  );
+}
+
+function Stat({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div className={styles.stat}>
+      <span className={accent ? styles.statValueAccent : styles.statValue}>
+        {value.toLocaleString()}
+      </span>
+      <span className={styles.statLabel}>{label}</span>
+    </div>
+  );
+}
+
+function CatalogRow({ catalog, isActive }: { catalog: Catalog; isActive: boolean }) {
+  const itemCount = catalog.itemCount ?? catalog.items?.length ?? 0;
+  const isEmpty = itemCount === 0;
+  const groups = catalog.groups ?? [];
+
+  return (
+    <li className={`${styles.catalogItem} ${isEmpty ? styles.catalogItemEmpty : ""}`}>
+      <div className={styles.catalogTop}>
+        <span className={styles.catalogVersion}>v{catalog.version}</span>
+        {isEmpty ? (
+          <span className={styles.tagWarn}>빈 버전 · 사용하지 않음 / 확인 필요</span>
+        ) : isActive ? (
+          <span className={styles.tagActive}>현재 사용 중</span>
+        ) : (
+          <span className={styles.tagMuted}>이전 버전</span>
+        )}
+      </div>
+
+      {isEmpty ? (
+        <p className={styles.fieldHint}>상품 0개. 룰렛표 읽기 실패/빈 저장 흔적이라 판별에 쓰지 않아요.</p>
+      ) : (
+        <>
+          <div className={styles.metaRow}>
+            <span className={styles.tagMuted}>상품 {itemCount}개</span>
+            <span className={styles.tagMuted}>그룹 {groups.length}개</span>
+            {groups.length > 0 ? (
+              <span className={`${styles.tagMuted} ${styles.tagWrap}`}>
+                금액쌍 {groups.map((g) => groupAmountLabel(g)).join(" · ")}
+              </span>
+            ) : null}
+            <span className={styles.tagMuted}>캡처 {fmtKst(catalog.capturedAt)}</span>
+          </div>
+
+          {/* 사람이 읽는 이름(생일룰렛 등) — 저장 API 후속 필요라 입력칸은 자리만 마련 */}
+          <div className={styles.labelPlaceholder}>
+            <input
+              type="text"
+              placeholder="예: 생일룰렛 / 서버룰렛 (표시 이름)"
+              disabled
+              aria-label="룰렛 표시 이름"
+            />
+            <button type="button" disabled>
+              저장
+            </button>
+            <span className={styles.tagFollowup}>API 후속 필요</span>
+          </div>
+        </>
+      )}
+    </li>
+  );
+}

@@ -1,0 +1,2963 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 20px 64px;
+  background-color: var(--paper);
+  /* 줄무늬(위) + 테마 그라데이션(아래, 없으면 --paper 단색) 2겹 */
+  background-image: repeating-linear-gradient(
+      180deg,
+      transparent,
+      transparent 27px,
+      var(--rule-line, var(--paper-line)) 27px,
+      var(--rule-line, var(--paper-line)) 28px
+    ),
+    var(--page-bg, none);
+}
+
+.shell {
+  width: 100%;
+  max-width: 960px;
+  display: grid;
+}
+
+/* ---------- 테마 효과(fx): 살아있는 배경 + 유리 카드 (themes.ts fx 옵션) ---------- */
+
+/* 살아있는 배경이 켜지면 페이지 자체 배경을 비워 캔버스가 비치게 하고, 내용을 그 위층으로 */
+.page[data-fx] {
+  background-color: transparent;
+  background-image: none;
+}
+
+.page[data-fx] .shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 정가기록(시그니처 후원) 표기: 룰렛 업보와 구분되는 배지 ---------- */
+
+.upboChipFixed {
+  border-color: var(--stamp);
+}
+
+.upboFixedBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  background: var(--stamp);
+  color: var(--on-accent);
+  white-space: nowrap;
+}
+
+/* ---------- 쇼케이스(홍보): 포스터/공지 사이드 레일 + 시트 폭 보호 ---------- */
+
+/*
+  기본 시트 폭(960px)을 쇼케이스에서도 보호한다.
+  넓은 화면에서만 [포스터][시트][공지] 3컬럼을 켜고,
+  폭이 부족하면 포스터/공지를 세로로 내려 시트/검색 영역이 좁아지지 않게 한다.
+*/
+.page[data-showcase] .shell {
+  --showcase-main-width: 960px;
+  --showcase-rail-width: 280px;
+  --showcase-gap: 24px;
+  max-width: min(1680px, calc(100vw - 40px));
+}
+
+.showcaseBanner {
+  margin-bottom: 24px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+}
+
+/* 어떤 크기의 이미지가 와도 원본 비율 그대로, 잘리지 않게 */
+.showcaseBanner img,
+.showcasePoster img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 블록 배치 그리드: 좁은 화면 = 세로 한 줄(DOM 순서: 시트 위 → 왼쪽 → 시트 → 오른쪽 → 시트 아래).
+   넓은 화면(1500px+)에서만 3컬럼으로 갈라진다 — 아래 media 참고. */
+.showcaseLayout {
+  display: grid;
+  grid-template-columns: minmax(0, min(100%, var(--showcase-main-width)));
+  justify-content: center;
+  gap: var(--showcase-gap);
+  align-items: start;
+}
+
+/* 슬롯 래퍼: 블록(포스터/확률표/공지)을 세로로 쌓는다 */
+.slotTop,
+.slotBottom,
+.slotLeft,
+.slotRight {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.showcaseSide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 가로 슬롯(시트 위/아래)에 놓인 포스터: 가로 나열 */
+.showcaseSideH {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+/* 시트 본문 컬럼: 내 업보 확인/시트는 기존 기준 폭을 유지한다 */
+.showcaseMain {
+  width: 100%;
+  max-width: var(--showcase-main-width);
+  min-width: 0;
+}
+
+.showcasePoster {
+  margin: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+}
+
+/* 포스터 썸네일 아래 "크게보기" 버튼(프레임 하단에 꽉 차는 바) */
+.showcasePosterOpen {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--stamp);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.showcasePosterOpen:hover {
+  background: var(--stamp);
+  color: var(--on-accent);
+}
+
+/* 크게보기 모달 — 아이코 PosterGallery 를 포로미 토큰으로 이식(다크 테마는 --modal-bg 상속) */
+.posterModal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  animation: posterFadeIn 160ms ease-out both;
+}
+
+.posterModalBackdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(40, 18, 34, 0.62);
+  cursor: zoom-out;
+}
+
+.posterModalCard {
+  position: relative;
+  z-index: 1;
+  width: min(860px, 92vw);
+  max-height: 90vh;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  background: var(--modal-bg, #fff);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
+  animation: posterCardIn 220ms cubic-bezier(0.2, 0.82, 0.22, 1) both;
+}
+
+.posterModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.posterModalClose {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.posterModalArrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--modal-bg, #fff);
+  color: var(--ink);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.posterModalPrev {
+  left: 16px;
+}
+
+.posterModalNext {
+  right: 16px;
+}
+
+.posterModalImage {
+  display: block;
+  width: 100%;
+  max-height: calc(90vh - 76px);
+  border-radius: 12px;
+  object-fit: contain;
+  object-position: center;
+}
+
+@keyframes posterFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes posterCardIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.showcaseNotice {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+}
+
+.showcaseNotice h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.showcaseNotice p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 충분히 넓은 데스크톱: 항상 3컬럼(레일 자리 상시 예약) → 시트가 어떤 조합에서도 정중앙 고정.
+   시트 위/아래 가로 스트립은 블록이 있을 때만 행이 생긴다(data-top/data-bottom). */
+@media (min-width: 1500px) {
+  .showcaseLayout {
+    grid-template-columns:
+      minmax(280px, 1fr)
+      minmax(0, var(--showcase-main-width))
+      minmax(280px, 1fr);
+    grid-template-areas: "left main right";
+  }
+
+  .showcaseLayout[data-top] {
+    grid-template-areas:
+      "top top top"
+      "left main right";
+  }
+
+  .showcaseLayout[data-bottom] {
+    grid-template-areas:
+      "left main right"
+      "bottom bottom bottom";
+  }
+
+  .showcaseLayout[data-top][data-bottom] {
+    grid-template-areas:
+      "top top top"
+      "left main right"
+      "bottom bottom bottom";
+  }
+
+  /* 양옆 레일을 헤드(맨 위)부터: "시트 위" 스트립이 가운데 컬럼만 차지하고 레일이 두 행에 걸친다 */
+  .showcaseLayout[data-top][data-rails-head] {
+    grid-template-areas:
+      "left top right"
+      "left main right";
+  }
+
+  .showcaseLayout[data-top][data-bottom][data-rails-head] {
+    grid-template-areas:
+      "left top right"
+      "left main right"
+      "bottom bottom bottom";
+  }
+
+  .slotTop {
+    grid-area: top;
+    justify-self: center;
+    width: 100%;
+    max-width: var(--showcase-main-width);
+  }
+
+  .slotBottom {
+    grid-area: bottom;
+    justify-self: center;
+    width: 100%;
+    max-width: var(--showcase-main-width);
+  }
+
+  .slotLeft {
+    grid-area: left;
+  }
+
+  .slotRight {
+    grid-area: right;
+  }
+
+  .showcaseMain {
+    grid-area: main;
+  }
+
+  /* 세로 레일에 놓인 포스터는 한 줄로 쌓는다(가로 슬롯은 .showcaseSideH 가 가로 유지) */
+  .slotLeft .showcaseSide,
+  .slotRight .showcaseSide {
+    grid-template-columns: 1fr;
+  }
+
+  .showcaseNotice {
+    max-height: calc(100vh - 80px);
+    overflow: auto;
+  }
+}
+
+/* 모바일/좁은 화면: 배너 → 포스터 → 시트 → 공지 순서. 시트 폭을 줄이지 않는다. */
+@media (max-width: 900px) {
+  .page[data-showcase] .shell {
+    max-width: calc(100vw - 40px);
+  }
+
+  .showcaseSide {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 유리 모드: 주요 카드가 반투명 + 뒤 배경 블러. 테두리/그림자는 테마 변수로 조정 */
+.page[data-glass] .cover,
+.page[data-glass] .ledger,
+.page[data-glass] .finder,
+.page[data-glass] .showcaseBanner,
+.page[data-glass] .showcasePoster,
+.page[data-glass] .showcaseNotice,
+.page[data-glass] .ieCard,
+.page[data-glass] .ieFilter {
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  backdrop-filter: blur(16px) saturate(1.25);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  box-shadow: 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45));
+}
+
+/* ---------- cover (notebook cover, not a hero banner) ---------- */
+
+.cover {
+  position: relative;
+  margin-bottom: 28px;
+  padding: 24px 26px 22px 40px;
+  border-radius: 4px 18px 18px 4px;
+  background: var(--cover);
+  color: var(--on-cover);
+  box-shadow: 0 10px 0 -4px rgba(0, 0, 0, 0.06);
+}
+
+.cover::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 14px;
+  width: 2px;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.55) 1.6px, transparent 1.7px);
+  background-size: 2px 14px;
+  background-repeat: repeat-y;
+}
+
+.coverTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coverName {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.adminTab {
+  flex-shrink: 0;
+  margin-top: -24px;
+  padding: 10px 12px 8px;
+  border-radius: 0 0 10px 10px;
+  background: #fff;
+  color: var(--cover);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.12);
+}
+
+.adminTab:hover {
+  background: var(--stamp-soft);
+}
+
+/* ---------- finder (index tab into the notebook) ---------- */
+
+.finder {
+  position: relative;
+  margin-bottom: 0;
+  padding: 22px 24px 26px;
+  background: var(--surface);
+  border-radius: 14px 14px 0 0;
+}
+
+.finder h2 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.searchRow {
+  display: flex;
+  gap: 8px;
+}
+
+.searchRow input {
+  flex: 1;
+  min-width: 0;
+  height: 46px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.searchRow input::placeholder {
+  color: var(--muted);
+}
+
+.searchRow input:focus-visible {
+  border-color: var(--stamp);
+}
+
+.searchRow button {
+  height: 46px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.searchRow button:hover {
+  background: var(--cover);
+}
+
+/* ---------- perforation between finder and ledger ---------- */
+
+.perforation {
+  position: relative;
+  height: 0;
+  border-top: 2px dashed var(--paper-line);
+  background: var(--surface);
+}
+
+.perforation::before,
+.perforation::after {
+  content: "";
+  position: absolute;
+  top: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.perforation::before {
+  left: -7px;
+}
+
+.perforation::after {
+  right: -7px;
+}
+
+/* ---------- ledger (the notebook page itself) ---------- */
+
+.ledger {
+  padding: 22px 24px 26px;
+  background: var(--surface);
+  border-radius: 0 0 14px 14px;
+}
+
+.ledgerHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ledgerHeader h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.countPill {
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--stamp);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 11px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--paper-line);
+}
+
+.table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.stampCol {
+  width: 64px;
+  text-align: center;
+}
+
+/* ---------- the one signature element: an empty photocard slot ---------- */
+
+.stamp {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: 44px;
+  height: 52px;
+  padding: 4px 4px 6px;
+  border-radius: 3px;
+  border: 2px dashed var(--stamp);
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 9px;
+  font-weight: 800;
+  transform: rotate(-6deg);
+}
+
+.stampGhost {
+  border-color: var(--paper-line);
+  background: var(--paper);
+  color: var(--paper-line);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 8px 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.emptyState p {
+  margin: 0;
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---------- fan view: summary + table ---------- */
+
+.summaryLine {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.nameCell {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.idCell {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dateCell {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.badgePending {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.badgeDone {
+  background: #e3f4e8;
+  color: #2f7d4f;
+}
+
+.badgeMuted {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+/* integrated viewer sheet: 업보 chips */
+
+.donateCol {
+  white-space: nowrap;
+}
+
+.donateCell {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.countCol {
+  width: 56px;
+  text-align: center;
+}
+
+/* 상품별 목록 숫자 컬럼 — 제목이 줄바꿈 없이 한 줄에 나오도록 폭을 넉넉히 */
+.pmCountCol {
+  width: 92px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.countCell {
+  text-align: center;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.upboCell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.upboChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 9px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.upboItem {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.upboSet {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--stamp-soft);
+  color: var(--cover);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.upboProb {
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.upboCount {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* tabs (업보 목록 / 획득 기록) */
+
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tabLink,
+.tabActiveLink {
+  padding: 7px 16px;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tabLink {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.tabActiveLink {
+  background: var(--stamp);
+  color: var(--on-accent);
+}
+
+/* 팬 화면 룰렛 구분 탭 (룰렛 이름별) — 업보 목록 위에 표시 */
+.rouletteTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.rouletteTab,
+.rouletteTabActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.rouletteTab {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.rouletteTabActive {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  border-color: var(--stamp);
+}
+
+.rouletteTabCount {
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 배송완료 표시(mark 모드) 배지 */
+.upboDelivered {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--paper-line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* 상위탭 아래 하위탭 (배송 관리: 시청자별/상품별 · 교환·양도: 항목 관리/이력)
+   fixedPriceNote.module.css 의 dmTab 톤과 동일 — a/button 공용 */
+.subTabs {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 14px;
+}
+
+.subTabLink,
+.subTabActiveLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.subTabLink {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.subTabLink:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.subTabActiveLink {
+  background: var(--stamp);
+  color: var(--on-accent);
+  border-color: var(--stamp);
+}
+
+.nameCol {
+  width: 132px;
+}
+
+.probCol {
+  width: 64px;
+  text-align: left;
+}
+
+.probCell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- admin: read-only operations panel ---------- */
+
+.adminPanel {
+  display: grid;
+  gap: 14px;
+  /* 방어: 자식이 min-content로 트랙을 넓혀 페이지를 밀지 못하게 트랙을 컨테이너에 맞춘다. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.adminHead {
+  padding: 16px 18px;
+  background: #fff;
+  border-radius: 14px;
+}
+
+.adminBadge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.adminHeadNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.adminCard {
+  padding: 18px 18px 20px;
+  background: #fff;
+  border-radius: 14px;
+}
+
+.adminCard h2 {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.fieldLabel {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.fieldHint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fieldOk {
+  margin: 8px 0 0;
+  color: #2f7d4f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fieldErr {
+  margin: 8px 0 0;
+  color: var(--destructive);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* threshold form */
+
+.thresholdForm {
+  display: block;
+}
+
+.thresholdRow {
+  display: flex;
+  gap: 8px;
+}
+
+.thresholdRow input {
+  width: 120px;
+  height: 44px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.thresholdRow button {
+  height: 44px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--stamp);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.thresholdRow button:disabled {
+  background: var(--muted);
+  cursor: default;
+}
+
+/* meta tags */
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tag,
+.tagMuted,
+.tagActive,
+.tagWarn,
+.tagFollowup {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* 내용이 길어질 수 있는 메타 배지(예: 금액쌍 목록 — 그룹 많은 스트리머는 아주 길어짐)는 줄바꿈
+   허용. nowrap 그대로 두면 한 줄이 컨테이너를 넘겨 페이지 전체가 가로로 밀린다(리브레 v1 48그룹 사례). */
+.tagWrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.tag {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.tagMuted {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.tagActive {
+  background: #e3f4e8;
+  color: #2f7d4f;
+}
+
+.tagWarn {
+  background: #fbe8e6;
+  color: var(--destructive);
+}
+
+.tagFollowup {
+  background: var(--paper);
+  color: var(--muted);
+  border: 1px dashed var(--paper-line);
+}
+
+/* stat grid */
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--paper);
+  border-radius: 12px;
+}
+
+.statValue,
+.statValueAccent {
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.statValueAccent {
+  color: var(--stamp);
+}
+
+.statLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* catalog list */
+
+.catalogList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.catalogItem {
+  padding: 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+}
+
+.catalogItemEmpty {
+  opacity: 0.7;
+  background: var(--paper);
+}
+
+.catalogTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.catalogVersion {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.labelPlaceholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.labelPlaceholder input {
+  flex: 1;
+  min-width: 160px;
+  height: 40px;
+  border: 2px solid var(--paper-line);
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.labelPlaceholder button {
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--muted);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: default;
+}
+
+/* ---------- catalog manager (상품 관리) ---------- */
+
+.cm {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cmToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.cmSearch {
+  flex: 1;
+  min-width: 160px;
+  height: 42px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.cmSearch:focus-visible {
+  border-color: var(--stamp);
+}
+
+.cmSort {
+  height: 42px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cmEditBtn,
+.cmEditOn {
+  height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cmEditBtn {
+  background: var(--paper);
+  color: var(--stamp);
+  border: 2px solid var(--stamp-soft);
+}
+
+.cmEditOn {
+  background: var(--stamp);
+  color: #fff;
+}
+
+.cmSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cmBanner {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fdf3e6;
+  border: 1px solid #f0d9b8;
+  color: #8a5a16;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cmGroup {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 그룹 헤더: 내용이 넓어도 가로로 넘치지 않게 줄바꿈 허용(펼치기 버튼이 행 밖으로 밀려 페이지가
+   가로로 밀리는 증상 방지). 그리드/플렉스 자식은 min-width:0 이라야 안전하게 줄어든다. */
+.cmGroupHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cmGroupName {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.cmStateCol {
+  width: 84px;
+}
+
+.cmUseCol {
+  width: 56px;
+  text-align: center;
+}
+
+.cmUseCell {
+  text-align: center;
+}
+
+.cmInput {
+  width: 100%;
+  min-width: 120px;
+  height: 36px;
+  border: 2px solid var(--paper-line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.cmInput:focus-visible {
+  border-color: var(--stamp);
+}
+
+.cmUseOn {
+  font-size: 12px;
+  font-weight: 800;
+  color: #2f7d4f;
+}
+
+.cmMutedDash {
+  color: var(--muted);
+}
+
+.cmSaveRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cmSaveBtn {
+  height: 42px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--muted);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* ---------- 관리자 섹션 접기/펴기 ---------- */
+
+.collapseHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* 헤더 안 h2 는 기존 .adminCard h2 스타일을 그대로 쓰되, 아래 여백만 제거(접었을 때 깔끔) */
+.collapseHead h2 {
+  margin-bottom: 0;
+}
+
+.collapseChevron {
+  flex: none;
+  font-size: 13px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.collapseChevronOpen {
+  transform: rotate(90deg);
+}
+
+.collapseBody {
+  margin-top: 14px;
+}
+
+/* ---------- 관리자 상위탭 순서·이름 편집기 ---------- */
+
+.tabEditList {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.tabEditRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--paper);
+  cursor: grab;
+}
+
+.tabEditRowDrag {
+  border-color: var(--stamp);
+  background: var(--stamp-soft);
+  opacity: 0.9;
+}
+
+.tabEditGrip {
+  color: var(--muted);
+  font-size: 14px;
+  cursor: grab;
+  flex: none;
+}
+
+.tabEditDefault {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+  min-width: 92px;
+  flex: none;
+}
+
+.tabEditInput {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tabEditActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tabEditSave {
+  height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tabEditSave:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.tabEditReset {
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ---------- 탭 안 섹션 순서 배치(SortableSections) ---------- */
+
+.sortToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sortToggle,
+.sortToggleOn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+}
+
+.sortToggle {
+  border: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.sortToggleOn {
+  border: 1px solid var(--stamp);
+  background: var(--stamp);
+  color: var(--on-accent);
+}
+
+.sortReset {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+}
+
+.sortHint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* adminPanel 그리드와 같은 간격·트랙(자식이 페이지를 밀지 못하게 minmax(0,1fr)). */
+.sortWrap {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sortItem {
+  min-width: 0;
+}
+
+.sortItemDrag {
+  opacity: 0.6;
+}
+
+.sortHandle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--stamp);
+  border-radius: 8px;
+  background: var(--stamp-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: grab;
+  user-select: none;
+}
+
+/* ---------- delivery manager (배송 관리) ---------- */
+
+.dmCheckLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.dmList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.dmItem {
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.dmRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+
+.dmToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 160px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dmCaret {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dmName {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dmId {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dmDone,
+.dmPartial,
+.dmNone {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.dmDone {
+  background: #e3f4e8;
+  color: #2f7d4f;
+}
+
+.dmPartial {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.dmNone {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.dmActions {
+  display: flex;
+  gap: 6px;
+}
+
+.dmNoteBtn,
+.dmNoteOnBtn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dmNoteBtn {
+  border: 1px solid var(--paper-line);
+  background: #fff;
+  color: var(--muted);
+}
+
+.dmNoteOnBtn {
+  border: 0;
+  background: #fbe8e6;
+  color: var(--destructive);
+}
+
+.dmNoteTextarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.dmNoteTextarea:focus-visible {
+  outline: none;
+  border-color: var(--stamp);
+}
+
+.dmAllBtn,
+.dmClearBtn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dmAllBtn {
+  border: 0;
+  background: var(--stamp);
+  color: #fff;
+}
+
+.dmClearBtn {
+  border: 1px solid var(--paper-line);
+  background: #fff;
+  color: var(--muted);
+}
+
+.dmAllBtn:disabled,
+.dmClearBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dmDetail {
+  border-top: 1px dashed var(--paper-line);
+  background: var(--paper);
+  padding: 8px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.dmItemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.dmItemName {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.dmItemProb {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.dmStepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dmStepper button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.dmStepper button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dmCount,
+.dmCountDone {
+  min-width: 46px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.dmCount {
+  color: var(--ink);
+}
+
+.dmCountDone {
+  color: #2f7d4f;
+}
+
+/* save bar (변경 검토 후 저장) */
+
+.dmSaveBar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(74, 36, 64, 0.28);
+}
+
+.dmSaveInfo {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dmSaveActions {
+  display: flex;
+  gap: 8px;
+}
+
+.dmRevertBtn {
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dmSaveBtn {
+  height: 38px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--stamp);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dmSaveBtn:hover {
+  background: #fff;
+  color: var(--stamp);
+}
+
+/* confirm modal */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(40, 18, 34, 0.5);
+}
+
+.modal {
+  width: 100%;
+  max-width: 460px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border-radius: 16px;
+  /* 다크 테마는 --modal-bg 로 어두운 팝업 배경을 지정한다(글자색은 --ink 상속) */
+  background: var(--modal-bg, #fff);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modalTitle {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.modalBody {
+  margin: 12px 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  /* flex 컬럼(.modal) 안에서 실제로 줄어들며 스크롤되도록 — 없으면 내용이 모달을 뚫고 나간다 */
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.changeRow {
+  padding: 10px 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+}
+
+.changeName {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.changeItems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.changeItem {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.changeArrow {
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modalCancel {
+  height: 42px;
+  padding: 0 18px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.modalConfirm {
+  height: 42px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--stamp);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.modalConfirm:hover {
+  background: var(--cover);
+}
+
+.multiplierBadge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.specialRules {
+  display: grid;
+  gap: 10px;
+}
+
+.specialRuleList {
+  display: grid;
+  gap: 8px;
+}
+
+.specialRuleCard {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.specialRuleTitle {
+  margin-bottom: 6px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.specialRuleActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.specialRuleActions button,
+.secondaryButton {
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--stamp);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.specialRuleActions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.specialRuleActions .secondaryButton {
+  border: 1px solid var(--paper-line);
+  background: #fff;
+  color: var(--muted);
+}
+
+@media (max-width: 480px) {
+  .cover {
+    padding: 22px 20px 20px 34px;
+  }
+
+  .coverTop {
+    flex-direction: column;
+  }
+
+  .adminTab {
+    margin-top: 0;
+    border-radius: 10px;
+  }
+
+  .searchRow {
+    flex-direction: column;
+  }
+}
+
+/* ── 업보 항목 관리 (양도/교환/취소 + 이력) ───────────────── */
+
+.ieWrap {
+  display: grid;
+  gap: 14px;
+}
+
+.ieBanner {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--stamp-soft);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.ieIcon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ieToolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.ieSearch {
+  flex: 1;
+  height: 44px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.ieFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ieFilter,
+.ieFilterOn {
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.ieFilter {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.ieFilter:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.ieFilterOn {
+  background: var(--stamp);
+  color: var(--on-accent);
+  border-color: var(--stamp);
+}
+
+.ieList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.ieItem {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.ieItemOff {
+  opacity: 0.6;
+}
+
+.ieMain {
+  display: grid;
+  gap: 4px;
+}
+
+.ieIdentity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.ieStatus {
+  align-self: center;
+}
+
+.ieName {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ieArrow {
+  font-weight: 800;
+  color: var(--stamp);
+}
+
+.ieToValue {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cover);
+}
+
+.ieId {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.ieSr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ieItemLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.ieItemOld {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ieProb {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+.ieBadgeInfo {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--stamp-soft);
+  color: var(--cover);
+}
+
+.ieLogKind {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--stamp-soft);
+  color: var(--cover);
+}
+
+.ieActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 모달 상품 선택 상단의 전체 선택/초기화 버튼 줄 */
+.ieQuickRow {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ieActionBtn,
+.ieActionDanger,
+.ieHistoryBtn,
+.ieRestoreBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  color: var(--ink);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.ieActionBtn:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.ieActionDanger {
+  color: var(--destructive);
+}
+
+.ieActionDanger:hover {
+  border-color: var(--destructive);
+  background: #fbe8e6;
+}
+
+.ieHistoryBtn {
+  margin-left: auto;
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.ieHistoryBtn:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+.ieRestoreBtn {
+  color: var(--cover);
+}
+
+.ieRestoreBtn:hover {
+  border-color: var(--cover);
+  background: var(--stamp-soft);
+}
+
+/* 이력 타임라인 */
+
+.ieHistory {
+  border-top: 1px dashed var(--paper-line);
+  padding-top: 10px;
+}
+
+.ieTimeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.ieEvent {
+  display: flex;
+  gap: 10px;
+}
+
+.ieEventDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--stamp);
+}
+
+.ieEventBody {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+}
+
+.ieEventHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ieEventLabel {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.ieEventTime {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ieEventReason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ieDelta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.ieDeltaRow {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.ieDeltaKey {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ieDeltaFrom {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.ieDeltaTo {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* 모달 폼 */
+
+.ieModalTarget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+
+.ieModalItem {
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.ieForm {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+  /* 상품이 많아도 위 탭·아래 실행버튼은 고정되고, 이 폼 영역만 스크롤되게 한다.
+     (.modal 이 flex 컬럼 + max-height 80vh 라서 flex:1 로 남은 높이를 먹고 스크롤) */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ieField {
+  display: grid;
+  gap: 5px;
+}
+
+.ieLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.ieReq {
+  color: var(--destructive);
+}
+
+.ieOptional {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ieInput {
+  height: 44px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 14px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.ieInput:focus-visible {
+  outline: 3px solid var(--stamp-soft);
+  border-color: var(--stamp);
+}
+
+.ieFormHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.ieFieldError {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fbe8e6;
+  color: var(--destructive);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.ieConfirmDanger {
+  height: 42px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--destructive);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ieConfirmDanger:hover {
+  filter: brightness(0.92);
+}
+
+.ieActionBtn:disabled,
+.ieActionDanger:disabled,
+.ieConfirmDanger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── 보유 현황 카드(계정 1행) + 단일 액션 모달 ───────────── */
+
+.ieSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ieCard {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.ieCardHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ieTotal {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--stamp);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ieHoldingList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.ieHolding {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.ieHoldingInfo {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.ieHoldingMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ieQty {
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ieQtyOrigin {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ieFrom {
+  color: var(--muted);
+}
+
+.ieHoldingActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ieChipBtn,
+.ieChipBtnDanger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--paper-line);
+  color: var(--ink);
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.ieChipBtn:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.ieChipBtnDanger {
+  color: var(--destructive);
+}
+
+.ieChipBtnDanger:hover {
+  border-color: var(--destructive);
+  background: #fbe8e6;
+}
+
+/* 이력: 수량 배지 + 인라인 되돌리기 */
+
+.ieEventQty {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.ieRevertBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--paper-line);
+  background: var(--surface);
+  color: var(--cover);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.ieRevertBtn:hover {
+  border-color: var(--cover);
+  background: var(--stamp-soft);
+}
+
+.ieRevertBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 모달: 액션 탭 + 수량 스테퍼 + 상품 select + 미리보기 */
+
+.ieTabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+
+.ieTab,
+.ieTabOn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  justify-content: center;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--paper-line);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.ieTab {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.ieTab:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
+.ieTabOn {
+  background: var(--stamp);
+  color: var(--on-accent);
+  border-color: var(--stamp);
+}
+
+.ieStepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ieStepper button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--paper-line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ieStepper button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ieStepperCount {
+  min-width: 64px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ieSelect {
+  height: 44px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 0 12px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.ieSelect:focus-visible {
+  outline: 3px solid var(--stamp-soft);
+  border-color: var(--stamp);
+}
+
+.iePreview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--paper-line);
+  background: var(--paper);
+  font-size: 13px;
+}
+
+.iePreviewFrom {
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.iePreviewTo {
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.iePreviewQty {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stamp);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .ieHistoryBtn {
+    margin-left: 0;
+  }
+
+  .ieHolding {
+    align-items: flex-start;
+  }
+
+  .ieTabs {
+    flex-wrap: wrap;
+  }
+
+  .iePreviewQty {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ieFilter,
+  .ieFilterOn,
+  .ieActionBtn,
+  .ieActionDanger,
+  .ieHistoryBtn,
+  .ieRestoreBtn,
+  .ieChipBtn,
+  .ieChipBtnDanger,
+  .ieRevertBtn,
+  .ieTab,
+  .ieTabOn {
+    transition: none;
+  }
+}
+
+/* ── 양도 계정ID 콤보박스(드롭다운 + 앞글자 자동완성) ───────────────── */
+.ieCombo {
+  position: relative;
+}
+
+.ieComboInputRow {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.ieComboInputRow .ieInput {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ieComboBtn {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ieComboBtn:hover {
+  border-color: var(--stamp);
+  color: var(--ink);
+}
+
+.ieComboList {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  display: grid;
+  gap: 2px;
+  border: 2px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--modal-bg, #fff);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+}
+
+.ieComboItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ieComboItem:hover {
+  background: var(--stamp-soft);
+}
+
+.ieComboItemId {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ieComboItemNick {
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ieComboEmpty {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* 교환: "다른 룰렛 상품도 보기" 토글 */
+.ieAltToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ieAltToggle input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--stamp);
+}
+
+/* ── 양도 이력: 계정ID 보정(닉네임만 있어 갈라진 기록 고치기) ── */
+.ieHistFixBtn {
+  padding: 2px 8px;
+  border: 1px dashed var(--stamp);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--stamp);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ieHistFixBtn:hover {
+  background: var(--stamp-soft);
+}
+
+.ieHistFix {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ieHistFixInput {
+  height: 28px;
+  width: 130px;
+  border: 2px solid var(--paper-line);
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}

@@ -1,0 +1,313 @@
+/* 게시판 요청함(실험) — 나월 시트의 종이·해바라기 톤을 자체 변수로 입는 독립 레인.
+   본진 테마 파일에 의존하지 않도록 실측값(2026-07-11 /nawol)을 직접 새긴다. */
+.page {
+  --paper: #fffbea;
+  --paper-line: #f3e3ae;
+  --ink: #5a4410;
+  --stamp: #ca8a04;
+  --stamp-soft: #fdf0c4;
+  --cover: rgba(161, 98, 7, 0.85);
+  --muted: #a89263;
+  --surface: rgba(255, 255, 255, 0.9);
+  --green: #2e7d4f;
+
+  min-height: 100vh;
+  background: var(--paper)
+    repeating-linear-gradient(transparent, transparent 30px, var(--paper-line) 31px);
+  color: var(--ink);
+  padding: 24px 16px 80px;
+}
+
+.shell {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.banner {
+  background: #fff;
+  border: 2px dashed var(--stamp);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.banner b {
+  color: var(--stamp);
+}
+
+.cover {
+  background: var(--cover);
+  color: #fffbeb;
+  border-radius: 16px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.kicker {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 2px;
+}
+.title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.backLink {
+  color: #fffbeb;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.card {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 2px 10px rgba(90, 68, 16, 0.08);
+}
+.sectionTitle {
+  font-size: 19px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+.hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.6;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.item {
+  border-top: 1px solid var(--paper-line);
+  padding: 10px 0;
+}
+.item:first-child {
+  border-top: none;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink);
+  font: inherit;
+  padding: 4px;
+  text-align: left;
+}
+.caret {
+  color: var(--stamp);
+  width: 14px;
+  flex: none;
+}
+.name {
+  font-weight: 700;
+  font-size: 15.5px;
+}
+.id {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.tag {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  font-weight: 600;
+}
+.tagNew {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  background: #e3f2e8;
+  color: var(--green);
+  border: 1.5px solid #bfe0cb;
+}
+.tagDone {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eef7f1;
+  color: var(--green);
+}
+
+.panel {
+  margin: 8px 0 4px 20px;
+  border-left: 3px solid #bfe0cb;
+  background: #fbfdf9;
+  border-radius: 0 12px 12px 0;
+  padding: 12px 14px;
+}
+.panelLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stamp);
+  margin: 10px 0 6px;
+}
+.panelLabel:first-child {
+  margin-top: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  font-size: 12.5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: #f3eee0;
+  color: var(--ink);
+}
+.chip small {
+  opacity: 0.75;
+  font-weight: 700;
+  margin-left: 2px;
+}
+.chipP {
+  background: #f0e6fa;
+  border-color: #e0cdf2;
+  color: #6b3fa0;
+}
+.chipG {
+  background: #e6f3df;
+  border-color: #cfe6c2;
+  color: #3f7d2e;
+}
+.chipY {
+  background: #fdf3c9;
+  border-color: #f3e3ae;
+  color: #9a7207;
+}
+.chipK {
+  background: #fbe3ee;
+  border-color: #f3c9dc;
+  color: #c23472;
+}
+
+.req,
+.reqDone {
+  padding: 10px 0;
+  border-top: 1px dashed #e2ddc8;
+}
+.reqDone {
+  opacity: 0.5;
+}
+.reqMeta {
+  font-size: 11.5px;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--green);
+  font-weight: 600;
+}
+.check input {
+  accent-color: var(--green);
+}
+.postRef {
+  color: var(--stamp);
+}
+.nickNote {
+  color: #c23472;
+}
+.reqText {
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.replyStreamer {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--stamp);
+  background: var(--stamp-soft);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.replyViewer {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 2px 10px;
+}
+.copyBtn {
+  margin-top: 6px;
+  font-size: 12px;
+  border: 1px solid var(--stamp);
+  color: var(--stamp);
+  background: #fff;
+  border-radius: 8px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.copyBtn:hover {
+  background: var(--stamp-soft);
+}
+
+.unmatched {
+  margin-top: 14px;
+}
+.unmatched summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 4px;
+}
+
+.foot {
+  margin-top: 22px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.8;
+}
+
+/* 관리자 로그인 전 안내 */
+.lockedCard {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 28px;
+  text-align: center;
+  box-shadow: 0 2px 10px rgba(90, 68, 16, 0.08);
+}
+.lockedTitle {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 8px;
+}
+.lockedLink {
+  display: inline-block;
+  margin-top: 14px;
+  background: var(--stamp);
+  color: #fff;
+  border-radius: 10px;
+  padding: 8px 18px;
+  text-decoration: none;
+  font-weight: 700;
+}
