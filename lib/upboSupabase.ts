@@ -255,6 +255,25 @@ async function supabaseFetch<T>(path: string, init: RequestInit = {}): Promise<T
   return (text ? JSON.parse(text) : null) as T;
 }
 
+// 행 개수만 필요할 때(HEAD + count=exact, 본문 전송 없음). 데이터 리셋 미리보기용.
+async function supabaseCount(path: string): Promise<number> {
+  assertSupabaseEnv();
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    method: "HEAD",
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY!,
+      authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      prefer: "count=exact",
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(`Supabase ${res.status}: ${res.statusText}`);
+  }
+  const total = Number((res.headers.get("content-range") || "").split("/")[1]);
+  return Number.isFinite(total) ? total : 0;
+}
+
 function tokenHash(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -531,6 +550,178 @@ export async function deleteStreamer(slug: string): Promise<void> {
     method: "DELETE",
     headers: { prefer: "return=minimal" },
   });
+}
+
+// ── 스트리머 데이터 리셋(범위 선택, 온보딩 콘솔 전용) ──────────────────────
+// deleteStreamer(계정 통삭제)와 달리 계정·테마(streamers.accent_color)·확장 토큰은
+// 남기고 데이터만 비운다. 2026-07-17 리루리 수동 리셋(런북)을 기능화한 것.
+// ★audit_logs 는 감사 이력이 아니라 설정 저장소를 겸하므로(비번 2종·위플랩 링크·화면 설정)
+//   streamer_id 통삭제 금지 — "남길 action 화이트리스트" 방식으로만 지운다.
+// ★REST 순차 호출이라 트랜잭션이 아님: 중간 실패 시 일부만 지워질 수 있다.
+//   모든 삭제가 멱등이라 같은 범위로 재실행하면 나머지가 마저 지워진다.
+export type ResetScope = {
+  roulette: boolean; // 룰렛결과: item_events+entries+raw_imports(results)+batches+배수 대기
+  donations: boolean; // 후원집계: donation_events
+  catalogs: boolean; // 확률표: catalogs+raw_imports(catalog)+사용 설정
+  coupons: boolean; // 쿠폰 장부: balances+events (쿠폰 "종류" 정의는 화면 설정·상태 쪽)
+  screenState: boolean; // 화면 설정·상태: audit_logs 에서 화이트리스트 밖 전부
+  pins: boolean; // 비밀번호 2종+위플랩 링크까지(지우면 마스터/전역 기본값으로 폴백)
+};
+
+export type ResetCount = { key: string; label: string; count: number };
+
+// 리셋 후에도 남아야 하는 "열쇠·연결선"과 리셋 이력 자체.
+const RESET_KEEP_ACTIONS = [
+  "sheet_admin_pin_updated",
+  "donation_admin_pin_updated",
+  "weflab_link_updated",
+  "data_reset",
+];
+const RESET_PIN_ACTIONS = ["sheet_admin_pin_updated", "donation_admin_pin_updated", "weflab_link_updated"];
+
+export function hasResetScope(scope: ResetScope): boolean {
+  return (
+    scope.roulette || scope.donations || scope.catalogs || scope.coupons || scope.screenState || scope.pins
+  );
+}
+
+type ResetTarget = { key: string; label: string; query: (streamerId: string) => string };
+
+// 삭제 순서 고정: upbo_entries 가 raw_imports(raw_import_id)를 참조하므로
+// item_events → entries → raw_imports → batches 순이어야 FK 오류가 없다.
+function resetTargets(scope: ResetScope): ResetTarget[] {
+  const targets: ResetTarget[] = [];
+  if (scope.roulette) {
+    targets.push(
+      {
+        key: "item_events",
+        label: "운영 이벤트(양도·교환 등)",
+        query: (sid) => `/${tableName("upbo_item_events")}?streamer_id=eq.${sid}`,
+      },
+      {
+        key: "entries",
+        label: "룰렛결과(업보 기록)",
+        query: (sid) => `/${tableName("upbo_entries")}?streamer_id=eq.${sid}`,
+      },
+    );
+  }
+  // 원본 백업은 룰렛(results)/확률표(catalog) 타입이 섞여 있어 범위에 맞춰 나눠 지운다.
+  const rawFilter =
+    scope.roulette && scope.catalogs ? "" : scope.roulette ? "&type=eq.results" : scope.catalogs ? "&type=eq.catalog" : null;
+  if (rawFilter !== null) {
+    targets.push({
+      key: "raw_imports",
+      label: "원본 백업",
+      query: (sid) => `/${tableName("raw_imports")}?streamer_id=eq.${sid}${rawFilter}`,
+    });
+  }
+  if (scope.roulette) {
+    targets.push({
+      key: "batches",
+      label: "반영 이력",
+      query: (sid) => `/${tableName("import_batches")}?streamer_id=eq.${sid}`,
+    });
+  }
+  if (scope.catalogs) {
+    targets.push({
+      key: "catalogs",
+      label: "확률표",
+      query: (sid) => `/${tableName("catalogs")}?streamer_id=eq.${sid}`,
+    });
+  }
+  if (scope.donations) {
+    targets.push({
+      key: "donations",
+      label: "후원집계",
+      query: (sid) => `/${tableName("donation_events")}?streamer_id=eq.${sid}`,
+    });
+  }
+  if (scope.coupons) {
+    targets.push(
+      {
+        key: "coupon_events",
+        label: "쿠폰 이력",
+        query: (sid) => `/${tableName("coupon_events")}?streamer_id=eq.${sid}`,
+      },
+      {
+        key: "coupon_balances",
+        label: "쿠폰 잔액",
+        query: (sid) => `/${tableName("coupon_balances")}?streamer_id=eq.${sid}`,
+      },
+    );
+  }
+  if (scope.screenState) {
+    targets.push({
+      key: "screen_state",
+      label: "화면 설정·상태(배너·레이아웃·특수룰 등)",
+      query: (sid) =>
+        `/${tableName("audit_logs")}?streamer_id=eq.${sid}&action=not.in.(${RESET_KEEP_ACTIONS.join(",")})`,
+    });
+  } else {
+    // 화면 설정은 남기더라도, 지운 데이터에서 파생된 상태는 같이 비워야 화면이 안 꼬인다.
+    const laneActions = [
+      ...(scope.roulette ? ["modifier_state"] : []),
+      ...(scope.catalogs ? ["catalog_usage_updated"] : []),
+    ];
+    if (laneActions.length) {
+      targets.push({
+        key: "lane_state",
+        label: "관련 파생 상태(배수 대기 등)",
+        query: (sid) => `/${tableName("audit_logs")}?streamer_id=eq.${sid}&action=in.(${laneActions.join(",")})`,
+      });
+    }
+  }
+  if (scope.pins) {
+    targets.push({
+      key: "pins",
+      label: "비밀번호·위플랩 링크",
+      query: (sid) => `/${tableName("audit_logs")}?streamer_id=eq.${sid}&action=in.(${RESET_PIN_ACTIONS.join(",")})`,
+    });
+  }
+  return targets;
+}
+
+// 삭제될 건수만 조회(아무것도 지우지 않음). 실행 전 확인 단계용.
+export async function previewStreamerReset(
+  slug: string,
+  scope: ResetScope,
+): Promise<{ slug: string; items: ResetCount[]; total: number }> {
+  const streamer = await requireStreamer(slug);
+  const items: ResetCount[] = [];
+  for (const target of resetTargets(scope)) {
+    const count = await supabaseCount(`${target.query(streamer.id)}&select=id`);
+    items.push({ key: target.key, label: target.label, count });
+  }
+  return { slug: streamer.slug, items, total: items.reduce((sum, item) => sum + item.count, 0) };
+}
+
+export async function executeStreamerReset(
+  slug: string,
+  scope: ResetScope,
+): Promise<{ slug: string; items: ResetCount[]; total: number }> {
+  const streamer = await requireStreamer(slug);
+  const items: ResetCount[] = [];
+  for (const target of resetTargets(scope)) {
+    const count = await supabaseCount(`${target.query(streamer.id)}&select=id`);
+    await supabaseFetch(target.query(streamer.id), {
+      method: "DELETE",
+      headers: { prefer: "return=minimal" },
+    });
+    items.push({ key: target.key, label: target.label, count });
+  }
+  const total = items.reduce((sum, item) => sum + item.count, 0);
+  // 리셋 이력은 화이트리스트에 포함돼 있어 다음 리셋에도 남는다(무엇을 언제 지웠는지 추적).
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "data_reset",
+      actor: "admin_console",
+      payload: { scope, items, total },
+    }),
+  });
+  return { slug: streamer.slug, items, total };
 }
 
 export async function createExtensionToken(slug: string, label = "") {

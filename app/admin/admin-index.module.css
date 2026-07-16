@@ -754,3 +754,100 @@
   border-radius: 10px;
   background: #f3fbf5;
 }
+
+/* ── 데이터 초기화(계정 유지) — 완전 삭제(빨강)와 구분되는 주황 톤 ── */
+.wipeBtn {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wipeBtn:hover {
+  color: #b7791f;
+  border-color: #f2d9b0;
+  background: #fff8ef;
+}
+
+.wipePanel {
+  flex-basis: 100%;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #f2d9b0;
+  border-radius: 10px;
+  background: #fff8ef;
+}
+
+.wipeWarnText {
+  margin: 0;
+  font-size: 12px;
+  color: #8a5a13;
+  line-height: 1.6;
+}
+
+.wipePresetRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wipeOpts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 12px;
+}
+
+.wipeOpt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.wipePreview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f2d9b0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.wipeList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.7;
+}
+
+.wipeTotal {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  color: #8a5a13;
+}
+
+.wipeStale {
+  font-size: 11px;
+  color: #b7791f;
+}
+
+.wipeDoneTitle {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #1d7a3d;
+}

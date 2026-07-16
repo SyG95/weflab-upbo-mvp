@@ -8,6 +8,7 @@ import Link from "next/link";
 import styles from "./admin-index.module.css";
 import PinResetButton from "./PinResetButton";
 import DeleteStreamerButton from "./DeleteStreamerButton";
+import ResetDataButton from "./ResetDataButton";
 import type { AdminStreamerSummary } from "@/lib/adminDashboard";
 
 function fmtKst(iso?: string): string {
@@ -143,6 +144,7 @@ export default function StreamerList({
                       {isMock ? null : (
                         <>
                           <PinResetButton slug={s.slug} />
+                          <ResetDataButton slug={s.slug} />
                           <DeleteStreamerButton slug={s.slug} />
                         </>
                       )}

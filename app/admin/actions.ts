@@ -8,9 +8,14 @@ import { ADMIN_COOKIE, adminAccessState, adminTokenHash, isDeployed } from "@/li
 import {
   createExtensionToken,
   deleteStreamer,
+  executeStreamerReset,
   getStreamerRowBySlug,
+  hasResetScope,
+  previewStreamerReset,
   setSheetAdminPinHash,
   upsertStreamer,
+  type ResetCount,
+  type ResetScope,
 } from "@/lib/upboSupabase";
 
 // 오픈 리다이렉트 방지: /admin 으로 시작하는 경로만 허용.
@@ -136,6 +141,58 @@ export async function deleteStreamerAction(
     return { ok: true, slug };
   } catch (error) {
     return { error: (error as Error).message || "삭제에 실패했어요." };
+  }
+}
+
+export type ResetDataState = {
+  ok?: boolean;
+  error?: string;
+  slug?: string;
+  mode?: "preview" | "execute";
+  scope?: ResetScope;
+  items?: ResetCount[];
+  total?: number;
+};
+
+function scopeFromForm(formData: FormData): ResetScope {
+  const on = (name: string) => formData.get(name) === "on";
+  return {
+    roulette: on("scope_roulette"),
+    donations: on("scope_donations"),
+    catalogs: on("scope_catalogs"),
+    coupons: on("scope_coupons"),
+    screenState: on("scope_screen"),
+    pins: on("scope_pins"),
+  };
+}
+
+// 스트리머 데이터 초기화(계정·테마·확장 토큰은 유지, 되돌릴 수 없음).
+// 미리보기(건수 확인) → 슬러그 타이핑 확인 → 실행 2단계. mode 는 누른 버튼이 정한다.
+export async function resetStreamerDataAction(
+  _prev: ResetDataState,
+  formData: FormData,
+): Promise<ResetDataState> {
+  try {
+    await assertConsoleAdmin();
+    const slug = String(formData.get("slug") ?? "").trim().toLowerCase();
+    const mode = formData.get("mode") === "execute" ? "execute" : "preview";
+    const scope = scopeFromForm(formData);
+    if (!slug) return { error: "슬러그가 없어요." };
+    if (!hasResetScope(scope)) return { error: "지울 항목을 하나 이상 선택하세요." };
+    if (!(await streamerExists(slug))) return { error: `없는 슬러그예요(/${slug}).` };
+    if (mode === "preview") {
+      const result = await previewStreamerReset(slug, scope);
+      return { ok: true, mode, slug, scope, items: result.items, total: result.total };
+    }
+    const confirm = String(formData.get("confirm") ?? "").trim().toLowerCase();
+    if (confirm !== slug) {
+      return { error: `확인 문구가 달라요. "${slug}" 를 똑같이 입력해야 실행돼요.` };
+    }
+    const result = await executeStreamerReset(slug, scope);
+    revalidatePath("/admin");
+    return { ok: true, mode, slug, scope, items: result.items, total: result.total };
+  } catch (error) {
+    return { error: (error as Error).message || "데이터 초기화에 실패했어요." };
   }
 }
 
