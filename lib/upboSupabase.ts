@@ -787,12 +787,36 @@ async function getAllItemEvents(streamerId: string): Promise<ReturnType<typeof m
   }
 }
 
+// getStreamerState 팬 설정 오버레이 병합용 프리페치 형태. 각 설정 헬퍼는 이 배열을 받으면
+// 개별 audit_logs 왕복을 건너뛰고 rows[0].payload 를 기존과 동일하게 파싱한다.
+type OverlayPrefetch = Array<{ payload: Record<string, unknown> | null; created_at?: string }>;
+
+// 개별 "action별 최신 1건"(select=payload&order=created_at.desc&limit=1) 조회를 한 번의
+// audit_logs 쿼리로 병합할 대상 action 목록. 전부 스트리머가 수동 편집하는 저빈도 설정이라
+// 히스토리가 얕고, in.(...)&order=created_at.desc(무제한)로 받아 action별 첫 행(=최신)을 뽑아도
+// 개별 limit=1 조회와 동일한 행을 준다. modifier_state 는 apply 마다 append 되는 고빈도라 제외.
+const OVERLAY_LATEST_ACTIONS = [
+  "signature_counts_updated",
+  "roulette_config_updated",
+  "fan_display_updated",
+  "product_colors_updated",
+  "fan_reveal_updated",
+  "fan_layout_updated",
+  "admin_ui_prefs_updated",
+  "fan_tab_labels_updated",
+  "weflab_link_updated",
+] as const;
+
+type OverlayLatestRow = { action: string; payload: Record<string, unknown> | null; created_at: string };
+
 export async function getStreamerState(slug: string) {
   const streamer = await requireStreamer(slug);
   // 싱가포르 Supabase ↔ 미국 Vercel 왕복 지연이 크므로 streamer.id 만 있으면 되는 쿼리는
   // 전부 한 번에 병렬로 묶는다. specialRuleOverrides/modifierState 는 catalog 가 필요 없어
   // 앞 병렬 묶음에 합쳐 순차 왕복을 줄인다(buildSpecialItemRuleCandidates 는 동기 계산).
-  const [catalogs, batches, entries, itemEvents, ruleOverrides, modifierState, usageByVersion, signatureCounts, fixedPriceNotes, archivedFanAt, rouletteConfig, deliveryProgress, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  // 팬 설정 오버레이(OVERLAY_LATEST_ACTIONS)는 개별 limit=1 조회 9회를 한 번의 in.(...) 쿼리로
+  // 합쳐 받아, 아래에서 action별 최신 1건으로 갈라 각 헬퍼에 주입한다(파싱은 기존과 동일).
+  const [catalogs, batches, entries, itemEvents, ruleOverrides, modifierState, usageByVersion, fixedPriceNotes, archivedFanAt, deliveryProgress, overlayRows] = await Promise.all([
     supabaseFetch<CatalogRow[]>(
       `/${tableName("catalogs")}?streamer_id=eq.${streamer.id}&select=*&order=version.asc`,
     ),
@@ -806,18 +830,32 @@ export async function getStreamerState(slug: string) {
     specialRuleOverrides(streamer.id),
     latestModifierState(streamer.id),
     catalogUsageByVersion(streamer.id),
-    latestSignatureCounts(streamer.id),
     fixedPriceNotesForStreamer(streamer.id),
     archivedFanAtForStreamer(streamer.id),
-    rouletteConfigForStreamer(streamer.id),
     getDeliveryProgress(streamer.id),
-    fanDeliveryReflectForStreamer(streamer.id),
-    productColorsForStreamer(streamer.id),
-    fanRevealEnabledForStreamer(streamer.id),
-    fanLayoutForStreamer(streamer.id),
-    adminUiPrefsForStreamer(streamer.id),
-    fanTabLabelsForStreamer(streamer.id),
-    weflabLinkForStreamer(streamer.id),
+    supabaseFetch<OverlayLatestRow[]>(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=in.(${OVERLAY_LATEST_ACTIONS.join(",")})&select=action,payload,created_at&order=created_at.desc`,
+    ),
+  ]);
+  // desc 정렬이므로 action별 처음 만난 행 = 최신 1건. 개별 limit=1 조회와 동일.
+  const overlayLatest = new Map<string, OverlayLatestRow>();
+  for (const row of overlayRows) {
+    if (!overlayLatest.has(row.action)) overlayLatest.set(row.action, row);
+  }
+  const overlayPick = (action: string): OverlayPrefetch => {
+    const r = overlayLatest.get(action);
+    return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
+  };
+  const [signatureCounts, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+    latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
+    rouletteConfigForStreamer(streamer.id, overlayPick("roulette_config_updated")),
+    fanDeliveryReflectForStreamer(streamer.id, overlayPick("fan_display_updated")),
+    productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
+    fanRevealEnabledForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
+    fanLayoutForStreamer(streamer.id, overlayPick("fan_layout_updated")),
+    adminUiPrefsForStreamer(streamer.id, overlayPick("admin_ui_prefs_updated")),
+    fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
+    weflabLinkForStreamer(streamer.id, overlayPick("weflab_link_updated")),
   ]);
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
   const currentCatalog = catalogs.find((row) => row.version === currentCatalogVersion) ?? catalogs.at(-1);
@@ -2131,8 +2169,8 @@ export async function setTransferOwnerId(
 const SIGNATURE_MAX_COUNTS = 100;
 
 // 시그니처 갯수 설정(스트리머별 최신 1건). audit_logs 재활용 — 스키마 변경 없음.
-export async function latestSignatureCounts(streamerId: string): Promise<number[]> {
-  const rows = await supabaseFetch<Array<{ payload: { counts?: unknown } | null }>>(
+export async function latestSignatureCounts(streamerId: string, prefetched?: OverlayPrefetch): Promise<number[]> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { counts?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.signature_counts_updated&select=payload&order=created_at.desc&limit=1`,
   );
   const raw = rows[0]?.payload?.counts;
@@ -2269,8 +2307,8 @@ export async function setViewerArchived(
 const ROULETTE_CONFIG_MAX = 200;
 const ROULETTE_ITEMS_MAX = 200;
 
-export async function rouletteConfigForStreamer(streamerId: string): Promise<RouletteConfigEntry[]> {
-  const rows = await supabaseFetch<Array<{ payload: { entries?: unknown } | null }>>(
+export async function rouletteConfigForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<RouletteConfigEntry[]> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { entries?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.roulette_config_updated&select=payload&order=created_at.desc&limit=1`,
   );
   const raw = rows[0]?.payload?.entries;
@@ -2369,8 +2407,8 @@ function sanitizeFanTabLabels(raw: unknown): FanTabLabels {
   return { entries, fixedLabel: fixedLabel || undefined, otherLabel: otherLabel || undefined };
 }
 
-export async function fanTabLabelsForStreamer(streamerId: string): Promise<FanTabLabels> {
-  const rows = await supabaseFetch<Array<{ payload: { labels?: unknown } | null }>>(
+export async function fanTabLabelsForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<FanTabLabels> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { labels?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_tab_labels_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return sanitizeFanTabLabels(rows[0]?.payload?.labels);
@@ -2414,8 +2452,8 @@ function sanitizeWeflabLinkInfo(raw: unknown): WeflabLinkInfo {
   };
 }
 
-export async function weflabLinkForStreamer(streamerId: string): Promise<WeflabLinkInfo> {
-  const rows = await supabaseFetch<Array<{ payload: { link?: unknown } | null }>>(
+export async function weflabLinkForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<WeflabLinkInfo> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { link?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.weflab_link_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return sanitizeWeflabLinkInfo(rows[0]?.payload?.link);
@@ -2449,8 +2487,8 @@ export async function setWeflabLinkInfo(streamer: StreamerRow, partial: unknown)
 // 배송관리에서 처리한 수량(delivery_progress)을 팬 화면에 어떻게 반영할지 스트리머별로 정한다.
 // audit_logs 오버레이 최신 1건. 기본 off(반영 안 함) — 기존 동작과 100% 동일. 스키마 변경 없음.
 
-export async function fanDeliveryReflectForStreamer(streamerId: string): Promise<FanDeliveryReflect> {
-  const rows = await supabaseFetch<Array<{ payload: { deliveryReflect?: unknown } | null }>>(
+export async function fanDeliveryReflectForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<FanDeliveryReflect> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { deliveryReflect?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_display_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return normalizeFanDeliveryReflect(rows[0]?.payload?.deliveryReflect);
@@ -2479,8 +2517,8 @@ export async function setFanDeliveryReflect(
 const PRODUCT_COLORS_MAX = 500;
 const PRODUCT_COLOR_ID_RE = /^c([1-9]|1[0-9]|20)$/;
 
-export async function productColorsForStreamer(streamerId: string): Promise<Record<string, string>> {
-  const rows = await supabaseFetch<Array<{ payload: { colors?: unknown } | null }>>(
+export async function productColorsForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<Record<string, string>> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { colors?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.product_colors_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return sanitizeProductColors(rows[0]?.payload?.colors);
@@ -2520,8 +2558,8 @@ export async function setProductColors(
 
 // ---------- 팬 화면 룰렛 확률표 공개 마스터 스위치 ----------
 // 개별 룰렛 공개 여부는 roulette_config 의 revealed 플래그. 이건 전체 on/off 마스터다.
-export async function fanRevealEnabledForStreamer(streamerId: string): Promise<boolean> {
-  const rows = await supabaseFetch<Array<{ payload: { enabled?: unknown } | null }>>(
+export async function fanRevealEnabledForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<boolean> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { enabled?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_reveal_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return rows[0]?.payload?.enabled === true;
@@ -2544,8 +2582,8 @@ export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolea
 
 // ---------- 팬 화면 블록 배치(포스터/확률표/공지 × 슬롯) ----------
 // audit_logs 오버레이 최신 1건. 없으면 DEFAULT_FAN_LAYOUT(기존 배치)과 동일. 스키마 변경 없음.
-export async function fanLayoutForStreamer(streamerId: string): Promise<FanLayout> {
-  const rows = await supabaseFetch<Array<{ payload: { layout?: unknown } | null }>>(
+export async function fanLayoutForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<FanLayout> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { layout?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_layout_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return normalizeFanLayout(rows[0]?.payload?.layout);
@@ -2629,8 +2667,8 @@ function normalizeAdminUiPrefs(raw: unknown): AdminUiPrefs {
   return { tabOrder, tabLabels, collapsed, sectionOrder };
 }
 
-export async function adminUiPrefsForStreamer(streamerId: string): Promise<AdminUiPrefs> {
-  const rows = await supabaseFetch<Array<{ payload: { prefs?: unknown } | null }>>(
+export async function adminUiPrefsForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<AdminUiPrefs> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { prefs?: unknown } | null }>>(
     `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.admin_ui_prefs_updated&select=payload&order=created_at.desc&limit=1`,
   );
   return normalizeAdminUiPrefs(rows[0]?.payload?.prefs);
