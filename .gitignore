@@ -24,3 +24,5 @@ next-env.d.ts
 
 # OMC 세션 상태
 .omc/
+
+.claude/

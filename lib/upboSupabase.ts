@@ -3589,6 +3589,26 @@ export async function getCouponExcludedNamesBySlug(slug: string): Promise<Set<st
   return couponExcludedNameSet(sourceMap);
 }
 
+// ---------- 팬 쿠폰 탭 전용: 잔액만 얇게 읽기 (읽기 전용) ----------
+// 공개 팬 화면 성능을 위해 이벤트·소스맵·종류정의는 로드하지 않는다(getCouponStateBySlug 는 관리자용).
+// coupon_balances 행에 nickname·item_name 이 이미 있어 추가 조인이 필요 없다.
+// 잔액 0(다 쓴 쿠폰)도 그대로 반환하고, 표시 규칙(0=사용완료 표기)은 lib/fanCouponView.ts 가 담당.
+// 조회 실패/테이블 미적용은 호출부에서 처리한다 — 팬 화면은 null 로 받아 "빈 장부"와 구분 표시.
+export async function getCouponBalancesForFan(slug: string): Promise<CouponBalance[]> {
+  const streamer = await requireStreamer(slug);
+  const rows = await supabaseFetch<CouponBalanceRow[]>(
+    `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&select=*&order=updated_at.desc&limit=5000`,
+  );
+  return rows.map(mapCouponBalance);
+}
+
+// 팬 쿠폰 탭 "노출 여부" 판단용: 쿠폰 종류를 등록한 스트리머만 팬 화면에 쿠폰 탭이 생긴다.
+// 종류 정의(audit_logs 최신 1건)만 얇게 읽는다 — 잔액·이벤트 없이 가벼운 조회 1회.
+export async function getCouponItemsBySlug(slug: string): Promise<CouponItemDef[]> {
+  const streamer = await requireStreamer(slug);
+  return couponItemsForStreamer(streamer.id);
+}
+
 // ---------- 쿠폰 자동 적립 (2단계 조각 2: 룰렛 당첨 → 연결된 쿠폰 자동 적립) ----------
 // 조각 1(CouponSourceMap)의 연결을 실제로 적용한다: applyResults 가 "이번에 처음 기록되는
 // 새 당첨(record decision)"을 저장할 때, 연결된 쿠폰을 자동으로 쌓는다.

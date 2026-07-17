@@ -27,6 +27,8 @@ type Props = {
   // 자동 적립 연결 후보 상품명(현재 룰렛표에서 on·기준 이하, 중복 제거) — 서버(page)에서 계산해 내려준다.
   couponSources: string[];
   viewerSuggestions: ViewerSuggestion[];
+  // 마지막 수집 반영 시각(ISO). "지난 당첨 가져오기"가 어디까지의 기록을 보는지 알려주는 용도.
+  lastAppliedAt?: string;
 };
 
 const ACTION_LABEL: Record<CouponEvent["actionType"], string> = {
@@ -56,6 +58,7 @@ export default function CouponManager({
   initialSourceMap,
   couponSources,
   viewerSuggestions,
+  lastAppliedAt,
 }: Props) {
   const [items, setItems] = useState<CouponItemDef[]>(initialItems);
   const [itemsDirty, setItemsDirty] = useState(false);
@@ -66,6 +69,8 @@ export default function CouponManager({
   const [sourceMap, setSourceMap] = useState<CouponSourceMap[]>(initialSourceMap);
   const [sourceDraft, setSourceDraft] = useState<Record<string, string>>({});
   const [savingSources, setSavingSources] = useState(false);
+  // 화면에서 연결을 바꿨는데 아직 저장 안 한 상태 — 이걸 모르고 미리보기하면 "0건" 함정에 빠진다.
+  const [sourcesDirty, setSourcesDirty] = useState(false);
 
   // 지난 기록 소급(2단계 조각 3). 기간은 datetime-local(KST 로 해석), 비우면 전체.
   const [bfFrom, setBfFrom] = useState("");
@@ -158,6 +163,9 @@ export default function CouponManager({
       }
       return next.length === 0 ? prev : [...prev, { itemKey: key, sources: next }];
     });
+    // 연결이 바뀌면 "저장 전" 표시를 켜고, 이전 미리보기 결과는 낡은 값이라 지운다.
+    setSourcesDirty(true);
+    setBfPreview(null);
   }
 
   function addSource(key: string) {
@@ -195,7 +203,11 @@ export default function CouponManager({
       } else {
         const saved: CouponSourceMap[] = Array.isArray(data?.map) ? data.map : [];
         setSourceMap(saved);
-        setMsg({ kind: "ok", text: "적립 연결을 저장했어요." });
+        setSourcesDirty(false);
+        setMsg({
+          kind: "ok",
+          text: "적립 연결을 저장했어요. 이제부터 이 상품 당첨은 배송 대신 쿠폰으로 쌓여요. 연결하기 전에 이미 나온 당첨은 아래 '지난 당첨 가져오기'를 한 번 돌려서 옮겨 주세요.",
+        });
       }
     } catch {
       setMsg({ kind: "err", text: "네트워크 오류로 저장하지 못했어요." });
@@ -227,6 +239,14 @@ export default function CouponManager({
   }
 
   async function loadBackfillPreview() {
+    // 함정 방지: 화면에서 바꾼 연결이 저장 전이면 서버는 옛날 연결로 계산해서 "0건"이 나온다.
+    if (sourcesDirty) {
+      setBfMsg({
+        kind: "err",
+        text: "위에서 바꾼 연결이 아직 저장 전이에요. '적립 연결 저장'을 먼저 누른 다음 미리보기해 주세요 — 저장 전 연결은 계산에 안 들어가요.",
+      });
+      return;
+    }
     setBfLoading(true);
     setBfMsg(null);
     try {
@@ -252,11 +272,11 @@ export default function CouponManager({
 
   async function applyBackfill() {
     if (!bfPreview || bfPreview.totalDelta <= 0) {
-      setBfMsg({ kind: "err", text: "새로 적립될 쿠폰이 없어요. 먼저 미리보기로 확인해 주세요." });
+      setBfMsg({ kind: "err", text: "가져올 쿠폰이 없어요. 먼저 미리보기로 확인해 주세요." });
       return;
     }
     const ok = window.confirm(
-      `시청자 ${bfPreview.rows.length}명에게 쿠폰 ${bfPreview.totalDelta}개를 소급 적립할까요?\n반영하면 잔액에 바로 쌓입니다(되돌리려면 잔액에서 직접 조정).`,
+      `시청자 ${bfPreview.rows.length}명에게 쿠폰 ${bfPreview.totalDelta}개를 지금 쌓을까요?\n반영하면 잔액에 바로 들어가요. 잘못 넣었다면 아래 잔액 현황에서 직접 고칠 수 있어요.`,
     );
     if (!ok) return;
     setBfApplying(true);
@@ -276,7 +296,7 @@ export default function CouponManager({
         setBfPreview(null);
         setBfMsg({
           kind: "ok",
-          text: `소급 적립 완료 — 쿠폰 ${data?.totalDelta ?? 0}개를 ${data?.accrued ?? 0}건으로 적립했어요.`,
+          text: `가져오기 완료 — 당첨 ${data?.accrued ?? 0}건에서 쿠폰 ${data?.totalDelta ?? 0}개가 쌓였어요. 아래 잔액 현황과 팬 화면 쿠폰 탭에서 바로 확인할 수 있어요.`,
         });
       }
     } catch {
@@ -367,6 +387,8 @@ export default function CouponManager({
     (a, b) => a.nickname.localeCompare(b.nickname, "ko") || a.itemName.localeCompare(b.itemName, "ko"),
   );
   const datalistId = `coupon-viewers-${slug}`;
+  // "지난 당첨 가져오기"가 어디까지의 기록을 보는지 알려줄 때 쓴다(없으면 표시 생략).
+  const lastAppliedText = lastAppliedAt ? fmtKst(lastAppliedAt) : "";
 
   // 수동/자동 분리(참고값). events(최근분) delta 합이라 0 클램프가 반영 안 돼 잔액과 다를 수 있다
   // → 화면에선 잔액(balance)을 합계로 우선 표기하고, 수동·자동은 참고값으로만 보여준다.
@@ -428,7 +450,7 @@ export default function CouponManager({
         <p className={styles.blockSub}>
           어떤 룰렛 상품에 당첨되면 어떤 쿠폰을 몇 개 적립할지 연결해 둬요. 상품은 현재 룰렛표에서
           기준 확률 이내로 켜져 있는 것만 고를 수 있어요. <b>연결해 두면 이후 당첨부터 자동으로 적립</b>되고,
-          지난 기록은 아래 &ldquo;지난 기록 소급&rdquo;에서 가져올 수 있어요.
+          연결 전에 이미 나온 당첨은 아래 &ldquo;지난 당첨 가져오기&rdquo;에서 옮길 수 있어요.
         </p>
         {items.length === 0 ? (
           <p className={styles.empty}>먼저 위에서 쿠폰 종류를 만들어 주세요.</p>
@@ -519,6 +541,20 @@ export default function CouponManager({
                 );
               })}
             </div>
+            <p className={styles.hint}>
+              찾는 상품이 목록에 안 보이면, 룰렛표에서 꺼져 있거나 기준 확률보다 높은 상품이에요.
+              그런 당첨은 업보 기록 자체가 안 남아서 쿠폰으로도 세어지지 않아요.
+            </p>
+            <p className={styles.hint}>
+              저장하면 연결한 상품은 <b>팬 화면 업보 목록에서 빠지고</b>, 그때부터 쿠폰으로만 쌓여요.
+              이미 나온 당첨은 그냥 두면 어느 쪽에도 안 보이니까, 저장한 다음 아래 &ldquo;지난 당첨
+              가져오기&rdquo;까지 꼭 한 번 돌려 주세요.
+            </p>
+            {sourcesDirty ? (
+              <p className={styles.previewWarn}>
+                방금 바꾼 연결이 아직 저장 전이에요 — 아래 버튼으로 저장해야 실제로 적용돼요.
+              </p>
+            ) : null}
             <div>
               <button
                 type="button"
@@ -534,16 +570,19 @@ export default function CouponManager({
         )}
       </div>
 
-      {/* 1.6 지난 기록 소급 적립 (2단계 조각 3) */}
+      {/* 1.6 지난 당첨 가져오기 = 소급 적립 (2단계 조각 3) */}
       <div className={styles.block}>
-        <h3 className={styles.blockTitle}>지난 기록 소급 적립</h3>
+        <h3 className={styles.blockTitle}>지난 당첨 가져오기</h3>
         <p className={styles.blockSub}>
-          위에서 연결을 저장하기 전의 <b>과거 당첨</b>도 쿠폰으로 소급해 쌓아요. 기간을 정해 먼저{" "}
-          <b>미리보기</b>로 확인하고, 맞으면 <b>반영</b>하세요. 이미 자동 적립된 당첨은 자동으로
-          빠지니 여러 번 눌러도 중복 적립되지 않아요.
+          연결을 저장하기 <b>전에 이미 나왔던 당첨</b>도 여기서 쿠폰으로 가져와요. 기간을 정해{" "}
+          <b>미리보기</b>로 숫자를 먼저 확인하고, 맞으면 <b>반영</b>을 누르면 돼요. 이미 쿠폰으로
+          들어간 당첨은 알아서 빼고 계산하니까, 여러 번 눌러도 두 번 쌓일 걱정은 없어요.
         </p>
         {sourceMap.length === 0 ? (
-          <p className={styles.empty}>먼저 위에서 적립 연결을 저장해 주세요.</p>
+          <p className={styles.empty}>
+            아직 연결이 없어요. 위에서 룰렛 상품을 쿠폰에 연결하고 저장하면, 여기서 지난 당첨을
+            가져올 수 있어요.
+          </p>
         ) : (
           <>
             <div className={styles.form}>
@@ -580,8 +619,14 @@ export default function CouponManager({
             </div>
             <p className={styles.hint}>
               기간을 비우면 전체 기록이 대상이에요. 시각은 위플랩 표시 시각(한국 시간) 기준으로
-              해석합니다.
+              봐요.
             </p>
+            {lastAppliedText ? (
+              <p className={styles.hint}>
+                지금 여기 들어 있는 당첨 기록은 <b>{lastAppliedText}까지 수집된 것</b>이 전부예요.
+                그 뒤 방송분은 다음 수집 때 들어오고, 연결해 둔 상품이면 그때 자동으로 쿠폰이 쌓여요.
+              </p>
+            ) : null}
             <div className={styles.backfillActions}>
               <button
                 type="button"
@@ -607,12 +652,13 @@ export default function CouponManager({
             {bfPreview ? (
               <div className={styles.previewBox}>
                 <p className={styles.previewTotal}>
-                  새로 적립될 쿠폰: 총 {bfPreview.totalDelta.toLocaleString()}개 (당첨{" "}
+                  새로 쌓일 쿠폰: 총 {bfPreview.totalDelta.toLocaleString()}개 (당첨{" "}
                   {bfPreview.totalEntries.toLocaleString()}건 → 시청자 {bfPreview.rows.length}명)
                 </p>
                 {bfPreview.rows.length === 0 ? (
                   <p className={styles.previewMuted}>
-                    소급할 새 당첨이 없어요(연결·기간에 맞는 미적립 당첨이 없습니다).
+                    가져올 새 당첨이 없어요. 연결한 상품이 이 기간에 당첨된 적이 없거나, 이미 전부
+                    쿠폰으로 들어가 있는 거예요.
                   </p>
                 ) : (
                   <div className={styles.tableWrap}>

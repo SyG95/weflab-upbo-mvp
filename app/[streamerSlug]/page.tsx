@@ -34,12 +34,18 @@ import {
   getShowcaseBySlug,
   getCouponStateBySlug,
   getCouponExcludedNamesBySlug,
+  getCouponBalancesForFan,
+  getCouponItemsBySlug,
   couponExcludedNameSet,
   filterHoldingsByExcludedNames,
   type ShowcaseState,
   type CouponState,
+  type CouponBalance,
+  type CouponItemDef,
 } from "../../lib/upboSupabase";
 import CouponManager from "./CouponManager";
+import FanCouponTable from "./FanCouponTable";
+import { groupFanCoupons, filterFanCoupons } from "../../lib/fanCouponView";
 import { resolveTheme } from "../../lib/themes";
 import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
 import ThemeLiveBackground from "./ThemeLiveBackground";
@@ -79,7 +85,7 @@ type PageProps = {
   }>;
 };
 
-type FanTab = "ledger" | "history";
+type FanTab = "ledger" | "history" | "coupon";
 type AdminTab = "delivery" | "items" | "history" | "coupon" | "manual" | "roulettes" | "reveal" | "promo" | "signature" | "settings";
 
 // 시스템 시간(끝에 Z 붙은 UTC ISO)을 Asia/Seoul 기준으로 변환해 "YYYY-MM-DD HH:mm KST"로 표시.
@@ -116,6 +122,7 @@ function rouletteSetLabel(e: UpboEntry): string | undefined {
 function tabHref(slug: string, tab: FanTab, q: string): string {
   const params = new URLSearchParams();
   if (tab === "history") params.set("tab", "history");
+  if (tab === "coupon") params.set("tab", "coupon");
   if (q) params.set("q", q);
   const qs = params.toString();
   return `/${slug}${qs ? `?${qs}` : ""}`;
@@ -265,7 +272,9 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const { admin, q, tab, atab, theme: themePreview, rtab } = await searchParams;
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
-  const activeTab: FanTab = tab === "history" ? "history" : "ledger";
+  // URL이 요청한 팬 탭. 쿠폰 탭은 스트리머가 쿠폰을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
+  const requestedFanTab: FanTab =
+    tab === "history" ? "history" : tab === "coupon" ? "coupon" : "ledger";
   const activeAdminTab: AdminTab =
     atab === "settings"
       ? "settings"
@@ -301,13 +310,26 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   // 쿠폰 장부(관리자 탭 전용). 테이블 미적용/조회 실패는 페이지를 죽이지 않고 탭 안에서 안내한다.
   const couponState: CouponState | null =
     result.ok && isAdminMode ? await getCouponStateBySlug(streamerSlug).catch(() => null) : null;
-  // 조각 4: 쿠폰에 연결(등록)한 룰렛 상품명 집합 → 팬 시트/배송에서 표시상 제외.
-  // 팬 모드는 공개 화면이라 잔액/이벤트 없이 source map 만 얇게 로드한다(실패/미적용=빈 Set=회귀 0).
-  // 관리자 모드는 이미 읽은 couponState.sourceMap 에서 바로 뽑아 추가 조회가 없다.
-  const fanCouponExcluded: Set<string> =
+  // 조각 4 제외 집합 + 쿠폰 탭 노출 판단(쿠폰 종류 등록 여부)을 병렬로 얇게 읽는다.
+  // 팬 모드는 공개 화면이라 잔액/이벤트 없이 가벼운 조회만(실패/미적용=빈 값=회귀 0).
+  // 관리자 모드는 이미 읽은 couponState 에서 바로 뽑아 추가 조회가 없다.
+  const [fanCouponExcluded, fanCouponItems] =
     result.ok && !isAdminMode
-      ? await getCouponExcludedNamesBySlug(streamerSlug).catch(() => new Set<string>())
-      : new Set<string>();
+      ? await Promise.all([
+          getCouponExcludedNamesBySlug(streamerSlug).catch(() => new Set<string>()),
+          getCouponItemsBySlug(streamerSlug).catch(() => [] as CouponItemDef[]),
+        ])
+      : [new Set<string>(), [] as CouponItemDef[]];
+  // 쿠폰 탭은 관리자에서 쿠폰 종류를 등록한 스트리머에게만 보여준다(안 쓰는 스트리머 = 탭 자체가 없음).
+  const showCouponTab = fanCouponItems.length > 0;
+  const activeTab: FanTab =
+    requestedFanTab === "coupon" && !showCouponTab ? "ledger" : requestedFanTab;
+  // 팬 "쿠폰" 탭 데이터(잔액). 쿠폰 탭을 실제로 열었을 때만 읽는다(다른 탭은 회귀 0).
+  // 실패는 null — 화면에서 "빈 장부"와 다른 오류 문구로 구분해 보여준다.
+  const fanCoupons: CouponBalance[] | null =
+    result.ok && !isAdminMode && activeTab === "coupon"
+      ? await getCouponBalancesForFan(streamerSlug).catch(() => null)
+      : [];
   // 룰렛 확률표 공개(오른쪽 레일에 표시). 쇼케이스 콘텐츠가 없어도 확률표만으로 레일을 띄운다.
   const revealTables: FanRevealTable[] =
     result.ok && !isAdminMode ? buildFanRevealTables(result.state) : [];
@@ -435,6 +457,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 activeTab={activeTab}
                 activeRoulette={rtab ?? ""}
                 excludedNames={fanCouponExcluded}
+                coupons={fanCoupons}
+                showCouponTab={showCouponTab}
               />
             </div>
             {rightBlocks.length > 0 ? (
@@ -452,6 +476,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             activeTab={activeTab}
             activeRoulette={rtab ?? ""}
             excludedNames={fanCouponExcluded}
+            coupons={fanCoupons}
+            showCouponTab={showCouponTab}
           />
         )}
       </div>
@@ -955,6 +981,8 @@ function FanView({
   activeTab,
   activeRoulette,
   excludedNames,
+  coupons,
+  showCouponTab,
 }: {
   state: StreamerState;
   slug: string;
@@ -962,10 +990,16 @@ function FanView({
   activeTab: FanTab;
   activeRoulette: string;
   excludedNames: Set<string>;
+  coupons: CouponBalance[] | null;
+  showCouponTab: boolean;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
   const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
     computeFanRouletteTabs(state, rouletteIndex, excludedNames);
+  // 쿠폰 탭: 잔액을 시청자 단위로 묶고 검색어로 거른다(0=사용완료도 표시). null=조회 실패(빈 장부와 구분).
+  const couponLoadFailed = activeTab === "coupon" && coupons === null;
+  const couponViewersAll = activeTab === "coupon" && coupons ? groupFanCoupons(coupons) : [];
+  const couponViewersShown = filterFanCoupons(couponViewersAll, searchQuery);
   const activeGroup = rouletteGroups.find((g) => g.key === activeRoulette) ?? rouletteGroups[0];
   const rtabKey = activeGroup?.key;
   const activeViewers = activeGroup?.viewers ?? [];
@@ -982,9 +1016,15 @@ function FanView({
       ? searchQuery
         ? `${shownViewers.length} / ${activeViewers.length}명`
         : `${activeViewers.length}명`
-      : searchQuery
-        ? `${history.length} / ${allEntries.length}건`
-        : `${allEntries.length}건`;
+      : activeTab === "coupon"
+        ? couponLoadFailed
+          ? "—"
+          : searchQuery
+            ? `${couponViewersShown.length} / ${couponViewersAll.length}명`
+            : `${couponViewersAll.length}명`
+        : searchQuery
+          ? `${history.length} / ${allEntries.length}건`
+          : `${allEntries.length}건`;
 
   return (
     <>
@@ -992,6 +1032,7 @@ function FanView({
         <h2 id="finder-title">내 업보 확인</h2>
         <form className={styles.searchRow} action={`/${slug}`} method="get">
           {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
+          {activeTab === "coupon" ? <input type="hidden" name="tab" value="coupon" /> : null}
           {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
             <input type="hidden" name="rtab" value={rtabKey} />
           ) : null}
@@ -1027,6 +1068,14 @@ function FanView({
             >
               획득 기록
             </a>
+            {showCouponTab ? (
+              <a
+                className={activeTab === "coupon" ? styles.tabActiveLink : styles.tabLink}
+                href={tabHref(slug, "coupon", searchQuery)}
+              >
+                쿠폰
+              </a>
+            ) : null}
           </div>
           <span className={styles.countPill}>{countPill}</span>
         </div>
@@ -1050,6 +1099,8 @@ function FanView({
 
         {activeTab === "ledger" ? (
           <LedgerTable viewers={shownViewers} searchQuery={searchQuery} colors={state.productColors} />
+        ) : activeTab === "coupon" ? (
+          <FanCouponTable viewers={couponViewersShown} searchQuery={searchQuery} loadFailed={couponLoadFailed} />
         ) : (
           <HistoryTable rows={history} searchQuery={searchQuery} />
         )}
@@ -1467,9 +1518,10 @@ function AdminPanel({
       ) : activeAdminTab === "coupon" ? (
         <CollapsibleCard sectionKey="coupon" title="쿠폰 장부">
           <p className={styles.fieldHint}>
-            배송할 업보와 별개로, 시청자가 모아 두는 쿠폰(교환권·티켓·코인)을 적는 장부예요. 룰렛에서
-            나왔든 상품 대신 바꿔 줬든, 지급/사용만 적으면 잔액이 자동으로 계산됩니다. 어디에 쓸 수
-            있는지는 스트리머 마음 — 여기는 장부만 정확하게 지켜요.
+            배송할 업보와 별개로, 시청자가 모아 두는 쿠폰(교환권·티켓·코인) 장부예요. 쿠폰 이름을
+            만들고 룰렛 상품을 연결해 두면 당첨될 때마다 자동으로 쌓이고, 연결 전의 지난 당첨도
+            가져올 수 있어요. 물론 손으로 지급/사용을 적어도 됩니다. 어디에 쓸 수 있는지는 스트리머
+            마음 — 여기는 장부만 정확하게 지켜요. 쿠폰을 등록하면 팬 화면에도 쿠폰 탭이 생겨요.
           </p>
           {coupon ? (
             <CouponManager
@@ -1482,6 +1534,7 @@ function AdminPanel({
               viewerSuggestions={viewers
                 .filter((v) => v.fanNickname)
                 .map((v) => ({ fanId: v.fanId, fanNickname: v.fanNickname }))}
+              lastAppliedAt={state.importBatches?.[state.importBatches.length - 1]?.appliedAt}
             />
           ) : (
             <p className={styles.fieldHint}>
