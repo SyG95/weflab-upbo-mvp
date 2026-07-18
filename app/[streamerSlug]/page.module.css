@@ -2288,6 +2288,8 @@
 .ieActionDanger:hover {
   border-color: var(--destructive);
   background: #fbe8e6;
+  /* 밝은 경고 배경 위에서는 글자도 고정색으로 (다크 테마 잉크 상속 방지) */
+  color: var(--destructive);
 }
 
 .ieHistoryBtn {
@@ -2622,6 +2624,7 @@
 .ieChipBtnDanger:hover {
   border-color: var(--destructive);
   background: #fbe8e6;
+  color: var(--destructive);
 }
 
 /* 이력: 수량 배지 + 인라인 되돌리기 */
