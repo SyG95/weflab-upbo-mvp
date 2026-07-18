@@ -7,6 +7,8 @@
   flex-direction: column;
   align-items: center;
   padding: 32px 20px 64px;
+  /* 팬 시트(.page)와 동일: 테마 래퍼에서 color 재선언 (다크 테마 상속 버그 방지) */
+  color: var(--ink);
   background-color: var(--paper);
   background-image: repeating-linear-gradient(
     180deg,

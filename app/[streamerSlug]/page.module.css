@@ -4,6 +4,9 @@
   flex-direction: column;
   align-items: center;
   padding: 32px 20px 64px;
+  /* body 의 color 는 :root(종이 테마) 값으로 이미 계산된 채 상속되므로,
+     테마 변수를 갈아끼우는 이 래퍼에서 color 를 재선언해야 다크 테마 글자색이 살아난다. */
+  color: var(--ink);
   background-color: var(--paper);
   /* 줄무늬(위) + 테마 그라데이션(아래, 없으면 --paper 단색) 2겹 */
   background-image: repeating-linear-gradient(

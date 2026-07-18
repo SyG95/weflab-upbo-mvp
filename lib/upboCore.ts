@@ -111,7 +111,11 @@ export function normalizeName(value: unknown): string {
 export function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  const match = String(value).replace(",", ".").match(/-?\d+(?:\.\d+)?/);
+  // 위플랩은 1,000 이상 금액을 쉼표 천단위로 표기한다("1,487"). 쉼표를 소수점으로
+  // 바꾸면 1,487 → 1.487 이 되어 정가·금액대 매칭이 통째로 빗나가므로, 천단위
+  // 쉼표(뒤에 숫자 3개)는 먼저 제거하고 나머지 쉼표만 소수점으로 취급한다.
+  const cleaned = String(value).replace(/(\d),(?=\d{3}(?:\D|$))/g, "$1");
+  const match = cleaned.replace(",", ".").match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : null;
 }
 

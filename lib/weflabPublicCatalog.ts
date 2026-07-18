@@ -35,8 +35,10 @@ function collectTokens(html: string): Token[] {
       tokens.push({ pos: m.index, kind, value: m[1] } as Token);
     }
   };
-  push(/class='value min'>(\d+)<\/span>/g, "min");
-  push(/class='value max'>(\d+)<\/span>/g, "max");
+  // 1,000 이상 금액은 위플랩이 쉼표를 넣어 렌더한다("1,000") — 쉼표를 허용하지 않으면
+  // 그 표의 min 토큰이 통째로 빠져 상품들이 앞 표에 합쳐지는 대형 오류가 난다.
+  push(/class='value min'>([\d,]+)<\/span>/g, "min");
+  push(/class='value max'>([\d,]+)<\/span>/g, "max");
   push(/value="([^"]*)" class="input_text input_roulette_name"/g, "name");
   push(/value="([^"]*)" class="input_text decimal right input_roulette_percent"/g, "percent");
   tokens.sort((a, b) => a.pos - b.pos);
@@ -58,12 +60,12 @@ export function parseWeflabTables(html: string): ParsedWeflabTable[] {
   let pendingName: string | null = null;
   for (const t of tokens) {
     if (t.kind === "min") {
-      current = { amountMin: Number(t.value), amountMax: null, items: [] };
+      current = { amountMin: Number(t.value.replace(/,/g, "")), amountMax: null, items: [] };
       tables.push(current);
       pendingName = null;
     } else if (t.kind === "max") {
       if (current && current.items.length === 0 && current.amountMax === null) {
-        current.amountMax = Number(t.value);
+        current.amountMax = Number(t.value.replace(/,/g, ""));
       }
     } else if (t.kind === "name") {
       pendingName = t.value;

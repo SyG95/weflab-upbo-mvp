@@ -99,6 +99,8 @@
 .preview {
   border-radius: 16px;
   padding: 16px;
+  /* 실제 시트(.page)와 동일: 테마 래퍼에서 color 재선언 (다크 테마 상속 버그 방지) */
+  color: var(--ink);
   background: var(--paper);
   /* 실제 시트(.page)와 동일한 2겹: 줄무늬(위) + 테마 그라데이션(아래) */
   background-image: repeating-linear-gradient(
