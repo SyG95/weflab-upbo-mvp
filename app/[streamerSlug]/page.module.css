@@ -925,7 +925,8 @@
 
 .adminHead {
   padding: 16px 18px;
-  background: #fff;
+  /* 흰색 하드코딩 금지: 다크 테마에서 테마 잉크(밝은 글자)와 충돌한다 — 표면 토큰 사용 */
+  background: var(--surface);
   border-radius: 14px;
 }
 
@@ -949,7 +950,7 @@
 
 .adminCard {
   padding: 18px 18px 20px;
-  background: #fff;
+  background: var(--surface);
   border-radius: 14px;
 }
 
@@ -1225,7 +1226,7 @@
   padding: 0 12px;
   font-size: 13px;
   font-family: inherit;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   cursor: pointer;
 }
@@ -1665,7 +1666,7 @@
 
 .dmNoteBtn {
   border: 1px solid var(--paper-line);
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
 }
 
@@ -1713,7 +1714,7 @@
 
 .dmClearBtn {
   border: 1px solid var(--paper-line);
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
 }
 
@@ -1766,7 +1767,7 @@
   height: 28px;
   border: 1px solid var(--paper-line);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   font-size: 15px;
   font-weight: 800;
@@ -1850,7 +1851,7 @@
 }
 
 .dmSaveBtn:hover {
-  background: #fff;
+  background: var(--surface);
   color: var(--stamp);
 }
 
@@ -1941,7 +1942,7 @@
   padding: 0 18px;
   border: 1px solid var(--paper-line);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   font-size: 13px;
   font-weight: 700;
@@ -2029,7 +2030,7 @@
 
 .specialRuleActions .secondaryButton {
   border: 1px solid var(--paper-line);
-  background: #fff;
+  background: var(--surface);
   color: var(--muted);
 }
 
