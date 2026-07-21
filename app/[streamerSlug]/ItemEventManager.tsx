@@ -578,14 +578,29 @@ export default function ItemEventManager({
             reason: reason.trim() || undefined,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          // 받은 상품이 쿠폰 연결 상품이면 서버가 자동 적립하고 결과를 실어 보낸다.
+          coupon?: { accrued?: number; totalDelta?: number; error?: string } | null;
+        };
         if (!res.ok || data.ok === false) {
           setFormError(data.error || "교환 기록에 실패했어요. 잠시 후 다시 시도해 주세요.");
           return;
         }
         const giveText = selectedList.map(({ m, n }) => `${m.itemName} ${n}개`).join(" + ");
         const receiveText = receives.map((r) => `${r.itemName} ${r.qty}개`).join(" + ");
-        setMessage({ type: "ok", text: `${giveText} → ${receiveText} 교환 기록 완료` });
+        if (data.coupon?.error) {
+          // 교환 자체는 저장됐고 쿠폰 적립만 실패 — 수동 보정이 필요하니 경고 톤으로 알린다.
+          setMessage({
+            type: "err",
+            text: `${giveText} → ${receiveText} 교환은 기록됐지만, 쿠폰 자동 적립에 실패했어요. 쿠폰 탭에서 수동으로 확인해 주세요.`,
+          });
+        } else {
+          const accruedText =
+            (data.coupon?.totalDelta ?? 0) > 0 ? ` · 쿠폰 ${data.coupon!.totalDelta}개 자동 적립` : "";
+          setMessage({ type: "ok", text: `${giveText} → ${receiveText} 교환 기록 완료${accruedText}` });
+        }
         closeModal();
         // 받은 상품은 새 기록(entry)으로 들어오므로 서버 데이터를 다시 불러온다.
         router.refresh();
@@ -659,11 +674,23 @@ export default function ItemEventManager({
           `/api/s/${encodeURIComponent(slug)}/exchange?groupId=${encodeURIComponent(gid)}`,
           { method: "DELETE" },
         );
-        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          coupon?: { revoked?: number; totalDelta?: number; error?: string } | null;
+        };
         if (!res.ok || data.ok === false) {
           setMessage({ type: "err", text: data.error || "되돌리기에 실패했어요. 잠시 후 다시 시도해 주세요." });
+        } else if (data.coupon?.error) {
+          setMessage({
+            type: "err",
+            text: "교환 묶음은 되돌렸지만, 자동 적립됐던 쿠폰 회수에 실패했어요. 쿠폰 탭에서 수동으로 빼 주세요.",
+          });
+          router.refresh();
         } else {
-          setMessage({ type: "ok", text: "교환 묶음을 되돌렸어요. (준 수량 복구, 받은 기록 삭제)" });
+          const revokedText =
+            (data.coupon?.totalDelta ?? 0) > 0 ? `, 쿠폰 ${data.coupon!.totalDelta}개 회수` : "";
+          setMessage({ type: "ok", text: `교환 묶음을 되돌렸어요. (준 수량 복구, 받은 기록 삭제${revokedText})` });
           // 받은 기록(entry) 삭제까지 화면에 반영되게 서버 데이터를 재조회.
           router.refresh();
         }

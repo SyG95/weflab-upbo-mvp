@@ -1950,10 +1950,18 @@ export type ExchangeBundleInput = {
   reason?: string;
 };
 
+// 교환 저장/되돌리기 응답에 실어 보내는 쿠폰 자동 처리 결과.
+// null = 매핑 미설정 등으로 패스 자체를 건너뜀. error = 교환은 성공했지만 쿠폰 처리만 실패.
+export type ExchangeCouponResult =
+  | { accrued: number; totalDelta: number }
+  | { revoked: number; totalDelta: number }
+  | { error: string }
+  | null;
+
 export async function recordExchangeBundle(
   slug: string,
   input: ExchangeBundleInput,
-): Promise<{ exchangeGroupId: string }> {
+): Promise<{ exchangeGroupId: string; coupon: ExchangeCouponResult }> {
   const streamer = await requireStreamer(slug);
   const bad = (message: string) => {
     const error = new Error(message);
@@ -2063,7 +2071,36 @@ export async function recordExchangeBundle(
     ),
   });
 
-  return { exchangeGroupId };
+  // 쿠폰 자동 적립(교환 유입분) — 룰렛 수집 반영(applyResults)의 조각 2와 같은 격리 패스.
+  // 받은 상품이 쿠폰 연결 상품이면 당첨과 동일하게 적립한다(created_by="auto",
+  // note 참조키 = 받은 entry 의 source_key). ★안전: 여기서 무슨 일이 나도 위의 교환 저장은
+  // 영향받지 않는다 — 실패는 coupon:{ error } 로 표기만 하고 절대 throw 하지 않는다.
+  // sourceKey 가 방금 만든 UUID 기반이라 과거 적립과 겹칠 수 없어 2차 방어(autoAccruedSourceKeys)는 생략.
+  let coupon: ExchangeCouponResult = null;
+  try {
+    const sourceMap = await couponSourceMapForStreamer(streamer.id);
+    if (sourceMap.length > 0) {
+      const couponItems = await couponItemsForStreamer(streamer.id);
+      const decisions = input.receives.map((r, i) =>
+        exchangeReceiveToDecision({
+          itemName: String(r.itemName).trim(),
+          quantity: Number(r.quantity),
+          fanId: input.viewer.fanId,
+          fanNickname: input.viewer.fanNickname,
+          sourceKey: `exchange:${exchangeGroupId}:${i}`,
+        }),
+      );
+      const accruals = computeCouponAccruals(decisions, sourceMap, couponItems);
+      coupon =
+        accruals.length > 0
+          ? await accrueCouponsForRecords(streamer, accruals)
+          : { accrued: 0, totalDelta: 0 };
+    }
+  } catch (err) {
+    coupon = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { exchangeGroupId, coupon };
 }
 
 // 번들 교환 되돌리기: 준 조각의 수량을 복구(보상 이벤트)하고, 받은 exchange:<groupId> 기록을 삭제한다.
@@ -2073,7 +2110,7 @@ export async function recordExchangeBundle(
 export async function revertExchangeBundle(
   slug: string,
   exchangeGroupId: string,
-): Promise<{ revertedCount: number }> {
+): Promise<{ revertedCount: number; coupon: ExchangeCouponResult }> {
   const streamer = await requireStreamer(slug);
   if (!UUID_RE.test(exchangeGroupId)) {
     const error = new Error("교환 묶음 id가 올바르지 않아요.");
@@ -2132,7 +2169,17 @@ export async function revertExchangeBundle(
     { method: "DELETE", headers: { prefer: "return=minimal" } },
   );
 
-  return { revertedCount: gives.length };
+  // 자동 적립 회수 — 이 묶음으로 쌓인 쿠폰을 도로 뺀다(잔액 0 밑으로는 안 내려감).
+  // 이중 실행은 위 revertOfGroupId 가드가 이미 막는다. ★안전: 실패해도 위의 수량 복구·기록
+  // 삭제는 유효하며 coupon:{ error } 로 표기만 한다(교환 저장 때의 적립 패스와 같은 격리 규칙).
+  let coupon: ExchangeCouponResult = null;
+  try {
+    coupon = await revokeCouponAccrualsForExchange(streamer, exchangeGroupId);
+  } catch (err) {
+    coupon = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { revertedCount: gives.length, coupon };
 }
 
 // ---------- 양도 기록 계정ID 보정 ----------
@@ -3845,6 +3892,116 @@ async function accrueCouponsForRecords(
     });
   }
   return { accrued: eventRows.length, totalDelta };
+}
+
+// ---------- 쿠폰 자동 적립: 교환 유입분 ----------
+// 교환으로 "받은 상품"도 룰렛 당첨과 똑같이 쿠폰 연결이면 자동 적립한다.
+// (교환 받은 entry 는 status=pending 이라 조각 2(수집 반영)·조각 3(소급, status=record만)
+//  어느 경로에도 안 잡혀서 생기던 빈틈을 막는 조각. 계산은 조각 2를 그대로 재사용한다.)
+
+// 교환으로 받은 상품 1건 → record ReconcileDecision 어댑터(순수).
+// couponBackfillEntryToDecision 과 같은 최소-필드 캐스팅 패턴 — computeCouponAccruals 가 읽는
+// 필드(decision / result.itemName·fanId·fanNickname / effectiveCount / sourceKey)만 채운다.
+export function exchangeReceiveToDecision(input: {
+  itemName: string;
+  quantity: number;
+  fanId: string;
+  fanNickname: string;
+  sourceKey: string;
+}): ReconcileDecision {
+  const result = {
+    itemName: input.itemName,
+    fanId: input.fanId,
+    fanNickname: input.fanNickname,
+  } as unknown as NormalizedResult;
+  const rawCount = Number(input.quantity);
+  return {
+    sourceKey: input.sourceKey,
+    decision: "record",
+    reason: "exchange",
+    result,
+    catalogItem: null,
+    effectiveCount: Number.isFinite(rawCount) ? Math.max(1, Math.floor(rawCount)) : 1,
+  } as unknown as ReconcileDecision;
+}
+
+// 교환 묶음(exchangeGroupId)으로 자동 적립된 쿠폰을 회수한다(되돌리기의 짝).
+// 대상 식별: created_by="auto" grant 이벤트의 note 참조키가 "exchange:<groupId>:" 를 포함하는 것만.
+// (룰렛 자동 적립의 sourceKey 는 exchange: 프리픽스를 절대 안 쓰므로 오인 회수 없음.)
+// 잔액은 0 밑으로 안 내려간다 — 팬이 이미 써버린 만큼은 회수 불가(기존 장부 클램프 규칙 그대로).
+async function revokeCouponAccrualsForExchange(
+  streamer: StreamerRow,
+  exchangeGroupId: string,
+): Promise<{ revoked: number; totalDelta: number }> {
+  const grants = await supabaseFetch<CouponEventRow[]>(
+    `/${tableName("coupon_events")}?streamer_id=eq.${streamer.id}&created_by=eq.auto&action_type=eq.grant&note=like.${COUPON_AUTO_NOTE_PREFIX}*exchange:${exchangeGroupId}:*&select=*`,
+  );
+  if (grants.length === 0) return { revoked: 0, totalDelta: 0 };
+
+  const existing = await supabaseFetch<CouponBalanceRow[]>(
+    `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&select=*&limit=5000`,
+  );
+  const balanceByKey = new Map(existing.map((row) => [`${row.viewer_key}@@${row.item_key}`, row]));
+
+  const now = new Date().toISOString();
+  const upserts: Array<Record<string, unknown>> = [];
+  const eventRows: Array<Record<string, unknown>> = [];
+  let totalDelta = 0;
+  for (const g of grants) {
+    const mapKey = `${g.viewer_key}@@${g.item_key}`;
+    const cur = balanceByKey.get(mapKey);
+    const prev = cur?.balance ?? 0;
+    const next = Math.max(0, prev - Math.max(0, Number(g.delta) || 0));
+    if (next === prev) continue;
+    // 한 묶음에선 (viewer,item)당 grant 1건뿐(computeCouponAccruals 가 병합) — 아래 뮤테이션은
+    // 혹시 모를 중복 대비 계산 방어일 뿐, upsert 키 중복은 실제로 발생하지 않는다.
+    if (cur) cur.balance = next;
+    upserts.push({
+      streamer_id: streamer.id,
+      viewer_key: g.viewer_key,
+      // 닉네임은 현재 잔액 행 값 우선(적립 함수와 같은 규칙) — 옛 grant 의 닉네임으로 덮지 않는다.
+      nickname: cur?.nickname ?? g.nickname,
+      account_id: cur?.account_id ?? null,
+      item_key: g.item_key,
+      item_name: g.item_name,
+      balance: next,
+      updated_at: now,
+    });
+    eventRows.push({
+      streamer_id: streamer.id,
+      viewer_key: g.viewer_key,
+      nickname: g.nickname,
+      item_key: g.item_key,
+      item_name: g.item_name,
+      delta: next - prev,
+      action_type: "adjust",
+      previous_count: prev,
+      next_count: next,
+      // COUPON_AUTO_NOTE_PREFIX 로 시작하지 않는 note — autoAccruedSourceKeys(재적립 방어)가
+      // 회수 이벤트를 적립 참조로 오독하지 않게 한다.
+      note: `교환 되돌리기 회수 (exchange:${exchangeGroupId})`.slice(0, 500),
+      created_by: "auto",
+      created_at: now,
+    });
+    totalDelta += prev - next;
+  }
+
+  if (upserts.length > 0) {
+    await supabaseFetch(
+      `/${tableName("coupon_balances")}?on_conflict=streamer_id,viewer_key,item_key`,
+      {
+        method: "POST",
+        headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(upserts),
+      },
+    );
+    await supabaseFetch(`/${tableName("coupon_events")}`, {
+      method: "POST",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify(eventRows),
+    });
+  }
+  return { revoked: eventRows.length, totalDelta };
 }
 
 // ---------- 쿠폰 소급 적립 (2단계 조각 3: 과거 당첨을 쿠폰으로 소급) ----------
