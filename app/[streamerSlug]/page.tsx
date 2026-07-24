@@ -1702,6 +1702,21 @@ function AdminPanel({
         </SortableSections>
       ) : (
         <SortableSections tabId="settings" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
+          {/* 시트 테마 — 전용 설정 화면으로 이동 */}
+          <CollapsibleCard sectionKey="theme" title="시트 테마">
+            <p className={styles.fieldHint}>
+              팬 화면과 관리자 화면의 색·분위기를 고르는 화면으로 이동해요. 미리보기로 비교하면서
+              바로 저장할 수 있어요.
+            </p>
+            <a
+              className={styles.secondaryButton}
+              style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }}
+              href={`/${state.slug}/settings`}
+            >
+              테마 설정 열기 →
+            </a>
+          </CollapsibleCard>
+
           {/* 관리자 상위탭 순서·이름 커스텀 */}
           <CollapsibleCard sectionKey="tab-editor" title="탭 순서·이름 설정">
             <AdminTabEditor

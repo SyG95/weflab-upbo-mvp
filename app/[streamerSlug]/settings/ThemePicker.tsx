@@ -40,6 +40,12 @@ export default function ThemePicker({ slug, initialThemeId }: { slug: string; in
   return (
     <div className={styles.wrap}>
       <header className={styles.head}>
+        <a
+          href={`/${slug}?admin=1&atab=settings`}
+          style={{ fontSize: 13, opacity: 0.7, textDecoration: "none", color: "inherit" }}
+        >
+          ← 업보시트 관리자 설정으로
+        </a>
         <h1 className={styles.title}>업보시트 테마 고르기</h1>
         <p className={styles.sub}>
           <b>{slug}</b> 업보시트의 전체 분위기를 골라보세요. 표·기능은 그대로, 색·느낌만 바뀝니다.
