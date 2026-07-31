@@ -31,6 +31,7 @@ import {
   type ResultCapture,
   type SpecialItemRule,
 } from "./upboCore";
+import { collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
@@ -2878,6 +2879,120 @@ async function recordFixedPriceEntries(
     matched: candidates.length,
     recorded: fresh.length,
     duplicates: candidates.length - fresh.length,
+  };
+}
+
+// ---------- 재판정(rejudge) ----------
+// 저장된 원본(raw_imports)을 "현재 확률표"로 다시 돌려, 기록됐어야 할 결과만 새로 넣는다.
+// 순수 판정은 lib/rejudge.ts(collectRejudgeCandidates)가 하고, 여기서는 읽기/쓰기만 한다.
+// 안전: 기존 upbo_entries 는 읽기만 한다(수정·삭제 없음). raw_imports/import_batches/
+//       modifierState 는 전혀 건드리지 않는다. 새 원본을 만들지도 않는다.
+
+async function rejudgeContextForStreamer(streamer: StreamerRow) {
+  const catalog = await latestCatalog(streamer.id);
+  const catalogUsage = await resolveCatalogUsageForCatalog(streamer.id, catalog);
+  const catalogItems = applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage);
+  const [rawRows, knownSourceKeys, specialItemRules] = await Promise.all([
+    supabaseFetch<Array<{ batch_id: string | null; raw: Json }>>(
+      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=batch_id,saved_at,raw&order=saved_at.asc&limit=2000`,
+    ),
+    existingSourceKeys(streamer.id),
+    specialRulesForCatalog(streamer.id, catalogItems),
+  ]);
+  // 저장 순서대로 하나씩 재실행한다(같은 결과가 여러 배치에 중복 캡처돼 있기 때문).
+  const batches: RejudgeSourceBatch[] = rawRows.map((row) => ({
+    batchId: row.batch_id ?? "",
+    capture: (row.raw ?? {}) as ResultCapture,
+  }));
+  const { summary, candidates } = collectRejudgeCandidates({
+    batches,
+    catalogItems,
+    thresholdPercent: Number(streamer.threshold_percent ?? 2),
+    existingSourceKeys: knownSourceKeys,
+    specialItemRules,
+  });
+  return { catalog, summary, candidates };
+}
+
+export async function previewRejudgeForStreamer(streamer: StreamerRow) {
+  const { catalog, summary, candidates } = await rejudgeContextForStreamer(streamer);
+  return {
+    applied: false,
+    streamerSlug: streamer.slug,
+    catalogVersion: catalog.version,
+    thresholdPercent: Number(streamer.threshold_percent ?? 2),
+    summary,
+    candidates,
+  };
+}
+
+export async function applyRejudgeForStreamer(streamer: StreamerRow) {
+  const { catalog, summary, candidates } = await rejudgeContextForStreamer(streamer);
+  const now = new Date().toISOString();
+  if (candidates.length > 0) {
+    // source_key 는 원본 그대로 쓴다 → unique(streamer_id, source_key)가 중복을 막아
+    // 두 번 눌러도 같은 결과가 두 번 들어가지 않는다(멱등).
+    // batch_id 는 null(수동기록·정가기록 선례) — 새 수집 배치를 만들지 않기 위해서다.
+    for (let i = 0; i < candidates.length; i += 500) {
+      const chunk = candidates.slice(i, i + 500);
+      await supabaseFetch(`/${tableName("upbo_entries")}?on_conflict=streamer_id,source_key`, {
+        method: "POST",
+        headers: { prefer: "resolution=ignore-duplicates,return=minimal" },
+        body: JSON.stringify(
+          chunk.map((candidate) => ({
+            id: crypto.randomUUID(),
+            streamer_id: streamer.id,
+            source_key: candidate.sourceKey,
+            batch_id: null,
+            catalog_version: catalog.version,
+            status: "pending",
+            fan_nickname: candidate.fanNickname,
+            fan_id: candidate.fanId,
+            item_name: candidate.itemName,
+            probability: candidate.probability,
+            donate_time_text: candidate.donateTimeText,
+            donation_type: candidate.donationType,
+            donation_amount: candidate.donationAmount,
+            donation_amount_text: candidate.donationAmountText,
+            catalog_group_index: candidate.catalogGroupIndex,
+            amount_range_label: candidate.amountRangeLabel,
+            roulette_index: candidate.rouletteIndex,
+            roulette_total: candidate.rouletteTotal,
+            raw_text: candidate.rawText,
+            public_note: "",
+            // 두배권 미적용이라 effectiveCount 는 항상 1 → admin_note 는 비운다(자동수집분과 동일 규칙).
+            admin_note: "",
+            raw_import_id: null,
+            created_at: now,
+            updated_at: now,
+          })),
+        ),
+      });
+    }
+  }
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "rejudge_applied",
+      actor: "sheet_admin",
+      payload: {
+        catalogVersion: catalog.version,
+        thresholdPercent: Number(streamer.threshold_percent ?? 2),
+        summary,
+        sourceKeys: candidates.map((candidate) => candidate.sourceKey).slice(0, 1000),
+      },
+    }),
+  });
+  return {
+    applied: true,
+    streamerSlug: streamer.slug,
+    catalogVersion: catalog.version,
+    thresholdPercent: Number(streamer.threshold_percent ?? 2),
+    recorded: candidates.length,
+    summary,
+    candidates,
   };
 }
 

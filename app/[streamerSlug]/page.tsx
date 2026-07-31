@@ -4,6 +4,7 @@ import CatalogManager from "./CatalogManager";
 import DeliveryManager from "./DeliveryManager";
 import ItemEventManager from "./ItemEventManager";
 import ItemHistoryLog from "./ItemHistoryLog";
+import RejudgeManager from "./RejudgeManager";
 import SpecialRuleManager from "./SpecialRuleManager";
 import {
   computeHoldings,
@@ -1644,6 +1645,11 @@ function AdminPanel({
                     initial={state.productColors ?? {}}
                   />
                 </div>
+              </CollapsibleCard>
+
+              {/* 룰렛표를 늦게 올렸을 때 되살리기 */}
+              <CollapsibleCard sectionKey="rejudge" title="빠진 기록 다시 판정하기">
+                <RejudgeManager slug={state.slug} />
               </CollapsibleCard>
 
               {/* 기준 확률 설정 */}
