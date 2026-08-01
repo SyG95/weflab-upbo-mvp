@@ -1676,6 +1676,28 @@
   color: var(--destructive);
 }
 
+/* 시청자별 숲 방송국 바로가기(새 탭). 메모 버튼과 같은 높이·모양의 보조 버튼. */
+.dmStationBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.dmStationBtn:hover {
+  border-color: var(--stamp);
+  color: var(--stamp);
+}
+
 .dmNoteTextarea {
   width: 100%;
   min-height: 180px;
