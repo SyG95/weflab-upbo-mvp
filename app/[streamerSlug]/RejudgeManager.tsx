@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
+import ItemAliasLinker, { type AliasCandidate } from "./ItemAliasLinker";
 
 type Candidate = {
   sourceKey: string;
@@ -31,17 +32,26 @@ type PreviewResult = {
     ignored: number;
   };
   candidates: Candidate[];
+  aliasCandidates?: AliasCandidate[];
+};
+
+type CatalogGroupLike = {
+  amountRangeLabel?: string;
+  items?: Array<{ itemName: string; probability: number; enabled?: boolean }>;
 };
 
 const MAX_ROWS_SHOWN = 200;
 
-export default function RejudgeManager({ slug }: { slug: string }) {
+export default function RejudgeManager({ slug, groups = [] }: { slug: string; groups?: CatalogGroupLike[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"" | "preview" | "apply">("");
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
-  async function call(apply: boolean) {
+  // noticeAfter: 이름 연결을 저장하면 그 목록은 사라지므로(이제 찾아지니까),
+  // 결과 문구를 여기 요약 자리에 대신 띄운다. state 로 넘기면 이 함수가 옛 값을
+  // 붙잡아 못 읽으므로 인자로 직접 받는다.
+  async function call(apply: boolean, noticeAfter = "") {
     setBusy(apply ? "apply" : "preview");
     setMsg(null);
     try {
@@ -70,7 +80,9 @@ export default function RejudgeManager({ slug }: { slug: string }) {
         router.refresh();
       } else {
         setPreview(data as PreviewResult);
-        if (data.summary.wouldRecord === 0) {
+        if (noticeAfter) {
+          setMsg({ type: "ok", text: noticeAfter });
+        } else if (data.summary.wouldRecord === 0) {
           setMsg({ type: "ok", text: "새로 넣을 게 없어요. 지금 표 기준으로 빠진 기록이 없습니다." });
         }
       }
@@ -92,6 +104,9 @@ export default function RejudgeManager({ slug }: { slug: string }) {
 
   const s = preview?.summary;
   const shown = preview?.candidates.slice(0, MAX_ROWS_SHOWN) ?? [];
+  // 이름만 바뀐 것으로 보이는 묶음이 있으면 연결 화면을 처음부터 펼쳐 준다.
+  const recommendCount = (preview?.aliasCandidates ?? []).filter((c) => c.wouldRecord).length;
+  const hasRecommendation = recommendCount > 0;
 
   return (
     <div>
@@ -133,10 +148,30 @@ export default function RejudgeManager({ slug }: { slug: string }) {
           </p>
           {s.stillNeedsReview > 0 ? (
             <p className={styles.fieldHint}>
-              못 찾은 {s.stillNeedsReview}건은 상품 이름이 지금 표와 다르거나(예: 띄어쓰기·괄호 차이),
-              그때 쓰던 룰렛이 지금 표에 없는 경우예요. 검증실 &ldquo;검토 필요&rdquo; 탭에서 확인할 수
-              있습니다.
+              못 찾은 {s.stillNeedsReview}건은 상품 이름이 지금 표와 다르거나, 그때 쓰던 룰렛이 지금 표에
+              없는 경우예요. <b>이름만 바뀐 것이면 아래에서 이어 주면 찾아집니다.</b>
             </p>
+          ) : null}
+
+          {preview.aliasCandidates && preview.aliasCandidates.length > 0 ? (
+            <details className={styles.dmItem} style={{ marginTop: 10 }} open={hasRecommendation}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                이름이 바뀐 상품 연결하기
+                {hasRecommendation ? (
+                  <span className={styles.tagWarn} style={{ marginLeft: 6 }}>
+                    {recommendCount}개 발견
+                  </span>
+                ) : null}
+              </summary>
+              <div style={{ marginTop: 10 }}>
+                <ItemAliasLinker
+                  slug={slug}
+                  candidates={preview.aliasCandidates}
+                  groups={groups}
+                  onSaved={(message) => void call(false, message)}
+                />
+              </div>
+            </details>
           ) : null}
 
           {shown.length > 0 ? (

@@ -32,6 +32,7 @@ import {
   type SpecialItemRule,
 } from "./upboCore";
 import { collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
+import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAlias";
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
@@ -2888,10 +2889,35 @@ async function recordFixedPriceEntries(
 // 안전: 기존 upbo_entries 는 읽기만 한다(수정·삭제 없음). raw_imports/import_batches/
 //       modifierState 는 전혀 건드리지 않는다. 새 원본을 만들지도 않는다.
 
+// "예전 이름 = 지금 표의 이 상품" 연결표. catalog_usage 와 같은 방식으로
+// audit_logs 최신 1건을 통째로 쓴다(스키마 변경 없음, 전체 교체 저장).
+export async function itemAliasesForStreamer(streamerId: string): Promise<ItemAliasMap> {
+  const rows = await supabaseFetch<Array<{ payload: { aliases?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.item_alias_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return cleanAliasMap(rows[0]?.payload?.aliases);
+}
+
+export async function setItemAliases(streamer: StreamerRow, aliases: ItemAliasMap): Promise<ItemAliasMap> {
+  const cleaned = cleanAliasMap(aliases);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "item_alias_updated",
+      actor: "sheet_admin",
+      payload: { aliases: cleaned },
+    }),
+  });
+  return cleaned;
+}
+
 async function rejudgeContextForStreamer(streamer: StreamerRow) {
   const catalog = await latestCatalog(streamer.id);
   const catalogUsage = await resolveCatalogUsageForCatalog(streamer.id, catalog);
   const catalogItems = applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage);
+  const aliases = await itemAliasesForStreamer(streamer.id);
   const [rawRows, knownSourceKeys, specialItemRules] = await Promise.all([
     supabaseFetch<Array<{ batch_id: string | null; raw: Json }>>(
       `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=batch_id,saved_at,raw&order=saved_at.asc&limit=2000`,
@@ -2904,18 +2930,26 @@ async function rejudgeContextForStreamer(streamer: StreamerRow) {
     batchId: row.batch_id ?? "",
     capture: (row.raw ?? {}) as ResultCapture,
   }));
-  const { summary, candidates } = collectRejudgeCandidates({
+  const { summary, candidates, unmatched } = collectRejudgeCandidates({
     batches,
     catalogItems,
     thresholdPercent: Number(streamer.threshold_percent ?? 2),
     existingSourceKeys: knownSourceKeys,
     specialItemRules,
+    aliases,
   });
-  return { catalog, summary, candidates };
+  // 아직 못 찾은 결과를 "이름 묶음"으로 정리해 연결 화면 재료로 넘긴다.
+  const aliasCandidates = buildAliasCandidates({
+    results: unmatched,
+    catalogItems,
+    aliases,
+    thresholdPercent: Number(streamer.threshold_percent ?? 2),
+  }).map((group) => ({ ...group, options: group.options.slice(0, 5) }));
+  return { catalog, summary, candidates, aliasCandidates, aliases };
 }
 
 export async function previewRejudgeForStreamer(streamer: StreamerRow) {
-  const { catalog, summary, candidates } = await rejudgeContextForStreamer(streamer);
+  const { catalog, summary, candidates, aliasCandidates, aliases } = await rejudgeContextForStreamer(streamer);
   return {
     applied: false,
     streamerSlug: streamer.slug,
@@ -2923,6 +2957,8 @@ export async function previewRejudgeForStreamer(streamer: StreamerRow) {
     thresholdPercent: Number(streamer.threshold_percent ?? 2),
     summary,
     candidates,
+    aliasCandidates,
+    aliases,
   };
 }
 

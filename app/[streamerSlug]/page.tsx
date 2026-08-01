@@ -1649,7 +1649,7 @@ function AdminPanel({
 
               {/* 룰렛표를 늦게 올렸을 때 되살리기 */}
               <CollapsibleCard sectionKey="rejudge" title="빠진 기록 다시 판정하기">
-                <RejudgeManager slug={state.slug} />
+                <RejudgeManager slug={state.slug} groups={activeGroups} />
               </CollapsibleCard>
 
               {/* 기준 확률 설정 */}

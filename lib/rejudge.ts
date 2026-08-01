@@ -23,10 +23,12 @@ import {
   normalizeResultCapture,
   reconcileResults,
   type NormalizedCatalogItem,
+  type NormalizedResult,
   type ReconcileDecision,
   type ResultCapture,
   type SpecialItemRule,
 } from "./upboCore";
+import { applyItemAliases, type ItemAliasMap } from "./itemAlias";
 
 export type RejudgeSourceBatch = {
   batchId: string;
@@ -90,16 +92,21 @@ export function collectRejudgeCandidates({
   thresholdPercent,
   existingSourceKeys,
   specialItemRules = [],
+  aliases = {},
 }: {
   batches: RejudgeSourceBatch[];
   catalogItems: NormalizedCatalogItem[];
   thresholdPercent: number;
   existingSourceKeys: Set<string>;
   specialItemRules?: SpecialItemRule[];
-}): { summary: RejudgeSummary; candidates: RejudgeCandidate[] } {
+  // "예전 이름 = 지금 표의 이 상품" 연결표. 비어 있으면 기존 동작과 100% 동일하다.
+  aliases?: ItemAliasMap;
+}): { summary: RejudgeSummary; candidates: RejudgeCandidate[]; unmatched: NormalizedResult[] } {
   // 원본 집합은 건드리지 않는다(호출자의 Set 을 오염시키지 않기 위해 복사).
   const seen = new Set<string>(existingSourceKeys);
   const candidates: RejudgeCandidate[] = [];
+  // 지금 표로도 못 찾은 결과 — 이름 연결 화면의 재료가 된다(연결 전 원본 이름 그대로).
+  const unmatched: NormalizedResult[] = [];
   const summary: RejudgeSummary = {
     batchCount: 0,
     scannedResults: 0,
@@ -121,9 +128,14 @@ export function collectRejudgeCandidates({
     summary.batchCount += 1;
     summary.scannedResults += normalized.results.length;
 
+    // 연결해 둔 이름은 여기서 "지금 표의 상품"으로 바꿔서 판정에 넘긴다.
+    // sourceKey 는 그대로라 중복 방지·멱등성에 영향이 없다.
+    const aliased = applyItemAliases(normalized.results, catalogItems, aliases);
+    const originalByKey = new Map(normalized.results.map((result) => [result.sourceKey, result]));
+
     const recon = reconcileResults({
       catalogItems,
-      results: normalized.results,
+      results: aliased,
       thresholdPercent,
       existingSourceKeys: seen,
       specialItemRules,
@@ -140,11 +152,13 @@ export function collectRejudgeCandidates({
         summary.alreadyRecorded += 1;
       } else if (decision.decision === "needs_review") {
         summary.stillNeedsReview += 1;
+        // 연결 화면에는 바뀌기 전 "원래 이름"을 보여줘야 스트리머가 알아본다.
+        unmatched.push(originalByKey.get(decision.sourceKey) ?? decision.result);
       } else {
         summary.ignored += 1;
       }
     }
   }
 
-  return { summary, candidates };
+  return { summary, candidates, unmatched };
 }
