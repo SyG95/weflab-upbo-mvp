@@ -22,17 +22,38 @@ function normalizeWeflabLink(url: string): string {
 }
 
 type Token =
-  | { pos: number; kind: "min"; value: string }
-  | { pos: number; kind: "max"; value: string }
+  | { pos: number; kind: "min"; value: string; platform?: string }
+  | { pos: number; kind: "max"; value: string; platform?: string }
   | { pos: number; kind: "name"; value: string }
   | { pos: number; kind: "percent"; value: string };
 
+// 숲+치지직 동시송출 계정은 "후원 개수"를 플랫폼별로 나란히 렌더한다 —
+// <p class="count platform_area platform_afreeca">(숲 별풍선)</p><p class="... platform_naver">(치즈)</p>.
+// 값을 감싸는 이 블록을 찾아 min/max 토큰에 플랫폼을 달아준다. 라벨 없는 값(예전 형식)은 그대로 둔다.
+function collectPlatformBlocks(html: string): Array<{ start: number; end: number; platform: string }> {
+  const blocks: Array<{ start: number; end: number; platform: string }> = [];
+  for (const m of html.matchAll(/<p class="count platform_area platform_([a-z0-9_]+)">/g)) {
+    if (m.index === undefined) continue;
+    const close = html.indexOf("</p>", m.index);
+    blocks.push({ start: m.index, end: close === -1 ? m.index + m[0].length : close, platform: m[1] });
+  }
+  return blocks;
+}
+
 function collectTokens(html: string): Token[] {
+  const platformBlocks = collectPlatformBlocks(html);
+  const platformAt = (pos: number): string | undefined =>
+    platformBlocks.find((b) => pos >= b.start && pos <= b.end)?.platform;
   const tokens: Token[] = [];
   const push = (re: RegExp, kind: Token["kind"]) => {
     for (const m of html.matchAll(re)) {
       if (m.index === undefined) continue;
-      tokens.push({ pos: m.index, kind, value: m[1] } as Token);
+      const token = { pos: m.index, kind, value: m[1] } as Token & { platform?: string };
+      if (kind === "min" || kind === "max") {
+        const platform = platformAt(m.index);
+        if (platform) token.platform = platform;
+      }
+      tokens.push(token);
     }
   };
   // 1,000 이상 금액은 위플랩이 쉼표를 넣어 렌더한다("1,000") — 쉼표를 허용하지 않으면
@@ -53,12 +74,24 @@ export type ParsedWeflabTable = {
 
 // 문서 순서(토큰 위치)를 따라가며 min이 나오면 새 표를 열고, 그 다음 나오는 name/percent 쌍을
 // 현재 표에 쌓는다. max는 min 직후(같은 표, 아직 아이템 없음)에만 그 표의 것으로 받는다.
+// ★숲(afreeca) 외 플랫폼 기준값은 채택하지 않는다: 치지직(naver) 표기는 치즈 단위(별풍선의 100배)라
+// 그대로 쓰면 기준이 100배로 뻥튀기된다(리루리 실사고 2026-08-03 — 표 8개 전부 치즈 단위로 저장됨).
+// 치지직 후원을 어떻게 다룰지는 별도 결정 전까지 보류(sy 지시: 일단 숲만).
 export function parseWeflabTables(html: string): ParsedWeflabTable[] {
   const tokens = collectTokens(html);
   const tables: ParsedWeflabTable[] = [];
   let current: ParsedWeflabTable | null = null;
   let pendingName: string | null = null;
   for (const t of tokens) {
+    if ((t.kind === "min" || t.kind === "max") && t.platform && t.platform !== "afreeca") {
+      // 아이템이 이미 붙은 표 뒤에 나온 타 플랫폼 min = 그 플랫폼 전용 새 표 시작.
+      // 이후 아이템이 앞(숲) 표로 새지 않게 표를 닫는다. 숲 min 직후의 쌍 표기(아이템 0개)는 그냥 무시.
+      if (t.kind === "min" && current && current.items.length > 0) {
+        current = null;
+        pendingName = null;
+      }
+      continue;
+    }
     if (t.kind === "min") {
       current = { amountMin: Number(t.value.replace(/,/g, "")), amountMax: null, items: [] };
       tables.push(current);
