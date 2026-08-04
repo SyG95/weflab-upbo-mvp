@@ -1,0 +1,579 @@
+/* 옷장(의상) 탭 — 팬 화면 + 관리 화면 공용 스타일.
+   페이지 테마 CSS 변수(--ink/--paper/--paper-line/--muted/--surface/--stamp/--on-accent)를
+   그대로 써서 스트리머별 테마가 옷장에도 자동 적용된다. 연출은 장부 톤에 맞춰 절제. */
+
+/* ── 팬 화면 ─────────────────────────────────────────────── */
+
+.fanWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.monthNav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.monthNav strong {
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  min-width: 84px;
+  text-align: center;
+}
+
+.monthNav button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.monthNav button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.themeViewLabel {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.chipRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chipDivider {
+  width: 1px;
+  height: 16px;
+  background: var(--paper-line);
+  margin: 0 4px;
+}
+
+.chip,
+.chipOn {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.chipOn {
+  background: var(--stamp);
+  border-color: var(--stamp);
+  color: var(--on-accent);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: zoom-in;
+  color: inherit;
+}
+
+.thumb {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card:hover .thumb {
+  border-color: var(--stamp);
+}
+
+.newBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.cardName {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardMeta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.themeSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.themeTitle {
+  font-size: 0.95rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--paper-line);
+  padding-bottom: 6px;
+}
+
+.themeCount {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* 크게보기 모달 — ShowcasePosterRail 의 전체화면 UX 와 같은 문법 */
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modalBody {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, 92vw);
+}
+
+.modalImage {
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: 10px;
+  display: block;
+}
+
+.modalInfo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: #fff;
+  text-align: center;
+}
+
+.modalInfo strong {
+  font-size: 1rem;
+}
+
+.modalInfo span {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.modalMemo {
+  font-size: 0.82rem;
+  opacity: 0.9;
+  max-width: 46ch;
+}
+
+.modalActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.modalActions button {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.modalPrev,
+.modalNext {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modalPrev {
+  left: -52px;
+}
+
+.modalNext {
+  right: -52px;
+}
+
+@media (max-width: 700px) {
+  .modalPrev {
+    left: 4px;
+  }
+  .modalNext {
+    right: 4px;
+  }
+}
+
+/* ── 관리 화면 ───────────────────────────────────────────── */
+
+.adminWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.presetRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.presetRow select,
+.presetRow input[type="month"] {
+  padding: 6px 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.dropzone {
+  border: 2px dashed var(--paper-line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 26px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.88rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.dropzoneActive {
+  border-color: var(--stamp);
+  color: var(--ink);
+}
+
+.dropzoneHint {
+  font-size: 0.75rem;
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--ink);
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--surface);
+}
+
+.queueThumb {
+  width: 30px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--paper-line);
+}
+
+.queueName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueStatus {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.queueError {
+  color: var(--destructive);
+}
+
+.queueRow button {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--paper-line);
+  background: none;
+  color: var(--ink);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: var(--muted);
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.bulkBar select,
+.bulkBar input[type="month"] {
+  padding: 4px 6px;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+
+.bulkBar button {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--paper-line);
+  background: none;
+  color: var(--ink);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.bulkBar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.counter {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.itemTableWrap {
+  overflow-x: auto;
+}
+
+.itemTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.itemTable th,
+.itemTable td {
+  border-bottom: 1px solid var(--paper-line);
+  padding: 7px 6px;
+  text-align: left;
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.itemTable th {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.rowThumb {
+  width: 34px;
+  height: 45px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--paper-line);
+  display: block;
+}
+
+.dragHandle {
+  cursor: grab;
+  color: var(--muted);
+  user-select: none;
+}
+
+.rowDragOver td {
+  border-top: 2px solid var(--stamp);
+}
+
+.rowHidden td {
+  opacity: 0.45;
+}
+
+.inlineInput {
+  width: 100%;
+  min-width: 90px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.inlineInput:focus {
+  border-color: var(--stamp);
+  background: var(--surface);
+  outline: none;
+}
+
+.rowSelect {
+  padding: 3px 4px;
+  border: 1px solid var(--paper-line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.rowBtn {
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--paper-line);
+  background: none;
+  color: var(--ink);
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.themeManageRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.themeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.themeChip input {
+  width: 90px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+
+.themeChip input:focus {
+  outline: 1px solid var(--stamp);
+  border-radius: 3px;
+}
+
+.themeChip button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0 2px;
+}
+
+.sectionLabel {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.rightsNote {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.statusMsg {
+  font-size: 0.8rem;
+}
+
+.statusOk {
+  composes: statusMsg;
+  color: var(--ink);
+}
+
+.statusErr {
+  composes: statusMsg;
+  color: var(--destructive);
+}

@@ -39,13 +39,17 @@ import {
   getCouponItemsBySlug,
   couponExcludedNameSet,
   filterHoldingsByExcludedNames,
+  getWardrobeBySlug,
   type ShowcaseState,
   type CouponState,
   type CouponBalance,
   type CouponItemDef,
+  type WardrobeState,
 } from "../../lib/upboSupabase";
 import CouponManager from "./CouponManager";
 import FanCouponTable from "./FanCouponTable";
+import WardrobeFanView from "./WardrobeFanView";
+import WardrobeManager from "./WardrobeManager";
 import { groupFanCoupons, filterFanCoupons } from "../../lib/fanCouponView";
 import { resolveTheme } from "../../lib/themes";
 import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
@@ -83,11 +87,12 @@ type PageProps = {
     atab?: string;
     theme?: string;
     rtab?: string;
+    w?: string;
   }>;
 };
 
-type FanTab = "ledger" | "history" | "coupon";
-type AdminTab = "delivery" | "items" | "history" | "coupon" | "manual" | "roulettes" | "reveal" | "promo" | "signature" | "settings";
+type FanTab = "ledger" | "history" | "coupon" | "wardrobe";
+type AdminTab = "delivery" | "items" | "history" | "coupon" | "manual" | "roulettes" | "reveal" | "promo" | "wardrobe" | "signature" | "settings";
 
 // 시스템 시간(끝에 Z 붙은 UTC ISO)을 Asia/Seoul 기준으로 변환해 "YYYY-MM-DD HH:mm KST"로 표시.
 // donateTimeText 같은 위플랩 원문 시간에는 쓰지 않는다(그건 변환 없이 그대로 표시).
@@ -124,6 +129,7 @@ function tabHref(slug: string, tab: FanTab, q: string): string {
   const params = new URLSearchParams();
   if (tab === "history") params.set("tab", "history");
   if (tab === "coupon") params.set("tab", "coupon");
+  if (tab === "wardrobe") params.set("tab", "wardrobe");
   if (q) params.set("q", q);
   const qs = params.toString();
   return `/${slug}${qs ? `?${qs}` : ""}`;
@@ -270,12 +276,12 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
-  const { admin, q, tab, atab, theme: themePreview, rtab } = await searchParams;
+  const { admin, q, tab, atab, theme: themePreview, rtab, w } = await searchParams;
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
-  // URL이 요청한 팬 탭. 쿠폰 탭은 스트리머가 쿠폰을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
+  // URL이 요청한 팬 탭. 쿠폰·옷장 탭은 스트리머가 내용을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
   const requestedFanTab: FanTab =
-    tab === "history" ? "history" : tab === "coupon" ? "coupon" : "ledger";
+    tab === "history" ? "history" : tab === "coupon" ? "coupon" : tab === "wardrobe" ? "wardrobe" : "ledger";
   const activeAdminTab: AdminTab =
     atab === "settings"
       ? "settings"
@@ -293,6 +299,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 ? "reveal"
                 : atab === "promo"
             ? "promo"
+            : atab === "wardrobe"
+              ? "wardrobe"
             : atab === "signature"
               ? "signature"
               : "delivery";
@@ -314,17 +322,33 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   // 조각 4 제외 집합 + 쿠폰 탭 노출 판단(쿠폰 종류 등록 여부)을 병렬로 얇게 읽는다.
   // 팬 모드는 공개 화면이라 잔액/이벤트 없이 가벼운 조회만(실패/미적용=빈 값=회귀 0).
   // 관리자 모드는 이미 읽은 couponState 에서 바로 뽑아 추가 조회가 없다.
-  const [fanCouponExcluded, fanCouponItems] =
+  const [fanCouponExcluded, fanCouponItems, fanWardrobe] =
     result.ok && !isAdminMode
       ? await Promise.all([
           getCouponExcludedNamesBySlug(streamerSlug).catch(() => new Set<string>()),
           getCouponItemsBySlug(streamerSlug).catch(() => [] as CouponItemDef[]),
+          // 옷장(의상) 탭 — 조회 실패는 "미표시"로 처리(페이지를 죽이지 않는다).
+          getWardrobeBySlug(streamerSlug).catch(() => null),
         ])
-      : [new Set<string>(), [] as CouponItemDef[]];
+      : [new Set<string>(), [] as CouponItemDef[], null];
+  // 관리자 모드는 옷장 "탭을 열었을 때만" 읽는다(다른 관리 탭 = 추가 조회 0, fanCoupons 게이트와 동일 방식).
+  const wardrobe: WardrobeState | null =
+    result.ok && isAdminMode
+      ? activeAdminTab === "wardrobe"
+        ? await getWardrobeBySlug(streamerSlug).catch(() => null)
+        : null
+      : fanWardrobe;
   // 쿠폰 탭은 관리자에서 쿠폰 종류를 등록한 스트리머에게만 보여준다(안 쓰는 스트리머 = 탭 자체가 없음).
   const showCouponTab = fanCouponItems.length > 0;
+  // 옷장 탭도 같은 규칙: 공개 컷이 1장 이상일 때만 탭 노출(0장=탭 자체가 없음).
+  const wardrobeVisibleItems = (wardrobe?.items ?? []).filter((i) => !i.hidden);
+  const showWardrobeTab = wardrobeVisibleItems.length > 0;
   const activeTab: FanTab =
-    requestedFanTab === "coupon" && !showCouponTab ? "ledger" : requestedFanTab;
+    requestedFanTab === "coupon" && !showCouponTab
+      ? "ledger"
+      : requestedFanTab === "wardrobe" && !showWardrobeTab
+        ? "ledger"
+        : requestedFanTab;
   // 팬 "쿠폰" 탭 데이터(잔액). 쿠폰 탭을 실제로 열었을 때만 읽는다(다른 탭은 회귀 0).
   // 실패는 null — 화면에서 "빈 장부"와 다른 오류 문구로 구분해 보여준다.
   const fanCoupons: CouponBalance[] | null =
@@ -436,7 +460,13 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
         ) : !result.ok ? (
           <ConnectionNotice reason={result.reason} slug={streamerSlug} />
         ) : isAdminMode ? (
-          <AdminPanel state={result.state} activeAdminTab={activeAdminTab} showcase={showcase} coupon={couponState} />
+          <AdminPanel
+            state={result.state}
+            activeAdminTab={activeAdminTab}
+            showcase={showcase}
+            coupon={couponState}
+            wardrobe={wardrobe}
+          />
         ) : showcaseOn ? (
           <div
             className={styles.showcaseLayout}
@@ -460,6 +490,10 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 excludedNames={fanCouponExcluded}
                 coupons={fanCoupons}
                 showCouponTab={showCouponTab}
+                wardrobe={wardrobe}
+                wardrobeItems={wardrobeVisibleItems}
+                showWardrobeTab={showWardrobeTab}
+                wardrobeItemId={w ?? null}
               />
             </div>
             {rightBlocks.length > 0 ? (
@@ -479,6 +513,10 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             excludedNames={fanCouponExcluded}
             coupons={fanCoupons}
             showCouponTab={showCouponTab}
+            wardrobe={wardrobe}
+            wardrobeItems={wardrobeVisibleItems}
+            showWardrobeTab={showWardrobeTab}
+            wardrobeItemId={w ?? null}
           />
         )}
       </div>
@@ -984,6 +1022,10 @@ function FanView({
   excludedNames,
   coupons,
   showCouponTab,
+  wardrobe,
+  wardrobeItems,
+  showWardrobeTab,
+  wardrobeItemId,
 }: {
   state: StreamerState;
   slug: string;
@@ -993,6 +1035,10 @@ function FanView({
   excludedNames: Set<string>;
   coupons: CouponBalance[] | null;
   showCouponTab: boolean;
+  wardrobe: WardrobeState | null;
+  wardrobeItems: WardrobeState["items"];
+  showWardrobeTab: boolean;
+  wardrobeItemId: string | null;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
   const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
@@ -1023,9 +1069,11 @@ function FanView({
           : searchQuery
             ? `${couponViewersShown.length} / ${couponViewersAll.length}명`
             : `${couponViewersAll.length}명`
-        : searchQuery
-          ? `${history.length} / ${allEntries.length}건`
-          : `${allEntries.length}건`;
+        : activeTab === "wardrobe"
+          ? `${wardrobeItems.length}컷`
+          : searchQuery
+            ? `${history.length} / ${allEntries.length}건`
+            : `${allEntries.length}건`;
 
   return (
     <>
@@ -1034,6 +1082,7 @@ function FanView({
         <form className={styles.searchRow} action={`/${slug}`} method="get">
           {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
           {activeTab === "coupon" ? <input type="hidden" name="tab" value="coupon" /> : null}
+          {activeTab === "wardrobe" ? <input type="hidden" name="tab" value="wardrobe" /> : null}
           {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
             <input type="hidden" name="rtab" value={rtabKey} />
           ) : null}
@@ -1077,6 +1126,14 @@ function FanView({
                 쿠폰
               </a>
             ) : null}
+            {showWardrobeTab ? (
+              <a
+                className={activeTab === "wardrobe" ? styles.tabActiveLink : styles.tabLink}
+                href={tabHref(slug, "wardrobe", searchQuery)}
+              >
+                옷장
+              </a>
+            ) : null}
           </div>
           <span className={styles.countPill}>{countPill}</span>
         </div>
@@ -1102,6 +1159,14 @@ function FanView({
           <LedgerTable viewers={shownViewers} searchQuery={searchQuery} colors={state.productColors} />
         ) : activeTab === "coupon" ? (
           <FanCouponTable viewers={couponViewersShown} searchQuery={searchQuery} loadFailed={couponLoadFailed} />
+        ) : activeTab === "wardrobe" ? (
+          <WardrobeFanView
+            slug={slug}
+            themes={wardrobe?.themes ?? []}
+            items={wardrobeItems}
+            searchQuery={searchQuery}
+            initialItemId={wardrobeItemId}
+          />
         ) : (
           <HistoryTable rows={history} searchQuery={searchQuery} />
         )}
@@ -1259,11 +1324,13 @@ function AdminPanel({
   activeAdminTab,
   showcase,
   coupon,
+  wardrobe,
 }: {
   state: StreamerState;
   activeAdminTab: AdminTab;
   showcase: ShowcaseState | null;
   coupon: CouponState | null;
+  wardrobe: WardrobeState | null;
 }) {
   // 룰렛표에서 꺼진 상품의 기록은 배송·교환·양도(보유현황 전체)에서도 숨긴다(정가·수동은 항상 표시).
   const entries = filterEntriesByCatalogUsage(
@@ -1406,6 +1473,7 @@ function AdminPanel({
     { id: "manual", label: "수동기록", href: `/${state.slug}?admin=1&atab=manual`, activeWhen: ["manual"] },
     { id: "roulettes", label: "룰렛 관리", href: `/${state.slug}?admin=1&atab=roulettes`, activeWhen: ["roulettes", "reveal"] },
     { id: "promo", label: "포스터 및 배너", href: `/${state.slug}?admin=1&atab=promo`, activeWhen: ["promo"] },
+    { id: "wardrobe", label: "옷장", href: `/${state.slug}?admin=1&atab=wardrobe`, activeWhen: ["wardrobe"] },
     { id: "signature", label: "정가 설정", href: `/${state.slug}?admin=1&atab=signature`, activeWhen: ["signature"] },
     { id: "settings", label: "설정", href: `/${state.slug}?admin=1&atab=settings`, activeWhen: ["settings"] },
     { id: "donations", label: "후원집계", href: `/${state.slug}/donations`, activeWhen: [] },
@@ -1706,6 +1774,14 @@ function AdminPanel({
             <ShowcaseManager slug={state.slug} initial={showcase} />
           </CollapsibleCard>
         </SortableSections>
+      ) : activeAdminTab === "wardrobe" ? (
+        <CollapsibleCard sectionKey="wardrobe" title="옷장 (의상·헤어)">
+          <p className={styles.fieldHint}>
+            의상·헤어 컷을 올리면 팬 화면에 옷장 탭이 생겨요(1장 이상일 때만). 테마를 먼저 만들어
+            고르고, 여러 장을 한꺼번에 끌어다 놓으면 돼요.
+          </p>
+          <WardrobeManager slug={state.slug} initial={wardrobe} />
+        </CollapsibleCard>
       ) : (
         <SortableSections tabId="settings" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
           {/* 시트 테마 — 전용 설정 화면으로 이동 */}

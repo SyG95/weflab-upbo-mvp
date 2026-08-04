@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import type { WardrobeItem, WardrobeState, WardrobeTheme } from "./wardrobeShared";
 import {
   jaccardStrings,
   normalizeAccountId,
@@ -1189,6 +1190,110 @@ export async function uploadMemoImage(
     throw new Error(`Supabase storage upload ${res.status}: ${text || res.statusText}`);
   }
   return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+// ── 옷장(의상) 탭 ──────────────────────────────────────────────────────────────
+// 판만 제공, 업로드·운영은 스트리머 몫(sy 확정 2026-08-04). 상태는 쇼케이스와 동일하게
+// audit_logs 이벤트(action=wardrobe_updated, 최신 1건=현재 상태)로 저장 — 새 테이블 없음.
+// 이미지는 쇼케이스 공개 버킷의 wardrobe/{slug}/ 경로를 쓴다.
+// 타입·상수는 클라이언트도 쓰므로 lib/wardrobeShared.ts 에 분리(couponAggregate 선례) —
+// 기존 import 호환을 위해 여기서 재수출한다(타입 import 는 파일 상단).
+
+export { WARDROBE_MAX_ITEMS } from "./wardrobeShared";
+export type { WardrobeItem, WardrobePart, WardrobeState, WardrobeTheme } from "./wardrobeShared";
+
+function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): WardrobeItem | null {
+  if (!raw?.id || !raw.url) return null;
+  return {
+    id: String(raw.id),
+    url: String(raw.url),
+    name: typeof raw.name === "string" ? raw.name : "",
+    themeId: typeof raw.themeId === "string" ? raw.themeId : "",
+    part: raw.part === "hair" ? "hair" : "outfit",
+    month: typeof raw.month === "string" ? raw.month : "",
+    memo: typeof raw.memo === "string" ? raw.memo : "",
+    hidden: raw.hidden === true,
+    publishedAt: typeof raw.publishedAt === "string" ? raw.publishedAt : null,
+    order: Number.isFinite(raw.order) ? Number(raw.order) : 0,
+  };
+}
+
+// slug 로 스트리머를 찾은 뒤 audit_logs 에서 wardrobe_updated 최신 1건을 읽어 반환한다.
+// 저장된 적이 없으면 null. 과거 저장분 필드 누락은 기본값으로 안전하게 채운다.
+export async function getWardrobeBySlug(slug: string): Promise<WardrobeState | null> {
+  const streamer = await getStreamerRow(slug);
+  if (!streamer) return null;
+  const rows = await supabaseFetch<Array<{ payload: { wardrobe?: WardrobeState } | null; created_at: string }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.wardrobe_updated&select=payload,created_at&order=created_at.desc&limit=1`,
+  );
+  const wardrobe = rows[0]?.payload?.wardrobe;
+  if (!wardrobe) return null;
+  const themes = (wardrobe.themes ?? [])
+    .filter((t): t is WardrobeTheme => Boolean(t?.id && typeof t.name === "string"))
+    .map((t) => ({ id: String(t.id), name: String(t.name) }));
+  const items = (wardrobe.items ?? [])
+    .map(normalizeWardrobeItem)
+    .filter((i): i is WardrobeItem => i !== null);
+  return { themes, items };
+}
+
+// 옷장 상태를 audit_logs 에 새 스냅샷으로 남긴다(append-only, 최신 1건이 현재 상태).
+export async function setWardrobe(streamer: StreamerRow, state: WardrobeState): Promise<WardrobeState> {
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "wardrobe_updated",
+      actor: "extension",
+      payload: { wardrobe: state },
+    }),
+  });
+  return state;
+}
+
+// 옷장 이미지 업로드. 쇼케이스와 같은 공개 버킷의 wardrobe/ 경로를 쓴다(관리자 전용 경로).
+export async function uploadWardrobeImage(
+  slug: string,
+  file: { bytes: ArrayBuffer; contentType: string },
+): Promise<string> {
+  const ext = SHOWCASE_IMAGE_EXTENSIONS[file.contentType];
+  if (!ext) {
+    throw new Error("unsupported image content type");
+  }
+  await ensureShowcaseBucket();
+  const bucket = showcaseBucketName();
+  const path = `wardrobe/${slug}/${crypto.randomBytes(8).toString("hex")}-${Date.now()}.${ext}`;
+  const res = await storageFetch(`/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: { "content-type": file.contentType, "x-upsert": "true" },
+    body: file.bytes,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Supabase storage upload ${res.status}: ${text || res.statusText}`);
+  }
+  return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+// 옷장 항목 삭제 시 스토리지 파일도 함께 정리(모범 노력 — 실패해도 항목 삭제는 진행).
+// 우리 버킷의 wardrobe/ 공개 URL만 지운다(다른 경로/외부 URL 은 건드리지 않음).
+export async function deleteWardrobeImages(urls: string[]): Promise<number> {
+  const bucket = showcaseBucketName();
+  const prefix = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/`;
+  let deleted = 0;
+  for (const url of urls) {
+    if (!url.startsWith(prefix)) continue;
+    const path = url.slice(prefix.length);
+    if (!path.startsWith("wardrobe/")) continue;
+    try {
+      const res = await storageFetch(`/object/${bucket}/${path}`, { method: "DELETE" });
+      if (res.ok) deleted += 1;
+    } catch {
+      // 파일 정리는 부가 작업 — 상태 저장을 막지 않는다.
+    }
+  }
+  return deleted;
 }
 
 async function viewerNotesFromAuditLogs(streamerId: string) {
