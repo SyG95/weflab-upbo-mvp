@@ -464,7 +464,8 @@ export async function donationSummaryForStreamer(
   const amountOf = (event: DonationEventLite) => Number(event.donation_amount ?? 0) || 0;
   const missionAmountSum = missionEvents.reduce((sum, event) => sum + amountOf(event), 0);
 
-  // 미션 정산 목록: 뭉치 각각을 도전/대결 + 미션명(닉네임 칸) + 갯수 + 시각으로. 갯수 큰 순.
+  // 미션 정산 목록: 뭉치 각각을 도전/대결 + 미션명(닉네임 칸) + 갯수 + 시각으로.
+  // 위플랩에 찍힌 시각 최신순(sy 확정 2026-08-06). 시각 해석 실패 행은 맨 뒤, 동시각은 갯수 큰 순.
   const missionList: MissionSettlementRow[] = missionEvents
     .map((event) => ({
       kind: missionKind(event.donation_type),
@@ -472,7 +473,12 @@ export async function donationSummaryForStreamer(
       amount: amountOf(event),
       at: event.donate_time || null,
     }))
-    .sort((a, b) => b.amount - a.amount);
+    .sort((a, b) => {
+      if (a.at && b.at) return b.at.localeCompare(a.at) || b.amount - a.amount;
+      if (a.at) return -1;
+      if (b.at) return 1;
+      return b.amount - a.amount;
+    });
 
   // 스트리머 실수령 총계 = 일반 개인(미션·구독 제외) + 미션 성공 뭉치.
   const generalAmount = starEvents
