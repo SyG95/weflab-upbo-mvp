@@ -232,7 +232,7 @@ export type DonationRankingRow = {
   fanKey: string;
   fanId: string | null;
   fanNickname: string | null;
-  amountSum: number; // 별풍선 순위=별풍선 수량 합 / 구독 순위=구독 개월 수 합
+  amountSum: number; // 별풍선 순위=별풍선 수량 합 / 구독 순위=현재 구독 개월(최신 이벤트 값)
   eventCount: number;
   lastDonationAt: string | null;
 };
@@ -246,6 +246,7 @@ export type DonationSummary = {
     unknownTimeCount: number;
   };
   // 구독은 단위가 "개월"이라 별풍선과 섞지 않고 따로 집계한다(sy 확정 2026-07-07).
+  // monthsSum = 팬별 "현재 개월"(최신 이벤트의 누적 카운터)의 합 — 이벤트 합산 아님.
   subscription: {
     monthsSum: number;
     eventCount: number;
@@ -368,6 +369,37 @@ function rankByFan(events: DonationEventLite[]): { sum: number; rankings: Donati
   return { sum, rankings };
 }
 
+// 구독 전용 집계. 구독 알림의 "개월"은 그 시점의 누적 카운터라(예: 39→40→…→47)
+// 별풍선처럼 더하면 매달 이어간 사람일수록 부풀려진다(1위 304개월 사고, 2026-08-06 sy 확인).
+// 팬별로 최신 이벤트 값 하나만 채택한다 = "현재 몇 개월째"(sy 확정 2026-08-06).
+// 카운터는 구독이 끊겼다 재시작하면 1부터 다시 세므로 역대 최고와 다를 수 있다.
+function rankBySubscriptionCurrent(events: DonationEventLite[]): { sum: number; rankings: DonationRankingRow[] } {
+  const byFan = new Map<string, DonationRankingRow>();
+  for (const event of events) {
+    const fanKey = cleanText(event.fan_id) || cleanText(event.fan_nickname);
+    if (!fanKey) continue;
+    let row = byFan.get(fanKey);
+    if (!row) {
+      // donate_time desc 정렬 전제: 첫 등장 행이 최신 이벤트 = 현재 개월.
+      row = {
+        fanKey,
+        fanId: event.fan_id || null,
+        fanNickname: event.fan_nickname || null,
+        amountSum: Number(event.donation_amount ?? 0) || 0,
+        eventCount: 0,
+        lastDonationAt: event.donate_time || null,
+      };
+      byFan.set(fanKey, row);
+    }
+    row.eventCount += 1;
+  }
+  const rankings = [...byFan.values()].sort(
+    (a, b) => b.amountSum - a.amountSum || b.eventCount - a.eventCount || a.fanKey.localeCompare(b.fanKey),
+  );
+  const sum = rankings.reduce((total, row) => total + row.amountSum, 0);
+  return { sum, rankings };
+}
+
 async function fetchDonationPages(query: string): Promise<DonationEventLite[]> {
   const all: DonationEventLite[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -428,7 +460,7 @@ export async function donationSummaryForStreamer(
   );
   const subEvents = events.filter((event) => isSubscription(event.donation_type));
   const star = rankByFan(starEvents);
-  const sub = rankByFan(subEvents);
+  const sub = rankBySubscriptionCurrent(subEvents);
   const amountOf = (event: DonationEventLite) => Number(event.donation_amount ?? 0) || 0;
   const missionAmountSum = missionEvents.reduce((sum, event) => sum + amountOf(event), 0);
 

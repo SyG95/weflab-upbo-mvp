@@ -501,12 +501,14 @@ export default function DonationDashboard({ slug }: { slug: string }) {
               <div className={styles.subHead}>
                 <span className={styles.subBadge}>구독</span>
                 <p className={styles.subNote}>
-                  구독은 단위가 별풍선(개)이 아니라 개월이라 위 순위와 분리해서 셉니다.
+                  구독은 단위가 별풍선(개)이 아니라 개월이라 위 순위와 분리해서 셉니다. 개월은 알림마다
+                  더한 값이 아니라 가장 최근 알림에 찍힌 &ldquo;지금 몇 개월째&rdquo;입니다(쉬었다 다시
+                  구독하면 1부터 다시 셉니다).
                 </p>
               </div>
               <div className={styles.subTotals}>
                 <span>
-                  총 <b>{fmtNum(subscription.monthsSum)}</b>개월
+                  현재 합 <b>{fmtNum(subscription.monthsSum)}</b>개월
                 </span>
                 <span>
                   <b>{fmtNum(subscription.eventCount)}</b>건
@@ -521,7 +523,7 @@ export default function DonationDashboard({ slug }: { slug: string }) {
                     <tr>
                       <th className={styles.thRank}>순위</th>
                       <th>시청자</th>
-                      <th className={styles.thSum}>개월</th>
+                      <th className={styles.thSum}>현재 개월</th>
                       <th className={styles.thCount}>건수</th>
                     </tr>
                   </thead>
