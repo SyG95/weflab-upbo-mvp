@@ -354,7 +354,17 @@ export function matchGroupToConfig(
 // 이름은 묶음이 아니라 "탭의 상품 지문(멤버 그룹들의 상품명 집합)"에 매달린다(sy 확정 2026-07-08).
 // 묶기/해제와 완전 독립: 해제해도 이름이 남고, 같은 지문의 탭이 다시 생기면 이름이 되살아난다.
 export type FanTabLabelEntry = { name: string; groups: string[][] };
-export type FanTabLabels = { entries: FanTabLabelEntry[]; fixedLabel?: string; otherLabel?: string };
+// 팬 탭 순서(드래그) — 순서도 이름처럼 상품 지문에 매달린다. 정가/기타는 지문이 없어 kind 로 구분.
+export type FanTabOrderItem =
+  | { kind: "tab"; groups: string[][] }
+  | { kind: "fixed" }
+  | { kind: "other" };
+export type FanTabLabels = {
+  entries: FanTabLabelEntry[];
+  order?: FanTabOrderItem[];
+  fixedLabel?: string;
+  otherLabel?: string;
+};
 
 // ── 위플랩 공개 링크(스트리머별 룰렛표 수집 소스) ─────────────────────────
 // url = 방송국에 공유하는 weflab.com/user/<hash> 고정 링크. lastFetch* = "지금 가져오기" 결과 메타
@@ -410,6 +420,29 @@ export function matchFanTabLabelWhole(
       bestCoverage = entry.groups.length;
     }
   }
+  return best;
+}
+
+// 이 탭(멤버 그룹 지문들)이 저장된 팬 탭 순서에서 몇 번째인지 찾는다 — matchFanTabLabelWhole 과
+// 같은 전체 커버 규칙(모든 멤버 그룹이 자카드 ≥ 0.5 로 덮여야 매칭). 상품 구성이 절반 이상 바뀌면
+// 이름처럼 순서도 풀려 뒤(가나다순)로 간다. 덮는 항목이 여럿이면 지문 그룹 수가 많은 것 우선.
+export function matchFanTabOrderIndex(
+  memberGroups: string[][],
+  order: FanTabOrderItem[] | undefined,
+): number | undefined {
+  if (!order?.length || memberGroups.length === 0) return undefined;
+  let best: number | undefined;
+  let bestCoverage = -1;
+  order.forEach((item, idx) => {
+    if (item.kind !== "tab") return;
+    const coversAll = memberGroups.every((g) =>
+      item.groups.some((m) => jaccardStrings(g, m) >= 0.5),
+    );
+    if (coversAll && item.groups.length > bestCoverage) {
+      best = idx;
+      bestCoverage = item.groups.length;
+    }
+  });
   return best;
 }
 

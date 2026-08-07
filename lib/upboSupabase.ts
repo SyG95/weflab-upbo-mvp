@@ -12,6 +12,7 @@ import {
   type RouletteConfigEntry,
   type FanTabLabelEntry,
   type FanTabLabels,
+  type FanTabOrderItem,
   type WeflabLinkInfo,
   type ViewerHolding,
 } from "./api";
@@ -2554,11 +2555,50 @@ function sanitizeFanTabLabels(raw: unknown): FanTabLabels {
       if (entries.length >= FAN_TAB_LABELS_MAX) break;
     }
   }
+  // 팬 탭 순서(드래그) — 이름과 같은 지문 방식. 정가/기타는 kind 로 각 1번만, 잘못된 항목은 버린다.
+  const order: FanTabOrderItem[] = [];
+  if (Array.isArray(obj.order)) {
+    let seenFixed = false;
+    let seenOther = false;
+    for (const o of obj.order) {
+      if (!o || typeof o !== "object") continue;
+      const rec = o as Record<string, unknown>;
+      if (rec.kind === "fixed") {
+        if (!seenFixed) {
+          order.push({ kind: "fixed" });
+          seenFixed = true;
+        }
+        continue;
+      }
+      if (rec.kind === "other") {
+        if (!seenOther) {
+          order.push({ kind: "other" });
+          seenOther = true;
+        }
+        continue;
+      }
+      if (rec.kind !== "tab") continue;
+      const groups = Array.isArray(rec.groups)
+        ? rec.groups
+            .map((g) => cleanItemNames(g))
+            .filter((g) => g.length > 0)
+            .slice(0, ROULETTE_MEMBER_MAX)
+        : [];
+      if (groups.length === 0) continue;
+      order.push({ kind: "tab", groups });
+      if (order.length >= FAN_TAB_LABELS_MAX + 2) break;
+    }
+  }
   const fixedLabel =
     typeof obj.fixedLabel === "string" ? obj.fixedLabel.trim().slice(0, FAN_TAB_NAME_MAX) : "";
   const otherLabel =
     typeof obj.otherLabel === "string" ? obj.otherLabel.trim().slice(0, FAN_TAB_NAME_MAX) : "";
-  return { entries, fixedLabel: fixedLabel || undefined, otherLabel: otherLabel || undefined };
+  return {
+    entries,
+    order: order.length > 0 ? order : undefined,
+    fixedLabel: fixedLabel || undefined,
+    otherLabel: otherLabel || undefined,
+  };
 }
 
 export async function fanTabLabelsForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<FanTabLabels> {

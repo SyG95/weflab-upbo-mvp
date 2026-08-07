@@ -13,6 +13,7 @@ import {
   filterEntriesByCatalogUsage,
   matchFanTabLabel,
   matchFanTabLabelWhole,
+  matchFanTabOrderIndex,
   matchGroupToConfig,
   normalizeAccountId,
   productColorById,
@@ -65,7 +66,7 @@ import FanDeliveryModeForm from "./FanDeliveryModeForm";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
-import FanTabNameManager, { type FanTabForNaming } from "./FanTabNameManager";
+import FanTabNameManager, { type FanNameRow, type FanTabForNaming } from "./FanTabNameManager";
 import WeflabLinkManager from "./WeflabLinkManager";
 import FanLayoutEditor from "./FanLayoutEditor";
 import SheetAdminGate from "./SheetAdminGate";
@@ -545,6 +546,12 @@ function ConnectionNotice({
   );
 }
 
+// 팬 탭 시퀀스 한 칸 — 룰렛 탭 또는 정가/기타 자리. 팬 화면 탭 순서와 관리자 드래그 목록이 공유한다.
+type FanTabSeqItem =
+  | { kind: "roulette"; rid: string; label: string }
+  | { kind: "fixed" }
+  | { kind: "other" };
+
 // 룰렛 인덱스(관리자·팬 공용). 스트리머가 직접 묶은 룰렛(config)을 우선하고, 안 묶인 그룹은
 // 자동 클러스터(자카드 ≥ 0.5)로 잠정 묶어 팬 탭을 만든다. 자동 클러스터는 관리자 화면의 "추천"으로도 쓴다.
 type RouletteIndex = {
@@ -553,8 +560,10 @@ type RouletteIndex = {
   rouletteArchivedById: Record<string, boolean>;
   // 원본 상품명 → 룰렛(rid, 표시라벨, 보관여부). 같은 이름이 여러 룰렛이면 먼저 잡힌 것 우선.
   itemRoulette: Map<string, { rid: string; label: string; archived: boolean }>;
-  // 팬 탭 순서: 보관 안 됐고 상품이 있는 룰렛만, 표시라벨 순.
+  // 팬 탭 순서: 보관 안 됐고 상품이 있는 룰렛만. 저장된 드래그 순서 우선, 없으면 표시라벨 순.
   fanRouletteOrder: Array<{ rid: string; label: string }>;
+  // 팬 탭 전체 시퀀스(룰렛 + 정가/기타 자리 포함) — 팬 화면 탭과 관리자 "팬 탭 이름" 목록 공용.
+  fanTabSequence: FanTabSeqItem[];
   // 관리자 "룰렛 관리" 탭 데이터
   managerGroups: GroupForManager[];
   managerRoulettes: NamedRouletteForManager[];
@@ -676,10 +685,28 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     for (const n of itemsByRid[rid]) if (!itemRoulette.has(n)) itemRoulette.set(n, info);
   }
 
-  const fanRouletteOrder = Object.keys(itemsByRid)
+  const baseRoulettes = Object.keys(itemsByRid)
     .filter((rid) => itemsByRid[rid].size > 0 && !(rouletteArchivedById[rid] ?? false))
     .map((rid) => ({ rid, label: displayLabel(rid) }))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+
+  // 저장된 팬 탭 순서(드래그) 적용 — 순서도 이름처럼 상품 지문으로 매칭해 캡처가 바뀌어도 따라온다.
+  // 매칭 안 되는(새) 탭은 뒤에 가나다순, 정가/기타는 저장 위치가 없으면 기존처럼 맨 뒤(정가→기타).
+  const savedOrder = fanLabels?.order ?? [];
+  const UNORDERED = Number.MAX_SAFE_INTEGER - 2;
+  const fixedOrderIdx = savedOrder.findIndex((o) => o.kind === "fixed");
+  const otherOrderIdx = savedOrder.findIndex((o) => o.kind === "other");
+  const seqSource: Array<{ key: number; item: FanTabSeqItem }> = baseRoulettes.map((r) => ({
+    key: matchFanTabOrderIndex(groupsByRid[r.rid] ?? [], savedOrder) ?? UNORDERED,
+    item: { kind: "roulette", rid: r.rid, label: r.label },
+  }));
+  seqSource.push({ key: fixedOrderIdx >= 0 ? fixedOrderIdx : UNORDERED + 1, item: { kind: "fixed" } });
+  seqSource.push({ key: otherOrderIdx >= 0 ? otherOrderIdx : UNORDERED + 2, item: { kind: "other" } });
+  seqSource.sort((a, b) => a.key - b.key); // 안정 정렬 — 같은 키(미배치)는 가나다순 유지.
+  const fanTabSequence = seqSource.map((s) => s.item);
+  const fanRouletteOrder = fanTabSequence.filter(
+    (s): s is Extract<FanTabSeqItem, { kind: "roulette" }> => s.kind === "roulette",
+  ).map(({ rid, label }) => ({ rid, label }));
 
   // 관리자 "팬 탭 이름" 섹션 — 팬 탭과 같은 목록. 정가/기타 이름은 별도 필드(키 고정).
   const fanTabManager: FanTabForNaming[] = fanRouletteOrder.map(({ rid, label }) => ({
@@ -733,6 +760,7 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     rouletteArchivedById,
     itemRoulette,
     fanRouletteOrder,
+    fanTabSequence,
     managerGroups,
     managerRoulettes,
     revealRoulettes,
@@ -934,16 +962,21 @@ function partitionHoldingsByRoulette(
     }
     return list;
   };
+  // 탭 순서 = fanTabSequence(저장된 드래그 순서 반영). 정가/기타도 저장 위치에 놓이고,
+  // 저장이 없으면 기존 기본(룰렛 가나다순 → 정가 → 기타) 그대로다.
   const result: Array<{ key: string; label: string; holdings: ViewerHolding[] }> = [];
-  for (const { rid, label } of index.fanRouletteOrder) {
-    const list = finalize(rid);
-    if (list.length > 0) result.push({ key: rid, label, holdings: list });
+  for (const seq of index.fanTabSequence) {
+    if (seq.kind === "roulette") {
+      const list = finalize(seq.rid);
+      if (list.length > 0) result.push({ key: seq.rid, label: seq.label, holdings: list });
+    } else if (seq.kind === "fixed") {
+      const fixed = finalize(FIXED);
+      if (fixed.length > 0) result.push({ key: FIXED, label: index.fixedTabLabel, holdings: fixed });
+    } else {
+      const other = finalize(OTHER);
+      if (other.length > 0) result.push({ key: OTHER, label: index.otherTabLabel, holdings: other });
+    }
   }
-  // 정가(시그니처) 탭은 룰렛 탭들 뒤, 기타 앞에.
-  const fixed = finalize(FIXED);
-  if (fixed.length > 0) result.push({ key: FIXED, label: index.fixedTabLabel, holdings: fixed });
-  const other = finalize(OTHER);
-  if (other.length > 0) result.push({ key: OTHER, label: index.otherTabLabel, holdings: other });
   return result;
 }
 
@@ -1391,12 +1424,16 @@ function AdminPanel({
   // 팬 화면과 동일 계산(computeFanRouletteTabs)을 공유해 목록이 항상 팬 탭과 일치한다.
   const { groups: fanTabGroups } = computeFanRouletteTabs(state, rouletteIndex, excludedNames);
   const fanTabByRid = new Map(fanTabManager.map((t) => [t.rid, t]));
-  const activeFanTabs = fanTabGroups
-    .map((g) => fanTabByRid.get(g.key))
-    .filter((t): t is FanTabForNaming => Boolean(t));
+  // 관리자 목록 = 팬 화면 탭 순서 그대로(정가/기타 자리 포함) — 드래그 편집의 초기 순서가 된다.
   // 정가/기타 탭은 팬 화면에 실제로 떴을 때만 이름칸을 보여준다(안 뜨는데 이름 받는 혼란 방지).
-  const showFixedTab = fanTabGroups.some((g) => g.key === "__fixed__");
-  const showOtherTab = fanTabGroups.some((g) => g.key === "__other__");
+  const fanNameRows: FanNameRow[] = fanTabGroups
+    .map((g): FanNameRow | null => {
+      if (g.key === "__fixed__") return { kind: "fixed" };
+      if (g.key === "__other__") return { kind: "other" };
+      const tab = fanTabByRid.get(g.key);
+      return tab ? { kind: "tab", tab } : null;
+    })
+    .filter((r): r is FanNameRow => r !== null);
   const activeGroupsForExchange = activeCatalog?.groups ?? [];
   // 사용설정(catalogUsage) 오버라이드: sy가 켜고 끈 값. 없으면 위플랩 캡처 값을 그대로 따른다.
   const usageOverrides: Record<string, boolean> = activeCatalog
@@ -1664,16 +1701,15 @@ function AdminPanel({
               </CollapsibleCard>
 
               {/* 팬 탭 이름 — 묶기와 독립(sy 확정 2026-07-08). 탭의 상품 지문에 이름을 매단다. */}
-              <CollapsibleCard sectionKey="fan-tab-names" title="팬 탭 이름 (팬 화면 룰렛 탭)">
+              <CollapsibleCard sectionKey="fan-tab-names" title="팬 탭 이름·순서 (팬 화면 룰렛 탭)">
                 <p className={styles.fieldHint}>
-                  팬 화면 룰렛 탭에 보일 이름을 정하세요. 이름은 룰렛 묶기와 별개로 탭의 상품 구성에
-                  붙어서, 묶거나 해제해도 유지되고 새 룰렛표가 들어와도 따라옵니다.
+                  팬 화면 룰렛 탭에 보일 이름을 정하고, 드래그로 탭 순서를 바꾸세요. 이름과 순서는
+                  룰렛 묶기와 별개로 탭의 상품 구성에 붙어서, 묶거나 해제해도 유지되고 새 룰렛표가
+                  들어와도 따라옵니다.
                 </p>
                 <FanTabNameManager
                   slug={state.slug}
-                  tabs={activeFanTabs}
-                  showFixed={showFixedTab}
-                  showOther={showOtherTab}
+                  rows={fanNameRows}
                   fixedLabel={state.fanTabLabels?.fixedLabel ?? ""}
                   otherLabel={state.fanTabLabels?.otherLabel ?? ""}
                   existingEntries={state.fanTabLabels?.entries ?? []}
