@@ -1652,14 +1652,16 @@ function AdminPanel({
       ) : activeAdminTab === "manual" ? (
         <CollapsibleCard sectionKey="manual" title="수동기록">
           <p className={styles.fieldHint}>
-            위플랩에 안 잡히는 룰렛 결과를 직접 넣는 곳이에요. 넣은 기록은 배송·양도/교환·팬 화면에서 자동수집분과
-            똑같이 다뤄지고, 같은 상품은 자동으로 합산돼요. 여기서 넣고, 실제 관리는 배송 관리에서 하세요.
+            위플랩에 안 잡히는 룰렛 결과나 정가 시그니처를 직접 넣는 곳이에요. 넣은 기록은 배송·양도/교환·팬
+            화면에서 자동수집분과 똑같이 다뤄지고, 같은 상품은 자동으로 합산돼요. 여기서 넣고, 실제 관리는 배송
+            관리에서 하세요.
           </p>
           <ManualEntryManager
             slug={state.slug}
             entries={entries}
             catalogItems={catalogItems}
             catalogVersion={activeCatalog?.version ?? state.currentCatalogVersion ?? null}
+            signatureCounts={state.signatureCounts ?? []}
           />
         </CollapsibleCard>
       ) : activeAdminTab === "roulettes" || activeAdminTab === "reveal" ? (

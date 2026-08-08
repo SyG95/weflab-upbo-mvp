@@ -1,6 +1,6 @@
 "use client";
 
-// 수동기록 관리 화면. 위플랩에 안 잡히는 룰렛 결과를 스트리머가 직접 넣는 "입력/보관 창구".
+// 수동기록 관리 화면. 위플랩에 안 잡히는 룰렛 결과·정가 시그니처를 스트리머가 직접 넣는 "입력/보관 창구".
 // 저장 실체는 upbo_entries(source_key manual:...) 라서, 배송·양도교환·팬화면은 자동수집분과 동등하게 다룬다.
 // 여기서는 추가 / 목록 / 개수 수정 / 삭제(수동분만)만 한다.
 
@@ -20,17 +20,22 @@ type ItemChoice = {
 
 // "직접 입력"(룰렛확률표에 없는 상품) 선택지 sentinel — 교환 모달(ItemEventManager)과 동일 패턴.
 const CUSTOM_ITEM = "__custom__";
+// "정가 시그니처" sentinel — 나눠 낸 후원 등 수집기(단일 후원 갯수 일치)가 못 잡은 정가를 손으로 넣는다.
+// 자동 정가기록과 같은 모양(itemName `정가 N개`, 확률 0, 라벨 "정가")으로 저장해야 팬 화면 정가 탭에서 합산된다.
+const FIXED_ITEM = "__fixed__";
 
 export default function ManualEntryManager({
   slug,
   entries,
   catalogItems,
   catalogVersion,
+  signatureCounts,
 }: {
   slug: string;
   entries: UpboEntry[];
   catalogItems: ItemChoice[];
   catalogVersion: number | null;
+  signatureCounts: number[];
 }) {
   const router = useRouter();
   const [ownerId, setOwnerId] = useState("");
@@ -40,6 +45,8 @@ export default function ManualEntryManager({
   // 직접 입력(룰렛확률표에 없는 상품): 이름 필수, 확률은 선택(없으면 0 — 정가·교환 직접입력과 동일 취급).
   const [customName, setCustomName] = useState("");
   const [customProb, setCustomProb] = useState("");
+  // 정가 시그니처 갯수(풍선 갯수). 등록된 시그 갯수가 있으면 첫 값을 기본으로 깔아 준다.
+  const [fixedCount, setFixedCount] = useState("");
   const [count, setCount] = useState(1);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -123,7 +130,21 @@ export default function ManualEntryManager({
       catalogGroupIndex: number | null;
       catalogVersion: number | null;
     };
-    if (pick === CUSTOM_ITEM) {
+    if (pick === FIXED_ITEM) {
+      // 정가 시그니처: 자동 정가기록(recordFixedPriceEntries)과 동일 지문으로 저장 — 정가 탭에서 합산.
+      const n = Number(fixedCount.trim());
+      if (!Number.isInteger(n) || n <= 0) {
+        setMsg({ type: "err", text: "시그니처 갯수를 숫자로 적어 주세요. (예: 1000)" });
+        return;
+      }
+      itemPayload = {
+        itemName: `정가 ${n}개`,
+        probability: 0,
+        amountRangeLabel: "정가",
+        catalogGroupIndex: null,
+        catalogVersion: null,
+      };
+    } else if (pick === CUSTOM_ITEM) {
       const name = customName.trim();
       if (!name) {
         setMsg({ type: "err", text: "상품 이름을 적어 주세요." });
@@ -175,6 +196,7 @@ export default function ManualEntryManager({
       setPick("");
       setCustomName("");
       setCustomProb("");
+      setFixedCount("");
       setCount(1);
       router.refresh();
     } catch (e) {
@@ -305,7 +327,18 @@ export default function ManualEntryManager({
           <span className={styles.ieLabel}>
             상품 <span className={styles.ieReq}>*</span>
           </span>
-          <select className={styles.ieSelect} value={pick} onChange={(e) => setPick(e.target.value)}>
+          <select
+            className={styles.ieSelect}
+            value={pick}
+            onChange={(e) => {
+              const v = e.target.value;
+              setPick(v);
+              // 정가 선택 시 등록된 시그 갯수 첫 값을 기본으로 채워 준다(수정 가능).
+              if (v === FIXED_ITEM && !fixedCount.trim() && signatureCounts[0]) {
+                setFixedCount(String(signatureCounts[0]));
+              }
+            }}
+          >
             <option value="">상품을 고르세요…</option>
             {showGroups
               ? rouletteGroups.map((g) => (
@@ -322,6 +355,7 @@ export default function ManualEntryManager({
                     {c.itemName} · {c.probability}%
                   </option>
                 ))}
+            <option value={FIXED_ITEM}>정가 시그니처… (수집에 안 잡힌 정가)</option>
             <option value={CUSTOM_ITEM}>직접 입력… (룰렛확률표에 없는 상품)</option>
           </select>
           {catalogItems.length === 0 ? (
@@ -331,6 +365,26 @@ export default function ManualEntryManager({
             </span>
           ) : null}
         </label>
+
+        {pick === FIXED_ITEM ? (
+          <label className={styles.ieField}>
+            <span className={styles.ieLabel}>
+              시그니처 갯수 <span className={styles.ieReq}>*</span>
+            </span>
+            <input
+              className={styles.ieInput}
+              value={fixedCount}
+              onChange={(e) => setFixedCount(e.target.value)}
+              inputMode="numeric"
+              placeholder={signatureCounts[0] ? `예: ${signatureCounts[0]}` : "예: 1000"}
+            />
+            <span className={styles.ieFormHint}>
+              {signatureCounts.length > 0
+                ? `등록된 시그니처 갯수: ${signatureCounts.join(", ")} — 나눠 낸 후원처럼 수집에 안 잡힌 정가를 넣을 때 쓰세요. 팬 화면 «정가» 탭에 자동수집분과 합산돼요.`
+                : "나눠 낸 후원처럼 수집에 안 잡힌 정가를 넣을 때 쓰세요. 팬 화면 «정가» 탭에 표시돼요."}
+            </span>
+          </label>
+        ) : null}
 
         {pick === CUSTOM_ITEM ? (
           <>
@@ -388,7 +442,13 @@ export default function ManualEntryManager({
             className={styles.modalConfirm}
             onClick={addEntry}
             disabled={
-              saving || !ownerId.trim() || (pick === CUSTOM_ITEM ? !customName.trim() : !picked)
+              saving ||
+              !ownerId.trim() ||
+              (pick === FIXED_ITEM
+                ? !fixedCount.trim()
+                : pick === CUSTOM_ITEM
+                ? !customName.trim()
+                : !picked)
             }
           >
             {saving ? "추가 중…" : "수동기록 추가"}
