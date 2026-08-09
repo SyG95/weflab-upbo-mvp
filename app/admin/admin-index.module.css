@@ -755,6 +755,34 @@
   background: #f3fbf5;
 }
 
+/* ── 이름 수정(표시 이름만, 비파괴) — 리셋 계열의 빨강 대신 잉크 톤 ── */
+.renameInput {
+  height: 30px;
+  width: 120px;
+  padding: 0 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.renameSave {
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.renameDone {
+  font-size: 11px;
+  color: #1f7a43;
+  font-weight: 700;
+}
+
 /* ── 데이터 초기화(계정 유지) — 완전 삭제(빨강)와 구분되는 주황 톤 ── */
 .wipeBtn {
   height: 32px;

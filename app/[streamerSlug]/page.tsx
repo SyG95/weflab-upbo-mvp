@@ -312,6 +312,9 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
               : "delivery";
 
   const result = await loadStreamerState(streamerSlug);
+  // 화면 제목용 표시 이름 — 슬러그는 주소 전용, 제목은 콘솔에서 입력한 이름(한글 가능).
+  // 상태 로딩 실패 시(연결 안내 화면)만 슬러그로 폴백.
+  const streamerName = (result.ok && result.state.displayName?.trim()) || streamerSlug;
   // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
   const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
   const theme = resolveTheme(themePreview || savedThemeId);
@@ -430,23 +433,23 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />
       <div className={styles.shell}>
         {showcaseOn && showcase?.bannerUrl ? (
-          <section className={styles.showcaseBanner} aria-label={`${streamerSlug} 배너`}>
+          <section className={styles.showcaseBanner} aria-label={`${streamerName} 배너`}>
             {/* 원본 비율 유지가 핵심이라 next/image 대신 img 사용(외부 도메인 설정 불요) */}
             {showcase.bannerLink ? (
               <a href={showcase.bannerLink} target="_blank" rel="noopener noreferrer">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={showcase.bannerUrl} alt={`${streamerSlug} 배너`} />
+                <img src={showcase.bannerUrl} alt={`${streamerName} 배너`} />
               </a>
             ) : (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={showcase.bannerUrl} alt={`${streamerSlug} 배너`} />
+              <img src={showcase.bannerUrl} alt={`${streamerName} 배너`} />
             )}
           </section>
         ) : null}
         <header className={styles.cover}>
           <div className={styles.coverTop}>
             <div>
-              <h1 className={styles.coverName}>{streamerSlug} 업보시트</h1>
+              <h1 className={styles.coverName}>{streamerName} 업보시트</h1>
             </div>
             <a
               className={styles.adminTab}

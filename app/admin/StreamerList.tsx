@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import styles from "./admin-index.module.css";
 import PinResetButton from "./PinResetButton";
+import RenameStreamerButton from "./RenameStreamerButton";
 import DeleteStreamerButton from "./DeleteStreamerButton";
 import ResetDataButton from "./ResetDataButton";
 import type { AdminStreamerSummary } from "@/lib/adminDashboard";
@@ -143,6 +144,7 @@ export default function StreamerList({
                       </Link>
                       {isMock ? null : (
                         <>
+                          <RenameStreamerButton slug={s.slug} current={s.displayName} />
                           <PinResetButton slug={s.slug} />
                           <ResetDataButton slug={s.slug} />
                           <DeleteStreamerButton slug={s.slug} />

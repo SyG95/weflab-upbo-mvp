@@ -26,10 +26,11 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
   const locked = access === "locked" || access === "blocked-unconfigured";
 
   // 후원집계 화면도 스트리머가 고른 테마(팬 시트와 같은 accent_color 프리셋)를 입는다.
-  // 스트리머 조회 실패(로컬 무 Supabase 등)는 기본 테마로 폴백. ?theme= 로 미리보기 가능.
-  const savedThemeId = await getStreamerRowBySlug(streamerSlug)
-    .then((row) => row.accent_color ?? undefined)
-    .catch(() => undefined);
+  // 스트리머 조회 실패(로컬 무 Supabase 등)는 기본 테마·슬러그 표기로 폴백. ?theme= 로 미리보기 가능.
+  const streamerRow = await getStreamerRowBySlug(streamerSlug).catch(() => null);
+  const savedThemeId = streamerRow?.accent_color ?? undefined;
+  // 제목은 콘솔에서 입력한 표시 이름(한글 가능) — 슬러그는 주소 전용.
+  const streamerName = streamerRow?.display_name?.trim() || streamerSlug;
   const theme = resolveTheme(themePreview || savedThemeId);
   const themeStyle = theme.vars as CSSProperties;
 
@@ -45,7 +46,7 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
         <header className={styles.cover}>
           <div>
             <p className={styles.kicker}>후원 원장 · 관리자 전용</p>
-            <h1 className={styles.title}>{streamerSlug} 후원집계</h1>
+            <h1 className={styles.title}>{streamerName} 후원집계</h1>
           </div>
           <a className={styles.backLink} href={`/${streamerSlug}?admin=1`}>
             업보시트 관리자로

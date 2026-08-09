@@ -12,6 +12,7 @@ import {
   getStreamerRowBySlug,
   hasResetScope,
   previewStreamerReset,
+  renameStreamer,
   setSheetAdminPinHash,
   upsertStreamer,
   type ResetCount,
@@ -118,6 +119,30 @@ export async function createStreamerAction(
     };
   } catch (error) {
     return { error: (error as Error).message || "스트리머 추가에 실패했어요." };
+  }
+}
+
+export type RenameStreamerState = { ok?: boolean; error?: string; displayName?: string };
+
+// 표시 이름 수정(콘솔 전용). 슬러그(주소)·비번·토큰·수집 연결은 그대로 두고
+// 팬 시트 제목에 쓰는 이름(한글 가능)만 바꾼다.
+export async function renameStreamerAction(
+  _prev: RenameStreamerState,
+  formData: FormData,
+): Promise<RenameStreamerState> {
+  try {
+    await assertConsoleAdmin();
+    const slug = String(formData.get("slug") ?? "").trim().toLowerCase();
+    const displayName = String(formData.get("displayName") ?? "").trim();
+    if (!SLUG_RE.test(slug)) return { error: "잘못된 슬러그예요." };
+    if (!displayName) return { error: "이름을 입력해 주세요." };
+    if (displayName.length > 40) return { error: "이름은 40자 이내로 해주세요." };
+    const streamer = await renameStreamer(slug, displayName);
+    revalidatePath("/admin");
+    revalidatePath(`/${slug}`);
+    return { ok: true, displayName: streamer.displayName };
+  } catch (error) {
+    return { error: (error as Error).message || "이름 수정에 실패했어요." };
   }
 }
 

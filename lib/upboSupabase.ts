@@ -551,6 +551,22 @@ export async function upsertStreamer(input: {
   return mapStreamer(rows[0]);
 }
 
+// 표시 이름만 변경(운영 콘솔 전용). 슬러그(주소)·임계값·토큰·PIN·수집 연결은 건드리지 않는다.
+export async function renameStreamer(slug: string, displayName: string) {
+  const streamer = await requireStreamer(slug);
+  const name = String(displayName || "").trim();
+  if (!name) throw new Error("표시 이름이 비어 있습니다.");
+  const rows = await supabaseFetch<StreamerRow[]>(
+    `/${tableName("streamers")}?id=eq.${streamer.id}`,
+    {
+      method: "PATCH",
+      headers: { prefer: "return=representation" },
+      body: JSON.stringify({ display_name: name }),
+    },
+  );
+  return mapStreamer(rows[0]);
+}
+
 // 스트리머 완전 삭제(온보딩 콘솔 전용, 되돌릴 수 없음). streamers row 하나를 지우면
 // FK on delete cascade 로 tokens/catalogs/import_batches/upbo_entries/raw_imports/audit_logs/
 // viewer_notes/delivery_progress/item_events 가 전부 함께 삭제된다(2026-06-28/29 마이그레이션 기준).
