@@ -12,7 +12,7 @@
 
 import { useRef, useState } from "react";
 import styles from "./signatureCounts.module.css";
-import { optimizeImage } from "./imageOptimize";
+import { optimizeImage, trimImageMargins } from "./imageOptimize";
 import type { FanFixedTabMode, SignatureDetail, SignatureKind } from "../../lib/api";
 
 const MAX_ROWS = 100;
@@ -141,7 +141,9 @@ export default function SignatureCountsManager({
     setUploadingKey(rowKey);
     setMsg(null);
     try {
-      const optimized = await optimizeImage(file, IMAGE_MAX_WIDTH);
+      // 시그 규격 파일의 빈 테두리(투명/흰 여백)를 먼저 잘라내고 크기를 줄인다.
+      const trimmed = await trimImageMargins(file);
+      const optimized = await optimizeImage(trimmed, IMAGE_MAX_WIDTH);
       const form = new FormData();
       form.append("file", optimized);
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/signature-image`, {
