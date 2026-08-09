@@ -12,6 +12,7 @@ import {
   type RouletteConfigEntry,
   type FanTabLabelEntry,
   type FanTabLabels,
+  type FanFixedTabMode,
   type FanTabOrderItem,
   type SignatureDetail,
   type WeflabLinkInfo,
@@ -39,6 +40,11 @@ import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAl
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
+import {
+  isFixedPeriodExpired,
+  judgeFixedPeriod,
+  type FixedPriceJudgeEntry,
+} from "./fixedPricePeriod";
 
 type Json = unknown;
 
@@ -851,9 +857,10 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
+    latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
     rouletteConfigForStreamer(streamer.id, overlayPick("roulette_config_updated")),
     fanDeliveryReflectForStreamer(streamer.id, overlayPick("fan_display_updated")),
     productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
@@ -892,6 +899,7 @@ export async function getStreamerState(slug: string) {
     catalogUsageByVersion: usageByVersion,
     signatureCounts,
     signatureDetails,
+    fanFixedTabMode,
     fixedPriceNotes,
     archivedFanIds: Object.keys(archivedFanAt),
     archivedFanAt,
@@ -2344,8 +2352,22 @@ export async function latestSignatureCounts(streamerId: string, prefetched?: Ove
 const SIGNATURE_MAX_PARTS = 20;
 const SIGNATURE_MAX_PART_LENGTH = 40;
 
-// payload.details({ "<갯수>": { parts, imageUrl } })를 counts 에 있는 갯수만 골라 정리한다.
-// 이미지 URL 은 우리 스토리지 시그 경로만 신뢰(그 외는 버림 — 외부 URL 주입 방지).
+const SIGNATURE_MAX_LABEL_LENGTH = 40;
+const SIGNATURE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type RawSignatureDetail = {
+  parts?: unknown;
+  imageUrl?: unknown;
+  kind?: unknown;
+  label?: unknown;
+  startAt?: unknown;
+  endAt?: unknown;
+};
+
+// payload.details({ "<갯수>": { parts, imageUrl, kind, label, startAt, endAt } })를
+// counts 에 있는 갯수만 골라 정리한다. 이미지 URL 은 우리 스토리지 시그 경로만 신뢰(외부 URL 주입 방지).
+// kind 미지정(구버전)·잘못된 값 = "sig"(상시). sig 는 라벨·기간을 갖지 않는다.
+// expired 는 읽기 시점 파생(endAt 경과 = «지난 정가») — 수집 제외는 기간 판정이, 목록 정리는 스트리머가.
 function cleanSignatureDetails(raw: unknown, counts: number[]): SignatureDetail[] {
   if (!raw || typeof raw !== "object") return [];
   const countSet = new Set(counts);
@@ -2354,7 +2376,7 @@ function cleanSignatureDetails(raw: unknown, counts: number[]): SignatureDetail[
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const count = Number(key);
     if (!Number.isInteger(count) || count <= 0 || !countSet.has(count)) continue;
-    const v = (value && typeof value === "object" ? value : {}) as { parts?: unknown; imageUrl?: unknown };
+    const v = (value && typeof value === "object" ? value : {}) as RawSignatureDetail;
     const parts = (Array.isArray(v.parts) ? v.parts : [])
       .filter((p): p is string => typeof p === "string")
       .map((p) => p.trim().slice(0, SIGNATURE_MAX_PART_LENGTH))
@@ -2362,10 +2384,19 @@ function cleanSignatureDetails(raw: unknown, counts: number[]): SignatureDetail[
       .slice(0, SIGNATURE_MAX_PARTS);
     const imageUrl =
       typeof v.imageUrl === "string" && v.imageUrl.startsWith(imagePrefix) ? v.imageUrl : "";
-    if (parts.length === 0 && !imageUrl) continue;
-    out.push({ count, parts, imageUrl });
+    const kind = v.kind === "event" || v.kind === "server" ? v.kind : "sig";
+    const label =
+      kind === "sig" ? "" : typeof v.label === "string" ? v.label.trim().slice(0, SIGNATURE_MAX_LABEL_LENGTH) : "";
+    const startAt =
+      kind !== "sig" && typeof v.startAt === "string" && SIGNATURE_DATE_RE.test(v.startAt) ? v.startAt : "";
+    const endAt =
+      kind !== "sig" && typeof v.endAt === "string" && SIGNATURE_DATE_RE.test(v.endAt) ? v.endAt : "";
+    // 상시(sig)면서 표시할 것도 없는 항목은 저장 의미가 없다(갯수만 동작 = counts 로 충분).
+    if (kind === "sig" && parts.length === 0 && !imageUrl) continue;
+    out.push({ count, parts, imageUrl, kind, label, startAt, endAt, expired: isFixedPeriodExpired(endAt) });
   }
-  return out.sort((a, b) => a.count - b.count);
+  const kindOrder = { sig: 0, event: 1, server: 2 } as const;
+  return out.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind] || a.count - b.count);
 }
 
 // 갯수별 표시 정보 최신 1건 — signature_counts_updated 같은 행에서 읽는다(추가 쿼리 없음).
@@ -2386,12 +2417,14 @@ export async function latestSignatureDetails(
 export async function setSignatureCounts(
   streamer: StreamerRow,
   counts: number[],
-  details?: Record<string, { parts?: unknown; imageUrl?: unknown }>,
-): Promise<{ counts: number[]; details: SignatureDetail[] }> {
+  details?: Record<string, RawSignatureDetail>,
+  fanFixedTabMode?: unknown,
+): Promise<{ counts: number[]; details: SignatureDetail[]; fanFixedTabMode: FanFixedTabMode }> {
   const cleaned = [
     ...new Set(counts.filter((n) => Number.isFinite(n) && Number.isInteger(n) && n > 0)),
   ].sort((a, b) => a - b).slice(0, SIGNATURE_MAX_COUNTS);
   const cleanedDetails = cleanSignatureDetails(details ?? {}, cleaned);
+  const mode: FanFixedTabMode = fanFixedTabMode === "subtabs" ? "subtabs" : "sections";
   // 교체·삭제로 안 쓰게 된 시그 이미지는 정리한다(모범 노력 — 실패해도 저장은 진행).
   const previous = await latestSignatureDetails(streamer.id).catch(() => [] as SignatureDetail[]);
   const keep = new Set(cleanedDetails.map((d) => d.imageUrl).filter(Boolean));
@@ -2406,13 +2439,48 @@ export async function setSignatureCounts(
       payload: {
         counts: cleaned,
         details: Object.fromEntries(
-          cleanedDetails.map((d) => [String(d.count), { parts: d.parts, imageUrl: d.imageUrl }]),
+          cleanedDetails.map((d) => [
+            String(d.count),
+            { parts: d.parts, imageUrl: d.imageUrl, kind: d.kind, label: d.label, startAt: d.startAt, endAt: d.endAt },
+          ]),
         ),
+        fanFixedTabMode: mode,
       },
     }),
   });
   if (orphaned.length > 0) await deleteSignatureImages(orphaned).catch(() => 0);
-  return { counts: cleaned, details: cleanedDetails };
+  return { counts: cleaned, details: cleanedDetails, fanFixedTabMode: mode };
+}
+
+// 팬 정가 탭 표시 방식(스트리머 선택) — signature_counts_updated 같은 행에서 읽는다. 기본 sections.
+export async function latestFanFixedTabMode(
+  streamerId: string,
+  prefetched?: OverlayPrefetch,
+): Promise<FanFixedTabMode> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { fanFixedTabMode?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.signature_counts_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  const raw = (rows[0]?.payload as { fanFixedTabMode?: unknown } | null)?.fanFixedTabMode;
+  return raw === "subtabs" ? "subtabs" : "sections";
+}
+
+// 정가 수집 판정용 설정: 등록된 전체 갯수 + (있으면) 기간. details 에 없는 갯수 = 상시(구버전 호환).
+// 만료된 기간 항목도 그대로 둔다 — 기간 밖 후원은 judgeFixedPeriod 가 거르고, 기간 안 후원의
+// "늦은 수집"은 스트리머가 «지난 정가»를 삭제하기 전까지 계속 인정된다(sy 규칙 ①②).
+export async function latestFixedPriceJudgeConfig(streamerId: string): Promise<FixedPriceJudgeEntry[]> {
+  const rows = await supabaseFetch<Array<{ payload: { counts?: unknown; details?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.signature_counts_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  const payload = (rows[0]?.payload ?? {}) as { counts?: unknown; details?: unknown };
+  const counts = Array.isArray(payload.counts)
+    ? [...new Set(payload.counts.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))]
+    : [];
+  const details = cleanSignatureDetails(payload.details, counts);
+  const byCount = new Map(details.map((d) => [d.count, d]));
+  return counts.map((count) => {
+    const d = byCount.get(count);
+    return { count, startAt: d?.startAt || undefined, endAt: d?.endAt || undefined };
+  });
 }
 
 // 시그 이미지 업로드 — 옷장(uploadWardrobeImage)과 같은 버킷, signature/ 경로.
@@ -3050,16 +3118,28 @@ export function donationRowsFromCapture(capture: ResultCapture): FixedPriceSourc
 
 export function buildFixedPriceCandidates(
   rows: FixedPriceSourceRow[],
-  counts: number[],
+  counts: Array<number | FixedPriceJudgeEntry>,
 ): FixedPriceCandidate[] {
   if (counts.length === 0) return [];
-  const countSet = new Set(counts);
+  // 숫자 배열(구버전·시그니처만)과 기간 포함 항목을 모두 받는다 — 숫자는 기간 없음(항상 수집)과 동일.
+  const byCount = new Map<number, FixedPriceJudgeEntry>();
+  for (const c of counts) {
+    const entry = typeof c === "number" ? { count: c } : c;
+    if (Number.isInteger(entry.count) && entry.count > 0 && !byCount.has(entry.count)) {
+      byCount.set(entry.count, entry);
+    }
+  }
   const byDonation = new Map<string, FixedPriceCandidate>();
   for (const row of rows) {
     const amount = row.donationAmount;
-    if (amount === null || !countSet.has(amount)) continue;
+    if (amount === null) continue;
+    const judgeEntry = byCount.get(amount);
+    if (!judgeEntry) continue;
     // 구독은 갯수 단위가 풍선이 아니라 개월이라 정가 매칭에서 제외한다.
     if ((row.donationType || "").includes("구독")) continue;
+    // 기간 한정(이벤트·서버) 정가: 위플랩에 찍힌 후원 시각이 기간 밖이면 제외(sy 확정 2026-08-09).
+    // 시각 해석 실패도 제외(쿠폰 소급 선례) — 구제는 수동기록 "정가 시그니처" 옵션.
+    if (judgeFixedPeriod(judgeEntry, row.donateTimeText) !== "in") continue;
     const fan = row.fanId || row.fanNickname;
     if (!fan) continue;
     const sourceKey = `fixed:${fan}:${row.donateTimeText}:${amount}`;
@@ -3296,9 +3376,10 @@ export async function previewResultsForStreamer(streamer: StreamerRow, capture: 
     specialItemRules: await specialRulesForCatalog(streamer.id, catalogItems),
     modifierState: await latestModifierState(streamer.id),
   });
-  // 정가(시그니처) 미리보기 — 기록하지 않고 요약만 계산한다.
-  const signatureCounts = await latestSignatureCounts(streamer.id);
-  const fixedCandidates = buildFixedPriceCandidates(donationRowsFromCapture(capture), signatureCounts);
+  // 정가(시그니처) 미리보기 — 기록하지 않고 요약만 계산한다. 기간 한정(이벤트·서버) 갯수는
+  // 후원 시각이 기간 안일 때만 후보가 된다(latestFixedPriceJudgeConfig + judgeFixedPeriod).
+  const fixedJudgeConfig = await latestFixedPriceJudgeConfig(streamer.id);
+  const fixedCandidates = buildFixedPriceCandidates(donationRowsFromCapture(capture), fixedJudgeConfig);
   const fixedPrice = {
     matched: fixedCandidates.length,
     recorded: 0,
@@ -3336,10 +3417,11 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
   });
   // 정가(시그니처) 패스: 룰렛 판정과 별개로, 시그니처 갯수와 일치하는 후원을 기록한다.
   // 시그니처 미설정이면 후보가 0개라 아무것도 하지 않는다(기존 동작과 동일).
-  const signatureCounts = await latestSignatureCounts(streamer.id);
+  // 기간 한정(이벤트·서버) 갯수는 후원 시각이 기간 안일 때만 기록된다(sy 확정 2026-08-09).
+  const fixedJudgeConfig = await latestFixedPriceJudgeConfig(streamer.id);
   const fixedPrice = await recordFixedPriceEntries(
     streamer,
-    buildFixedPriceCandidates(donationRowsFromCapture(capture), signatureCounts),
+    buildFixedPriceCandidates(donationRowsFromCapture(capture), fixedJudgeConfig),
     knownSourceKeys,
   );
   const shouldPersist = shouldPersistApplyResult(preview.summary);

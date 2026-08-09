@@ -831,6 +831,127 @@
   white-space: nowrap;
 }
 
+/* 정가 유형 구분(시그니처/이벤트/서버, sy 2026-08-09) — 하위 탭·레일 그룹·D-day·알림 */
+.sigSubTabs {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.sigSubTab,
+.sigSubTabActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.sigSubTab {
+  background: var(--paper);
+  color: var(--muted);
+}
+
+.sigSubTabActive {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+  border-color: var(--stamp);
+}
+
+.sigRailGroupTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 7px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.sigRailGroupTitle:first-child {
+  margin-top: 0;
+}
+
+.sigRailGroupSub {
+  font-family: var(--font-base);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.sigDday {
+  font-size: 10.5px;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--stamp);
+  color: var(--on-accent);
+  white-space: nowrap;
+}
+
+.sigDdaySoon {
+  background: #d8762e;
+  color: #fff;
+}
+
+/* 정가 칩 유형 배지(이벤트=보라, 서버=파랑, 종료=회색) + 이벤트 이름 */
+.upboFixedBadgeEvent {
+  background: #8e5abf;
+}
+
+.upboFixedBadgeServer {
+  background: #3f7ec2;
+}
+
+.upboFixedBadgeEnded {
+  background: #9a8f95;
+}
+
+.upboSigLabel {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 관리자 머리 수시 알림(기간 한정 정가 D-day + 지난 정가 정리 안내) */
+.sigAlertBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sigAlertLine {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 7px 12px;
+  background: var(--stamp-soft);
+  border: 1px solid var(--paper-line);
+  color: var(--ink);
+}
+
+.sigAlertSoon {
+  background: color-mix(in srgb, #d8762e 12%, var(--surface));
+  border-color: color-mix(in srgb, #d8762e 40%, var(--paper-line));
+}
+
+.sigAlertEnded {
+  background: var(--surface);
+  color: var(--muted);
+}
+
 /* 정가 탭 상단 시그 카드 가로 레일(② 가로 레일, sy 2026-08-09 채택) */
 .sigRail {
   display: flex;

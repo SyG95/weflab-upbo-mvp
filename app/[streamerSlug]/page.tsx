@@ -26,6 +26,7 @@ import {
   type FanDeliveryReflect,
   type ImportBatch,
   type SignatureDetail,
+  type SignatureKind,
   type StateResult,
   type StreamerState,
   type UpboEntry,
@@ -78,6 +79,7 @@ import { AdminCollapseProvider, CollapsibleCard } from "./AdminCollapse";
 import ShowcasePosterRail from "./ShowcasePosterRail";
 import { sheetAdminAccessState } from "../../lib/sheetAdminAuth";
 import { shouldShowRouletteTabs, splitProbabilityFamilies } from "../../lib/fanRouletteView";
+import { fixedPeriodDaysLeft } from "../../lib/fixedPricePeriod";
 import type { CSSProperties } from "react";
 
 type PageProps = {
@@ -89,6 +91,8 @@ type PageProps = {
     atab?: string;
     theme?: string;
     rtab?: string;
+    // 정가 탭 하위 유형(팬 표시 방식 subtabs 일 때): sig | event | server
+    sfk?: string;
     w?: string;
   }>;
 };
@@ -278,7 +282,7 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
-  const { admin, q, tab, atab, theme: themePreview, rtab, w } = await searchParams;
+  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w } = await searchParams;
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
   // URL이 요청한 팬 탭. 쿠폰·옷장 탭은 스트리머가 내용을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
@@ -489,6 +493,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 searchQuery={searchQuery}
                 activeTab={activeTab}
                 activeRoulette={rtab ?? ""}
+                activeSigKind={sfk ?? ""}
                 excludedNames={fanCouponExcluded}
                 coupons={fanCoupons}
                 showCouponTab={showCouponTab}
@@ -512,6 +517,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             searchQuery={searchQuery}
             activeTab={activeTab}
             activeRoulette={rtab ?? ""}
+            activeSigKind={sfk ?? ""}
             excludedNames={fanCouponExcluded}
             coupons={fanCoupons}
             showCouponTab={showCouponTab}
@@ -1047,26 +1053,103 @@ function computeFanRouletteTabs(
   return { showRouletteTabs, groups, allEntries, deliveryMode };
 }
 
-// 정가 탭 상단 시그 카드 가로 레일(sy 2026-08-09 채택 — ② 가로 레일).
-// 정가 설정에서 이미지·구성품을 등록한 갯수만 카드로 나온다. 아무것도 등록 안 했으면 레일 자체가 없다.
-function SignatureRail({ details }: { details: SignatureDetail[] }) {
-  if (details.length === 0) return null;
+// ── 정가 유형(시그니처/이벤트/서버, sy 2026-08-09) 팬 표시 조각들 ──
+
+// 정가 기록(itemName "정가 N개")의 유형 정보를 정가 설정에서 찾는다. 없으면 null = 일반 정가(sig 취급).
+// (자동·수동 정가기록 모두 itemName 을 "정가 N개"로 저장한다 — recordFixedPriceEntries/수동기록.)
+const FIXED_ITEM_NAME_RE = /^정가\s*([\d,]+)\s*개$/;
+function signatureDetailOfItem(
+  itemName: string,
+  byCount: Map<number, SignatureDetail>,
+): SignatureDetail | null {
+  const m = itemName.match(FIXED_ITEM_NAME_RE);
+  if (!m) return null;
+  return byCount.get(Number(m[1].replace(/,/g, ""))) ?? null;
+}
+
+function signatureKindOfItem(itemName: string, byCount: Map<number, SignatureDetail>): SignatureKind {
+  return signatureDetailOfItem(itemName, byCount)?.kind ?? "sig";
+}
+
+// subtabs 표시용: 정가 탭 시청자 목록을 유형으로 걸러 재구성한다(원본 불변, 표시 전용).
+// 만료된 이벤트·서버 기록도 자기 유형 탭에 남는다(기록은 사라지지 않는다 — sy 규칙 ①).
+function filterViewersBySigKind(
+  viewers: ViewerSummary[],
+  byCount: Map<number, SignatureDetail>,
+  kind: SignatureKind,
+): ViewerSummary[] {
+  const out: ViewerSummary[] = [];
+  for (const v of viewers) {
+    const items = v.items.filter((it) => signatureKindOfItem(it.itemName, byCount) === kind);
+    if (items.length === 0) continue;
+    out.push({
+      ...v,
+      items,
+      total: items.reduce((s, it) => s + it.count, 0),
+      maxProb: items.reduce((m, it) => Math.max(m, it.probability), 0),
+    });
+  }
+  return out;
+}
+
+const SIG_KIND_NAME: Record<SignatureKind, string> = { sig: "시그니처", event: "이벤트", server: "서버" };
+
+// 정가 탭 상단 시그 카드 가로 레일(② 가로 레일). kinds 로 보여줄 유형을 고른다(sections=전부, subtabs=현재 탭만).
+// 만료(«지난 정가») 항목은 레일에서 뺀다 — 팬에게 지금 파는 것만 보여준다. 아무것도 없으면 레일 자체가 없다.
+function SignatureRail({ details, kinds }: { details: SignatureDetail[]; kinds: SignatureKind[] }) {
+  const active = details.filter((d) => !d.expired && kinds.includes(d.kind));
+  const sigCards = active.filter((d) => d.kind === "sig");
+  const limited = active.filter((d) => d.kind !== "sig");
+  if (sigCards.length === 0 && limited.length === 0) return null;
+
+  const card = (d: SignatureDetail) => (
+    <div key={d.count} className={styles.sigRailCard}>
+      {d.imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className={styles.sigRailImg} src={d.imageUrl} alt={`정가 ${d.count.toLocaleString()}개`} loading="lazy" />
+      ) : null}
+      <div className={styles.sigRailMeta}>
+        <span className={styles.sigRailCount}>{d.count.toLocaleString()}개</span>
+        {d.parts.length > 0 ? <span className={styles.sigRailParts}>{d.parts.join(" · ")}</span> : null}
+      </div>
+    </div>
+  );
+
+  // 유형이 시그니처뿐이면 소제목 없이 기존 레일 그대로(불필요한 구분 안 만듦).
+  const onlySig = limited.length === 0 && kinds.includes("sig");
+  if (onlySig) {
+    return (
+      <div className={styles.sigRail} aria-label="시그니처 구성 안내">
+        {sigCards.map(card)}
+      </div>
+    );
+  }
+
   return (
-    <div className={styles.sigRail} aria-label="시그니처 구성 안내">
-      {details.map((d) => (
-        <div key={d.count} className={styles.sigRailCard}>
-          {d.imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img className={styles.sigRailImg} src={d.imageUrl} alt={`시그니처 ${d.count.toLocaleString()}개`} loading="lazy" />
-          ) : null}
-          <div className={styles.sigRailMeta}>
-            <span className={styles.sigRailCount}>{d.count.toLocaleString()}개</span>
-            {d.parts.length > 0 ? (
-              <span className={styles.sigRailParts}>{d.parts.join(" · ")}</span>
-            ) : null}
+    <div aria-label="정가 구성 안내">
+      {sigCards.length > 0 ? (
+        <>
+          <p className={styles.sigRailGroupTitle}>시그니처</p>
+          <div className={styles.sigRail}>{sigCards.map(card)}</div>
+        </>
+      ) : null}
+      {limited.map((d) => {
+        const left = fixedPeriodDaysLeft(d.endAt);
+        return (
+          <div key={`g-${d.count}`}>
+            <p className={styles.sigRailGroupTitle}>
+              {SIG_KIND_NAME[d.kind]} · {d.label || "(이름 없음)"}
+              {d.endAt ? <span className={styles.sigRailGroupSub}>~{d.endAt}까지</span> : null}
+              {left !== null ? (
+                <span className={left <= 7 ? `${styles.sigDday} ${styles.sigDdaySoon}` : styles.sigDday}>
+                  D-{Math.max(0, left)}
+                </span>
+              ) : null}
+            </p>
+            <div className={styles.sigRail}>{card(d)}</div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1077,6 +1160,7 @@ function FanView({
   searchQuery,
   activeTab,
   activeRoulette,
+  activeSigKind,
   excludedNames,
   coupons,
   showCouponTab,
@@ -1090,6 +1174,8 @@ function FanView({
   searchQuery: string;
   activeTab: FanTab;
   activeRoulette: string;
+  // 정가 탭 하위 유형(표시 방식 subtabs 일 때만 의미). sig | event | server 외 값 = sig.
+  activeSigKind: string;
   excludedNames: Set<string>;
   coupons: CouponBalance[] | null;
   showCouponTab: boolean;
@@ -1108,7 +1194,18 @@ function FanView({
   const activeGroup = rouletteGroups.find((g) => g.key === activeRoulette) ?? rouletteGroups[0];
   const rtabKey = activeGroup?.key;
   const activeViewers = activeGroup?.viewers ?? [];
-  const shownViewers = filterViewers(activeViewers, searchQuery);
+  // 정가 탭 유형 구분(시그니처/이벤트/서버, sy 2026-08-09). subtabs 모드면 하위 탭으로 걸러 보여준다.
+  const sigDetails = state.signatureDetails ?? [];
+  const sigByCount = new Map(sigDetails.map((d) => [d.count, d]));
+  const fixedMode = state.fanFixedTabMode ?? "sections";
+  const onFixedTab = activeTab === "ledger" && rtabKey === "__fixed__";
+  const useSigSubtabs = onFixedTab && fixedMode === "subtabs" && sigDetails.some((d) => d.kind !== "sig");
+  const sigKind: SignatureKind =
+    activeSigKind === "event" ? "event" : activeSigKind === "server" ? "server" : "sig";
+  const fixedTabViewers = useSigSubtabs
+    ? filterViewersBySigKind(activeViewers, sigByCount, sigKind)
+    : activeViewers;
+  const shownViewers = filterViewers(onFixedTab ? fixedTabViewers : activeViewers, searchQuery);
   // 전체 고유 시청자 수(여러 룰렛에 걸친 사람은 1명으로).
   const allViewerCount = new Set(rouletteGroups.flatMap((g) => g.viewers.map((v) => v.key))).size;
 
@@ -1116,11 +1213,12 @@ function FanView({
   const history = historyRows(allEntries, searchQuery);
   const lastApplied = state.importBatches?.[state.importBatches.length - 1]?.appliedAt;
 
+  const pillBaseViewers = onFixedTab ? fixedTabViewers : activeViewers;
   const countPill =
     activeTab === "ledger"
       ? searchQuery
-        ? `${shownViewers.length} / ${activeViewers.length}명`
-        : `${activeViewers.length}명`
+        ? `${shownViewers.length} / ${pillBaseViewers.length}명`
+        : `${pillBaseViewers.length}명`
       : activeTab === "coupon"
         ? couponLoadFailed
           ? "—"
@@ -1143,6 +1241,9 @@ function FanView({
           {activeTab === "wardrobe" ? <input type="hidden" name="tab" value="wardrobe" /> : null}
           {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
             <input type="hidden" name="rtab" value={rtabKey} />
+          ) : null}
+          {useSigSubtabs && sigKind !== "sig" ? (
+            <input type="hidden" name="sfk" value={sigKind} />
           ) : null}
           <input
             defaultValue={searchQuery}
@@ -1213,12 +1314,37 @@ function FanView({
           </div>
         ) : null}
 
-        {activeTab === "ledger" && rtabKey === "__fixed__" ? (
-          <SignatureRail details={state.signatureDetails ?? []} />
+        {useSigSubtabs ? (
+          <div className={styles.sigSubTabs} role="tablist" aria-label="정가 유형 구분">
+            {(["sig", "event", "server"] as SignatureKind[]).map((k) => {
+              const n = filterViewersBySigKind(activeViewers, sigByCount, k).length;
+              const href = `/${slug}?rtab=__fixed__${k === "sig" ? "" : `&sfk=${k}`}${
+                searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
+              }`;
+              return (
+                <a key={k} className={k === sigKind ? styles.sigSubTabActive : styles.sigSubTab} href={href}>
+                  {SIG_KIND_NAME[k]}
+                  <span className={styles.rouletteTabCount}>{n}</span>
+                </a>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {onFixedTab ? (
+          <SignatureRail
+            details={sigDetails}
+            kinds={useSigSubtabs ? [sigKind] : (["sig", "event", "server"] as SignatureKind[])}
+          />
         ) : null}
 
         {activeTab === "ledger" ? (
-          <LedgerTable viewers={shownViewers} searchQuery={searchQuery} colors={state.productColors} />
+          <LedgerTable
+            viewers={shownViewers}
+            searchQuery={searchQuery}
+            colors={state.productColors}
+            sigByCount={onFixedTab ? sigByCount : undefined}
+          />
         ) : activeTab === "coupon" ? (
           <FanCouponTable viewers={couponViewersShown} searchQuery={searchQuery} loadFailed={couponLoadFailed} />
         ) : activeTab === "wardrobe" ? (
@@ -1241,10 +1367,13 @@ function LedgerTable({
   viewers,
   searchQuery,
   colors,
+  sigByCount,
 }: {
   viewers: ViewerSummary[];
   searchQuery: string;
   colors?: Record<string, string>;
+  // 정가 탭에서만 전달 — 정가 칩에 유형(이벤트/서버) 배지와 이름을 붙인다.
+  sigByCount?: Map<number, SignatureDetail>;
 }) {
   if (viewers.length === 0) {
     return (
@@ -1280,6 +1409,23 @@ function LedgerTable({
                   {v.items.map((it) => {
                     // 정가기록(시그니처 후원): 룰렛 업보와 표기를 구분한다 — %가 아니라 "정가" 배지.
                     const isFixed = it.amountRangeLabel === "정가";
+                    // 유형 구분(정가 탭에서만): 이벤트/서버 배지 + 이름, 만료된 건 "·종료" 회색.
+                    const sigDetail = isFixed && sigByCount ? signatureDetailOfItem(it.itemName, sigByCount) : null;
+                    const sigKindOfIt = sigDetail?.kind ?? "sig";
+                    const fixedBadgeText =
+                      sigKindOfIt === "sig"
+                        ? "정가"
+                        : sigDetail?.expired
+                          ? `${SIG_KIND_NAME[sigKindOfIt]}·종료`
+                          : SIG_KIND_NAME[sigKindOfIt];
+                    const fixedBadgeClass =
+                      sigKindOfIt === "sig"
+                        ? styles.upboFixedBadge
+                        : sigDetail?.expired
+                          ? `${styles.upboFixedBadge} ${styles.upboFixedBadgeEnded}`
+                          : sigKindOfIt === "event"
+                            ? `${styles.upboFixedBadge} ${styles.upboFixedBadgeEvent}`
+                            : `${styles.upboFixedBadge} ${styles.upboFixedBadgeServer}`;
                     // 상품별 색상(스트리머가 정한 것만). 정가 칩은 자체 스타일 유지.
                     const col = isFixed ? undefined : productColorById(colors?.[it.itemName]);
                     return (
@@ -1289,13 +1435,16 @@ function LedgerTable({
                         style={col ? { background: col.bg, borderColor: col.border } : undefined}
                       >
                         {isFixed ? (
-                          <span className={styles.upboFixedBadge}>정가</span>
+                          <span className={fixedBadgeClass}>{fixedBadgeText}</span>
                         ) : it.amountRangeLabel ? (
                           <span className={styles.upboSet}>{it.amountRangeLabel}</span>
                         ) : null}
                         <span className={styles.upboItem} style={col ? { color: col.text } : undefined}>
                           {isFixed ? it.itemName.replace(/^정가\s*/, "") : it.itemName}
                         </span>
+                        {sigDetail && sigDetail.kind !== "sig" && sigDetail.label ? (
+                          <span className={styles.upboSigLabel}>{sigDetail.label}</span>
+                        ) : null}
                         {/* % 배지는 표기하지 않는다(sy 확정 2026-07-07 — 확률표 공개가 정보 담당). 정렬은 확률 기준 유지. */}
                         {it.count > 1 ? <span className={styles.upboCount}>×{it.count}</span> : null}
                         {it.done ? (
@@ -1571,6 +1720,38 @@ function AdminPanel({
           로그인·권한은 다음 단계입니다.
         </p>
         <p className={styles.fieldHint}>마지막 반영 {fmtKst(latest?.appliedAt)}</p>
+        {/* 기간 한정 정가 수시 알림(sy 확정 2026-08-09 — 관리자 머리 위치, D-7 이하만 강조). */}
+        {(() => {
+          const details = state.signatureDetails ?? [];
+          const running = details.filter((d) => d.kind !== "sig" && !d.expired && d.endAt);
+          const expiredCount = details.filter((d) => d.expired).length;
+          if (running.length === 0 && expiredCount === 0) return null;
+          return (
+            <div className={styles.sigAlertBox}>
+              {running.map((d) => {
+                const left = fixedPeriodDaysLeft(d.endAt) ?? 0;
+                return (
+                  <p
+                    key={d.count}
+                    className={left <= 7 ? `${styles.sigAlertLine} ${styles.sigAlertSoon}` : styles.sigAlertLine}
+                  >
+                    🔔 {SIG_KIND_NAME[d.kind]} «{d.label || "(이름 없음)"}» 정가 {d.count.toLocaleString()}개
+                    <span className={left <= 7 ? `${styles.sigDday} ${styles.sigDdaySoon}` : styles.sigDday}>
+                      D-{Math.max(0, left)}
+                    </span>
+                    {d.endAt} 종료 — 종료 후엔 수집에서 자동으로 빠져요
+                  </p>
+                );
+              })}
+              {expiredCount > 0 ? (
+                <p className={`${styles.sigAlertLine} ${styles.sigAlertEnded}`}>
+                  ✅ 지난 정가 {expiredCount}건 수집 종료 — «정가 설정 → 지난 정가»에서 정리할 수 있어요 (팬
+                  기록은 남아요)
+                </p>
+              ) : null}
+            </div>
+          );
+        })()}
       </div>
 
       <div className={styles.tabs} role="tablist">
@@ -1818,6 +1999,7 @@ function AdminPanel({
             slug={state.slug}
             initial={state.signatureCounts ?? []}
             initialDetails={state.signatureDetails ?? []}
+            initialFanFixedTabMode={state.fanFixedTabMode ?? "sections"}
           />
         </CollapsibleCard>
       ) : activeAdminTab === "promo" ? (

@@ -189,12 +189,26 @@ export function rouletteEntryItems(e: RouletteConfigEntry): string[] {
   return [...s];
 }
 
+// 정가 갯수의 유형(sy 확정 2026-08-09): sig=시그니처(상시, 갯수 불변), event/server=기간 한정.
+export type SignatureKind = "sig" | "event" | "server";
+
+// 팬 화면 정가 탭 표시 방식(스트리머 선택, sy 2026-08-09): sections=한 탭+섹션(기본), subtabs=유형별 하위 탭.
+export type FanFixedTabMode = "sections" | "subtabs";
+
 // 시그니처 갯수 1개의 표시 정보. parts=구성품 이름 목록, imageUrl=시그 이미지(우리 스토리지 공개 URL).
-// 둘 다 비어 있으면 그 갯수는 팬 화면 시그 레일에 나오지 않는다(현행과 동일하게 갯수만 동작).
+// kind 기본 "sig"(상시). event/server 는 label(이름)과 기간(startAt~endAt, KST 날짜)이 붙는다.
+// 기간 판정은 "위플랩에 찍힌 후원 시각" 기준(수집 실행 시각 아님) — lib/fixedPricePeriod.ts.
+// expired 는 읽기 시점 파생값(endAt 경과 = «지난 정가»): 수집은 기간으로 이미 끊겼고 목록 정리만 남은 상태.
+// 기간이 끝나도 이미 쌓인 기록(업보)은 절대 사라지지 않는다.
 export type SignatureDetail = {
   count: number;
   parts: string[];
   imageUrl: string;
+  kind: SignatureKind;
+  label: string;
+  startAt: string; // "YYYY-MM-DD" 또는 "" (sig 는 항상 "")
+  endAt: string;   // "YYYY-MM-DD" 또는 "" — 이 날짜의 23:59:59(KST)까지 수집
+  expired: boolean;
 };
 
 export type StreamerState = {
@@ -222,9 +236,11 @@ export type StreamerState = {
   catalogUsageByVersion?: Record<number, Record<string, boolean>>;
   // 정가기록(시그니처 후원) — 스트리머가 지정한 시그니처 갯수와 기록별 수기 메모.
   signatureCounts?: number[];
-  // 시그니처 갯수별 표시 정보(구성품·이미지, 선택). 수집 판정은 signatureCounts만 쓰고
-  // 이 값은 팬 화면 시그 레일·관리자 편집 표시에만 쓴다(2026-08-09, sy 가로 레일 채택).
+  // 시그니처 갯수별 표시·유형 정보(구성품·이미지·유형·기간). 팬 레일·관리자 편집·기간 판정에 쓴다.
+  // signatureCounts 는 등록된 전체 갯수(만료 포함) — 기간 조건은 details 쪽이 담당한다.
   signatureDetails?: SignatureDetail[];
+  // 팬 화면 정가 탭 표시 방식(스트리머 선택). 기본 sections.
+  fanFixedTabMode?: FanFixedTabMode;
   fixedPriceNotes?: Array<{ entrySourceKey: string; noteText: string; images?: string[]; updatedAt?: string }>;
   // 배송완료 후 보관(숨김) 처리된 시청자 fanId 목록 — 관리자·팬 화면 모두에서 숨긴다.
   // 물리 삭제 아님(원본 불변), 복구 가능.
