@@ -14,7 +14,7 @@ export async function POST(request: Request, context: RouteContext) {
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
 
-    const body = await readJson<{ counts?: unknown }>(request);
+    const body = await readJson<{ counts?: unknown; details?: unknown }>(request);
     if (!Array.isArray(body.counts) || body.counts.length > 100) {
       const error = new Error("counts must be an array (max 100)");
       (error as Error & { status?: number }).status = 400;
@@ -31,8 +31,25 @@ export async function POST(request: Request, context: RouteContext) {
       counts.push(n);
     }
 
-    const saved = await setSignatureCounts(streamer, counts);
-    return jsonOk({ ok: true, signatureCounts: saved });
+    // details = 갯수별 표시 정보(구성품·이미지, 선택). 형태만 여기서 거르고
+    // 내용 검증(갯수 매칭·글자수·이미지 URL 신뢰)은 setSignatureCounts 가 한다.
+    let details: Record<string, { parts?: unknown; imageUrl?: unknown }> | undefined;
+    if (body.details !== undefined) {
+      if (typeof body.details !== "object" || body.details === null || Array.isArray(body.details)) {
+        const error = new Error("details must be an object keyed by count");
+        (error as Error & { status?: number }).status = 400;
+        throw error;
+      }
+      if (Object.keys(body.details).length > 100) {
+        const error = new Error("too many detail entries (max 100)");
+        (error as Error & { status?: number }).status = 400;
+        throw error;
+      }
+      details = body.details as Record<string, { parts?: unknown; imageUrl?: unknown }>;
+    }
+
+    const saved = await setSignatureCounts(streamer, counts, details);
+    return jsonOk({ ok: true, signatureCounts: saved.counts, signatureDetails: saved.details });
   } catch (error) {
     return jsonError(error);
   }

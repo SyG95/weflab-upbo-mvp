@@ -831,6 +831,63 @@
   white-space: nowrap;
 }
 
+/* 정가 탭 상단 시그 카드 가로 레일(② 가로 레일, sy 2026-08-09 채택) */
+.sigRail {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 2px 2px 10px;
+  margin-bottom: 14px;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sigRail::-webkit-scrollbar {
+  height: 6px;
+}
+
+.sigRail::-webkit-scrollbar-thumb {
+  background: var(--paper-line);
+  border-radius: 999px;
+}
+
+.sigRailCard {
+  flex: 0 0 132px;
+  scroll-snap-align: start;
+  border: 1px solid var(--paper-line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+  text-align: center;
+}
+
+.sigRailImg {
+  width: 100%;
+  display: block;
+  background: #fff;
+}
+
+.sigRailMeta {
+  padding: 7px 8px 9px;
+  border-top: 1px dashed var(--paper-line);
+}
+
+.sigRailCount {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--stamp);
+}
+
+.sigRailParts {
+  display: block;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+
 .rouletteTab {
   background: var(--paper);
   color: var(--muted);

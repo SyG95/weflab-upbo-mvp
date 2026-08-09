@@ -94,6 +94,121 @@
   border-color: var(--stamp);
 }
 
+/* 갯수 1건 = 이미지 슬롯 + (갯수/구성품) 필드 묶음 */
+.sigRow {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.imgSlot {
+  flex: 0 0 96px;
+  text-align: center;
+}
+
+.imgThumb {
+  width: 96px;
+  height: 81px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1.5px solid var(--paper-line);
+  background: var(--surface);
+  display: block;
+}
+
+.imgEmpty {
+  width: 96px;
+  height: 81px;
+  border-radius: 10px;
+  border: 1.5px dashed var(--paper-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.imgBtns {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.imgBtn {
+  font-size: 11px;
+  border: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.imgBtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+.imgBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.sigFields {
+  flex: 1;
+  min-width: 0;
+}
+
+.partsLabel {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 10px 0 5px;
+}
+
+.partsOptional {
+  font-weight: 400;
+}
+
+.partsPreview {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.partsNone {
+  font-size: 11.5px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.partChip {
+  font-size: 11.5px;
+  color: var(--stamp);
+  background: var(--stamp-soft);
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+@media (max-width: 520px) {
+  .sigRow {
+    flex-direction: column;
+  }
+
+  .imgSlot {
+    flex-basis: auto;
+  }
+}
+
 /* 갯수 추가 버튼 */
 .addBtn {
   margin-top: 12px;

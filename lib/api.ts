@@ -189,6 +189,14 @@ export function rouletteEntryItems(e: RouletteConfigEntry): string[] {
   return [...s];
 }
 
+// 시그니처 갯수 1개의 표시 정보. parts=구성품 이름 목록, imageUrl=시그 이미지(우리 스토리지 공개 URL).
+// 둘 다 비어 있으면 그 갯수는 팬 화면 시그 레일에 나오지 않는다(현행과 동일하게 갯수만 동작).
+export type SignatureDetail = {
+  count: number;
+  parts: string[];
+  imageUrl: string;
+};
+
 export type StreamerState = {
   slug: string;
   displayName: string;
@@ -214,6 +222,9 @@ export type StreamerState = {
   catalogUsageByVersion?: Record<number, Record<string, boolean>>;
   // 정가기록(시그니처 후원) — 스트리머가 지정한 시그니처 갯수와 기록별 수기 메모.
   signatureCounts?: number[];
+  // 시그니처 갯수별 표시 정보(구성품·이미지, 선택). 수집 판정은 signatureCounts만 쓰고
+  // 이 값은 팬 화면 시그 레일·관리자 편집 표시에만 쓴다(2026-08-09, sy 가로 레일 채택).
+  signatureDetails?: SignatureDetail[];
   fixedPriceNotes?: Array<{ entrySourceKey: string; noteText: string; images?: string[]; updatedAt?: string }>;
   // 배송완료 후 보관(숨김) 처리된 시청자 fanId 목록 — 관리자·팬 화면 모두에서 숨긴다.
   // 물리 삭제 아님(원본 불변), 복구 가능.

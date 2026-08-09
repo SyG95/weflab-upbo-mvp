@@ -25,6 +25,7 @@ import {
   type CatalogItem,
   type FanDeliveryReflect,
   type ImportBatch,
+  type SignatureDetail,
   type StateResult,
   type StreamerState,
   type UpboEntry,
@@ -1046,6 +1047,30 @@ function computeFanRouletteTabs(
   return { showRouletteTabs, groups, allEntries, deliveryMode };
 }
 
+// 정가 탭 상단 시그 카드 가로 레일(sy 2026-08-09 채택 — ② 가로 레일).
+// 정가 설정에서 이미지·구성품을 등록한 갯수만 카드로 나온다. 아무것도 등록 안 했으면 레일 자체가 없다.
+function SignatureRail({ details }: { details: SignatureDetail[] }) {
+  if (details.length === 0) return null;
+  return (
+    <div className={styles.sigRail} aria-label="시그니처 구성 안내">
+      {details.map((d) => (
+        <div key={d.count} className={styles.sigRailCard}>
+          {d.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className={styles.sigRailImg} src={d.imageUrl} alt={`시그니처 ${d.count.toLocaleString()}개`} loading="lazy" />
+          ) : null}
+          <div className={styles.sigRailMeta}>
+            <span className={styles.sigRailCount}>{d.count.toLocaleString()}개</span>
+            {d.parts.length > 0 ? (
+              <span className={styles.sigRailParts}>{d.parts.join(" · ")}</span>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FanView({
   state,
   slug,
@@ -1186,6 +1211,10 @@ function FanView({
               </a>
             ))}
           </div>
+        ) : null}
+
+        {activeTab === "ledger" && rtabKey === "__fixed__" ? (
+          <SignatureRail details={state.signatureDetails ?? []} />
         ) : null}
 
         {activeTab === "ledger" ? (
@@ -1785,7 +1814,11 @@ function AdminPanel({
             여기 등록한 갯수와 일치하는 후원은 다음 수집 반영부터 &quot;정가기록&quot;으로 남아요. 룰렛
             업보와 별도로 표시되고, 상품 내용은 배송 관리의 정가 메모에서 적으면 됩니다.
           </p>
-          <SignatureCountsManager slug={state.slug} initial={state.signatureCounts ?? []} />
+          <SignatureCountsManager
+            slug={state.slug}
+            initial={state.signatureCounts ?? []}
+            initialDetails={state.signatureDetails ?? []}
+          />
         </CollapsibleCard>
       ) : activeAdminTab === "promo" ? (
         <SortableSections tabId="promo" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>

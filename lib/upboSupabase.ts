@@ -13,6 +13,7 @@ import {
   type FanTabLabelEntry,
   type FanTabLabels,
   type FanTabOrderItem,
+  type SignatureDetail,
   type WeflabLinkInfo,
   type ViewerHolding,
 } from "./api";
@@ -850,8 +851,9 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  const [signatureCounts, signatureDetails, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
+    latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     rouletteConfigForStreamer(streamer.id, overlayPick("roulette_config_updated")),
     fanDeliveryReflectForStreamer(streamer.id, overlayPick("fan_display_updated")),
     productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
@@ -889,6 +891,7 @@ export async function getStreamerState(slug: string) {
     itemEvents,
     catalogUsageByVersion: usageByVersion,
     signatureCounts,
+    signatureDetails,
     fixedPriceNotes,
     archivedFanIds: Object.keys(archivedFanAt),
     archivedFanAt,
@@ -2337,10 +2340,62 @@ export async function latestSignatureCounts(streamerId: string, prefetched?: Ove
   return [...new Set(cleaned)].sort((a, b) => a - b);
 }
 
-export async function setSignatureCounts(streamer: StreamerRow, counts: number[]): Promise<number[]> {
+// 시그니처 갯수별 표시 정보(구성품·이미지) 상한. 수집 판정과 무관한 표시용 데이터.
+const SIGNATURE_MAX_PARTS = 20;
+const SIGNATURE_MAX_PART_LENGTH = 40;
+
+// payload.details({ "<갯수>": { parts, imageUrl } })를 counts 에 있는 갯수만 골라 정리한다.
+// 이미지 URL 은 우리 스토리지 시그 경로만 신뢰(그 외는 버림 — 외부 URL 주입 방지).
+function cleanSignatureDetails(raw: unknown, counts: number[]): SignatureDetail[] {
+  if (!raw || typeof raw !== "object") return [];
+  const countSet = new Set(counts);
+  const imagePrefix = `${SUPABASE_URL}/storage/v1/object/public/${showcaseBucketName()}/signature/`;
+  const out: SignatureDetail[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const count = Number(key);
+    if (!Number.isInteger(count) || count <= 0 || !countSet.has(count)) continue;
+    const v = (value && typeof value === "object" ? value : {}) as { parts?: unknown; imageUrl?: unknown };
+    const parts = (Array.isArray(v.parts) ? v.parts : [])
+      .filter((p): p is string => typeof p === "string")
+      .map((p) => p.trim().slice(0, SIGNATURE_MAX_PART_LENGTH))
+      .filter(Boolean)
+      .slice(0, SIGNATURE_MAX_PARTS);
+    const imageUrl =
+      typeof v.imageUrl === "string" && v.imageUrl.startsWith(imagePrefix) ? v.imageUrl : "";
+    if (parts.length === 0 && !imageUrl) continue;
+    out.push({ count, parts, imageUrl });
+  }
+  return out.sort((a, b) => a.count - b.count);
+}
+
+// 갯수별 표시 정보 최신 1건 — signature_counts_updated 같은 행에서 읽는다(추가 쿼리 없음).
+export async function latestSignatureDetails(
+  streamerId: string,
+  prefetched?: OverlayPrefetch,
+): Promise<SignatureDetail[]> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { counts?: unknown; details?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.signature_counts_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  const payload = (rows[0]?.payload ?? {}) as { counts?: unknown; details?: unknown };
+  const counts = Array.isArray(payload.counts)
+    ? payload.counts.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0)
+    : [];
+  return cleanSignatureDetails(payload.details, counts);
+}
+
+export async function setSignatureCounts(
+  streamer: StreamerRow,
+  counts: number[],
+  details?: Record<string, { parts?: unknown; imageUrl?: unknown }>,
+): Promise<{ counts: number[]; details: SignatureDetail[] }> {
   const cleaned = [
     ...new Set(counts.filter((n) => Number.isFinite(n) && Number.isInteger(n) && n > 0)),
   ].sort((a, b) => a - b).slice(0, SIGNATURE_MAX_COUNTS);
+  const cleanedDetails = cleanSignatureDetails(details ?? {}, cleaned);
+  // 교체·삭제로 안 쓰게 된 시그 이미지는 정리한다(모범 노력 — 실패해도 저장은 진행).
+  const previous = await latestSignatureDetails(streamer.id).catch(() => [] as SignatureDetail[]);
+  const keep = new Set(cleanedDetails.map((d) => d.imageUrl).filter(Boolean));
+  const orphaned = previous.map((d) => d.imageUrl).filter((u) => u && !keep.has(u));
   await supabaseFetch(`/${tableName("audit_logs")}`, {
     method: "POST",
     headers: { prefer: "return=minimal" },
@@ -2348,10 +2403,59 @@ export async function setSignatureCounts(streamer: StreamerRow, counts: number[]
       streamer_id: streamer.id,
       action: "signature_counts_updated",
       actor: "extension",
-      payload: { counts: cleaned },
+      payload: {
+        counts: cleaned,
+        details: Object.fromEntries(
+          cleanedDetails.map((d) => [String(d.count), { parts: d.parts, imageUrl: d.imageUrl }]),
+        ),
+      },
     }),
   });
-  return cleaned;
+  if (orphaned.length > 0) await deleteSignatureImages(orphaned).catch(() => 0);
+  return { counts: cleaned, details: cleanedDetails };
+}
+
+// 시그 이미지 업로드 — 옷장(uploadWardrobeImage)과 같은 버킷, signature/ 경로.
+export async function uploadSignatureImage(
+  slug: string,
+  file: { bytes: ArrayBuffer; contentType: string },
+): Promise<string> {
+  const ext = SHOWCASE_IMAGE_EXTENSIONS[file.contentType];
+  if (!ext) {
+    throw new Error("unsupported image content type");
+  }
+  await ensureShowcaseBucket();
+  const bucket = showcaseBucketName();
+  const path = `signature/${slug}/${crypto.randomBytes(8).toString("hex")}-${Date.now()}.${ext}`;
+  const res = await storageFetch(`/object/${bucket}/${path}`, {
+    method: "POST",
+    headers: { "content-type": file.contentType, "x-upsert": "true" },
+    body: file.bytes,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Supabase storage upload ${res.status}: ${text || res.statusText}`);
+  }
+  return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+// 시그 이미지 정리 — 우리 버킷의 signature/ 공개 URL 만 지운다(다른 경로/외부 URL 은 안 건드림).
+export async function deleteSignatureImages(urls: string[]): Promise<number> {
+  const bucket = showcaseBucketName();
+  const prefix = `${SUPABASE_URL}/storage/v1/object/public/${bucket}/`;
+  let deleted = 0;
+  for (const url of urls) {
+    if (!url.startsWith(prefix)) continue;
+    const path = url.slice(prefix.length);
+    if (!path.startsWith("signature/")) continue;
+    try {
+      const res = await storageFetch(`/object/${bucket}/${path}`, { method: "DELETE" });
+      if (res.ok) deleted += 1;
+    } catch {
+      // 파일 정리는 부가 작업 — 저장을 막지 않는다.
+    }
+  }
+  return deleted;
 }
 
 // 메모(시청자/정가) 첨부 이미지 최대 개수. 문자열 URL 배열만 저장한다.
