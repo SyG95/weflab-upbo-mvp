@@ -1,6 +1,8 @@
 import ThemePicker from "./ThemePicker";
+import FontPicker from "./FontPicker";
 import SheetAdminGate from "../SheetAdminGate";
 import { DEFAULT_THEME_ID } from "../../../lib/themes";
+import { normalizeSheetFont } from "../../../lib/sheetFonts";
 import { getStreamerState } from "../../../lib/upboSupabase";
 import { sheetAdminAccessState } from "../../../lib/sheetAdminAuth";
 
@@ -27,11 +29,23 @@ export default async function ThemeSettingsPage({ params }: PageProps) {
   }
 
   let initialThemeId = DEFAULT_THEME_ID;
+  let initialFontKey = "";
   try {
-    const state = (await getStreamerState(streamerSlug)) as { settings?: { accentColor?: string } };
+    const state = (await getStreamerState(streamerSlug)) as {
+      settings?: { accentColor?: string };
+      sheetFontKey?: string;
+    };
     if (state?.settings?.accentColor) initialThemeId = state.settings.accentColor;
+    initialFontKey = normalizeSheetFont(state?.sheetFontKey);
   } catch {
     // Supabase 미설정/스트리머 없음 → 기본값으로 미리보기만 제공
   }
-  return <ThemePicker slug={streamerSlug} initialThemeId={initialThemeId} />;
+  return (
+    <>
+      <ThemePicker slug={streamerSlug} initialThemeId={initialThemeId} />
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 48px" }}>
+        <FontPicker slug={streamerSlug} initialFontKey={initialFontKey} />
+      </div>
+    </>
+  );
 }

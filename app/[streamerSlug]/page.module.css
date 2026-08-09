@@ -752,6 +752,8 @@
   background: var(--paper);
   border: 1px solid var(--paper-line);
   font-size: 12px;
+  /* 시트 글씨체를 고른 시트만 상품 칩까지 통일(--font-chip 주입). 미설정 = 기존 본문 고딕 그대로. */
+  font-family: var(--font-chip, var(--font-base));
   white-space: nowrap;
 }
 

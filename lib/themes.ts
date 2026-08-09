@@ -428,7 +428,6 @@ export const THEMES: Theme[] = [
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.85)",
       "--glass-shadow": "rgba(38, 40, 44, 0.10)",
-      "--font-display": "var(--font-base)",
     },
   },
 ];

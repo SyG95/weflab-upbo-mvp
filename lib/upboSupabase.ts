@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import type { WardrobeItem, WardrobeState, WardrobeTheme } from "./wardrobeShared";
+import { normalizeSheetFont } from "./sheetFonts";
 import {
   jaccardStrings,
   normalizeAccountId,
@@ -832,6 +833,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "admin_ui_prefs_updated",
   "fan_tab_labels_updated",
   "weflab_link_updated",
+  "sheet_font_updated",
 ] as const;
 
 type OverlayLatestRow = { action: string; payload: Record<string, unknown> | null; created_at: string };
@@ -886,6 +888,7 @@ export async function getStreamerState(slug: string) {
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
     weflabLinkForStreamer(streamer.id, overlayPick("weflab_link_updated")),
   ]);
+  const sheetFontKey = sheetFontKeyFromOverlay(overlayPick("sheet_font_updated"));
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
   const currentCatalog = catalogs.find((row) => row.version === currentCatalogVersion) ?? catalogs.at(-1);
   // 현재 버전의 유효 사용설정을 "직전 버전 → 내용 기준 승계"까지 반영해 덮어쓴다.
@@ -928,6 +931,7 @@ export async function getStreamerState(slug: string) {
     adminUiPrefs,
     fanTabLabels,
     weflabLink,
+    sheetFontKey,
   };
 }
 
@@ -2933,6 +2937,39 @@ export async function setProductColors(
       action: "product_colors_updated",
       actor: "operator",
       payload: { colors: clean },
+    }),
+  });
+  return clean;
+}
+
+// ---------- 시트 글씨체(디스플레이 폰트) ----------
+// 스트리머가 고른 폰트 키 1개를 audit_logs 오버레이 최신 1건으로 저장한다. 스키마 변경 없음.
+// 화이트리스트·정규화는 lib/sheetFonts.ts 단일 소스 — 모르는 값은 ""(현행 개구체)로 폴백.
+
+function sheetFontKeyFromOverlay(rows: OverlayPrefetch): string {
+  const payload = rows[0]?.payload as { fontKey?: unknown } | null | undefined;
+  return normalizeSheetFont(payload?.fontKey);
+}
+
+// 후원집계 등 전체 상태가 필요 없는 화면용 경량 조회(요청 1회).
+export async function getSheetFontKeyBySlug(slug: string): Promise<string> {
+  const streamer = await requireStreamer(slug);
+  const rows = await supabaseFetch<Array<{ payload: { fontKey?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.sheet_font_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return normalizeSheetFont(rows[0]?.payload?.fontKey);
+}
+
+export async function setSheetFont(streamer: StreamerRow, fontKey: unknown): Promise<string> {
+  const clean = normalizeSheetFont(fontKey);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "sheet_font_updated",
+      actor: "operator",
+      payload: { fontKey: clean },
     }),
   });
   return clean;

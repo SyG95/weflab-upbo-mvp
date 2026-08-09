@@ -4,7 +4,8 @@
 
 import type { CSSProperties } from "react";
 import { donationAdminAccessState } from "@/lib/donationAdminAuth";
-import { getStreamerRowBySlug } from "@/lib/upboSupabase";
+import { getSheetFontKeyBySlug, getStreamerRowBySlug } from "@/lib/upboSupabase";
+import { sheetFontCss, sheetFontHref } from "@/lib/sheetFonts";
 import { resolveTheme } from "@/lib/themes";
 import ThemeLiveBackground from "../ThemeLiveBackground";
 import DonationGate from "./DonationGate";
@@ -27,12 +28,21 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
 
   // 후원집계 화면도 스트리머가 고른 테마(팬 시트와 같은 accent_color 프리셋)를 입는다.
   // 스트리머 조회 실패(로컬 무 Supabase 등)는 기본 테마·슬러그 표기로 폴백. ?theme= 로 미리보기 가능.
-  const streamerRow = await getStreamerRowBySlug(streamerSlug).catch(() => null);
+  const [streamerRow, sheetFontKey] = await Promise.all([
+    getStreamerRowBySlug(streamerSlug).catch(() => null),
+    getSheetFontKeyBySlug(streamerSlug).catch(() => ""),
+  ]);
   const savedThemeId = streamerRow?.accent_color ?? undefined;
   // 제목은 콘솔에서 입력한 표시 이름(한글 가능) — 슬러그는 주소 전용.
   const streamerName = streamerRow?.display_name?.trim() || streamerSlug;
   const theme = resolveTheme(themePreview || savedThemeId);
-  const themeStyle = theme.vars as CSSProperties;
+  // 시트 글씨체도 팬 시트와 동일하게 따라간다(경량 조회, 미설정=현행 그대로).
+  const sheetFontFamily = sheetFontCss(sheetFontKey);
+  const sheetFontLink = sheetFontHref(sheetFontKey);
+  const themeStyle = {
+    ...theme.vars,
+    ...(sheetFontFamily ? { "--font-display": sheetFontFamily, "--font-chip": sheetFontFamily } : {}),
+  } as CSSProperties;
 
   return (
     <main
@@ -42,6 +52,7 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
       data-glass={theme.fx?.glass ? "1" : undefined}
     >
       <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />
+      {sheetFontLink ? <link rel="stylesheet" href={sheetFontLink} /> : null}
       <div className={styles.shell}>
         <header className={styles.cover}>
           <div>

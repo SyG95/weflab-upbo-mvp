@@ -214,6 +214,8 @@ export type SignatureDetail = {
 export type StreamerState = {
   slug: string;
   displayName: string;
+  // 시트 글씨체 키(lib/sheetFonts.ts 화이트리스트). ""/누락 = 기본 개구체.
+  sheetFontKey?: string;
   settings: {
     thresholdPercent: number;
     siteTitle?: string;

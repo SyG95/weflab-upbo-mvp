@@ -56,6 +56,7 @@ import WardrobeManager from "./WardrobeManager";
 import { groupFanCoupons, filterFanCoupons } from "../../lib/fanCouponView";
 import { resolveTheme } from "../../lib/themes";
 import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
+import { normalizeSheetFont, sheetFontCss, sheetFontHref } from "../../lib/sheetFonts";
 import ThemeLiveBackground from "./ThemeLiveBackground";
 import ShowcaseManager from "./ShowcaseManager";
 import SignatureCountsManager from "./SignatureCountsManager";
@@ -318,7 +319,15 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
   const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
   const theme = resolveTheme(themePreview || savedThemeId);
-  const themeStyle = theme.vars as CSSProperties;
+  // 시트 글씨체(스트리머 선택, sheetFonts 화이트리스트) — 고르면 제목·탭·상품 칩까지 통일,
+  // 미설정·오염값은 현행 개구체 그대로(변수 미주입 = CSS 기본값). 테마 vars 뒤에 얹어 항상 우선.
+  const sheetFontKey = result.ok ? normalizeSheetFont(result.state.sheetFontKey) : "";
+  const sheetFontFamily = sheetFontCss(sheetFontKey);
+  const sheetFontLink = sheetFontHref(sheetFontKey);
+  const themeStyle = {
+    ...theme.vars,
+    ...(sheetFontFamily ? { "--font-display": sheetFontFamily, "--font-chip": sheetFontFamily } : {}),
+  } as CSSProperties;
 
   // 쇼케이스(홍보): 배너/포스터/공지를 등록한 스트리머만 팬 화면 레이아웃이 확장된다.
   // 조회 실패는 페이지를 죽이지 않고 "미표시"로 처리한다.
@@ -431,6 +440,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       data-showcase={showcaseOn ? "1" : undefined}
     >
       <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />
+      {sheetFontLink ? <link rel="stylesheet" href={sheetFontLink} /> : null}
       <div className={styles.shell}>
         {showcaseOn && showcase?.bannerUrl ? (
           <section className={styles.showcaseBanner} aria-label={`${streamerName} 배너`}>
