@@ -992,15 +992,32 @@ export type AdminStreamerIndexRow = {
   needsReviewSum: number;
 };
 
-// 운영자 목록 화면용 읽기 전용 집계. streamers 1쿼리 + import_batches 1쿼리를 JS에서 합친다.
+// import_batches 전 스트리머 합산 조회를 "받은 게 없을 때까지" offset 으로 나눠 받는다.
+// 한 번에 limit 만 요청하면 Supabase 서버의 1회 응답 상한(Max rows)에서 조용히 잘려,
+// 오래된 순 정렬상 최신 배치부터 사라지고 목록 신호등(최근 동기화)이 옛날로 굳는 버그가 있었다.
+// 상한 값이 얼마든(500이든 1000이든) chunk 길이만큼 offset 을 전진시키므로 전량 수신이 보장된다.
+// 오래된 순(asc) 유지 이유: 순회 중 새 배치가 들어와도 끝에 추가될 뿐이라 중복·누락이 없다.
+async function fetchAllImportBatchRows(): Promise<Array<{ streamer_id: string; applied_at?: string; summary: Json }>> {
+  const rows: Array<{ streamer_id: string; applied_at?: string; summary: Json }> = [];
+  const PAGE = 1000;
+  const MAX_PAGES = 100; // 폭주 방지 상한. 도달해도 오래된 쪽부터 채워져 있어 신호등만은 부정확해질 수 있으니 여유 있게 잡는다.
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const chunk = await supabaseFetch<Array<{ streamer_id: string; applied_at?: string; summary: Json }>>(
+      `/${tableName("import_batches")}?select=streamer_id,applied_at,summary&order=applied_at.asc&offset=${rows.length}&limit=${PAGE}`,
+    );
+    if (!chunk.length) break;
+    rows.push(...chunk);
+  }
+  return rows;
+}
+
+// 운영자 목록 화면용 읽기 전용 집계. streamers 1쿼리 + import_batches 전량 페이지 순회를 JS에서 합친다.
 export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> {
   const [streamers, batches] = await Promise.all([
     supabaseFetch<StreamerRow[]>(
       `/${tableName("streamers")}?select=id,slug,display_name,threshold_percent,updated_at&order=updated_at.desc&limit=1000`,
     ),
-    supabaseFetch<Array<{ streamer_id: string; applied_at?: string; summary: Json }>>(
-      `/${tableName("import_batches")}?select=streamer_id,applied_at,summary&order=applied_at.asc&limit=10000`,
-    ),
+    fetchAllImportBatchRows(),
   ]);
   const agg = new Map<string, { batchCount: number; lastAppliedAt?: string; recordSum: number; needsReviewSum: number }>();
   for (const b of batches) {
