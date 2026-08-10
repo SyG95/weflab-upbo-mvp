@@ -10,10 +10,13 @@ export default function FanCouponTable({
   viewers,
   searchQuery,
   loadFailed,
+  hideIds,
 }: {
   viewers: FanCouponViewer[];
   searchQuery: string;
   loadFailed?: boolean;
+  // 팬 화면 계정ID 숨기기(스트리머별 설정). 열 자체를 뺀다. 검색은 원문 기준 그대로.
+  hideIds?: boolean;
 }) {
   if (loadFailed) {
     return (
@@ -42,16 +45,17 @@ export default function FanCouponTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            <th>계정ID</th>
+            {hideIds ? null : <th>계정ID</th>}
             <th>쿠폰</th>
             <th className={styles.countCol}>합계</th>
           </tr>
         </thead>
         <tbody>
-          {viewers.map((v) => (
-            <tr key={v.key}>
+          {/* 숨김 모드에선 key(계정ID 기반)도 페이지 소스(RSC 페이로드)에 실리므로 행 번호로 대체한다. */}
+          {viewers.map((v, i) => (
+            <tr key={hideIds ? `r${i}` : v.key}>
               <td className={styles.nameCell}>{v.nickname}</td>
-              <td className={styles.idCell}>{v.accountId}</td>
+              {hideIds ? null : <td className={styles.idCell}>{v.accountId}</td>}
               <td>
                 <div className={styles.upboCell}>
                   {v.coupons.map((c) => (

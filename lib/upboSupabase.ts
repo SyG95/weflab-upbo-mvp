@@ -829,6 +829,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "fan_display_updated",
   "product_colors_updated",
   "fan_reveal_updated",
+  "fan_id_privacy_updated",
   "fan_layout_updated",
   "admin_ui_prefs_updated",
   "fan_tab_labels_updated",
@@ -875,7 +876,7 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
@@ -883,6 +884,7 @@ export async function getStreamerState(slug: string) {
     fanDeliveryReflectForStreamer(streamer.id, overlayPick("fan_display_updated")),
     productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
     fanRevealEnabledForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
+    fanIdHiddenForStreamer(streamer.id, overlayPick("fan_id_privacy_updated")),
     fanLayoutForStreamer(streamer.id, overlayPick("fan_layout_updated")),
     adminUiPrefsForStreamer(streamer.id, overlayPick("admin_ui_prefs_updated")),
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
@@ -927,6 +929,7 @@ export async function getStreamerState(slug: string) {
     fanDeliveryReflect,
     productColors,
     fanRevealEnabled,
+    fanIdHidden,
     fanLayout,
     adminUiPrefs,
     fanTabLabels,
@@ -3009,6 +3012,31 @@ export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolea
     body: JSON.stringify({
       streamer_id: streamer.id,
       action: "fan_reveal_updated",
+      actor: "operator",
+      payload: { enabled: clean },
+    }),
+  });
+  return clean;
+}
+
+// ---------- 팬 화면 계정ID 숨기기 (스트리머별 선택) ----------
+// 켜면 팬 화면 표(업보·획득 기록·쿠폰)에서 계정ID 열이 통째로 빠진다. 기본 off = 지금 그대로.
+// 관리자 화면·검색·매칭은 항상 원문 ID를 쓴다(표시 전용). audit_logs 오버레이, 스키마 변경 없음.
+export async function fanIdHiddenForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<boolean> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { enabled?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_id_privacy_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return rows[0]?.payload?.enabled === true;
+}
+
+export async function setFanIdHidden(streamer: StreamerRow, enabled: boolean): Promise<boolean> {
+  const clean = enabled === true;
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "fan_id_privacy_updated",
       actor: "operator",
       payload: { enabled: clean },
     }),

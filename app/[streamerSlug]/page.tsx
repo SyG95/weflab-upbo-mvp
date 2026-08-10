@@ -66,6 +66,7 @@ import RouletteConfigManager, {
   type NamedRouletteForManager,
 } from "./RouletteConfigManager";
 import FanDeliveryModeForm from "./FanDeliveryModeForm";
+import FanIdPrivacyForm from "./FanIdPrivacyForm";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
@@ -1357,9 +1358,15 @@ function FanView({
             searchQuery={searchQuery}
             colors={state.productColors}
             sigByCount={onFixedTab ? sigByCount : undefined}
+            hideIds={state.fanIdHidden === true}
           />
         ) : activeTab === "coupon" ? (
-          <FanCouponTable viewers={couponViewersShown} searchQuery={searchQuery} loadFailed={couponLoadFailed} />
+          <FanCouponTable
+            viewers={couponViewersShown}
+            searchQuery={searchQuery}
+            loadFailed={couponLoadFailed}
+            hideIds={state.fanIdHidden === true}
+          />
         ) : activeTab === "wardrobe" ? (
           <WardrobeFanView
             slug={slug}
@@ -1369,7 +1376,7 @@ function FanView({
             initialItemId={wardrobeItemId}
           />
         ) : (
-          <HistoryTable rows={history} searchQuery={searchQuery} />
+          <HistoryTable rows={history} searchQuery={searchQuery} hideIds={state.fanIdHidden === true} />
         )}
       </section>
     </>
@@ -1381,12 +1388,15 @@ function LedgerTable({
   searchQuery,
   colors,
   sigByCount,
+  hideIds,
 }: {
   viewers: ViewerSummary[];
   searchQuery: string;
   colors?: Record<string, string>;
   // 정가 탭에서만 전달 — 정가 칩에 유형(이벤트/서버) 배지와 이름을 붙인다.
   sigByCount?: Map<number, SignatureDetail>;
+  // 팬 화면 계정ID 숨기기(스트리머별 설정). 열 자체를 뺀다. 검색은 원문 기준 그대로.
+  hideIds?: boolean;
 }) {
   if (viewers.length === 0) {
     return (
@@ -1407,16 +1417,17 @@ function LedgerTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            <th>계정ID</th>
+            {hideIds ? null : <th>계정ID</th>}
             <th>업보</th>
             <th className={styles.countCol}>건수</th>
           </tr>
         </thead>
         <tbody>
-          {viewers.map((v) => (
-            <tr key={v.key}>
+          {/* 숨김 모드에선 key(계정ID 기반)도 페이지 소스(RSC 페이로드)에 실리므로 행 번호로 대체한다. */}
+          {viewers.map((v, i) => (
+            <tr key={hideIds ? `r${i}` : v.key}>
               <td className={styles.nameCell}>{v.fanNickname}</td>
-              <td className={styles.idCell}>{v.fanId}</td>
+              {hideIds ? null : <td className={styles.idCell}>{v.fanId}</td>}
               <td>
                 <div className={styles.upboCell}>
                   {v.items.map((it) => {
@@ -1479,7 +1490,16 @@ function LedgerTable({
   );
 }
 
-function HistoryTable({ rows, searchQuery }: { rows: UpboEntry[]; searchQuery: string }) {
+function HistoryTable({
+  rows,
+  searchQuery,
+  hideIds,
+}: {
+  rows: UpboEntry[];
+  searchQuery: string;
+  // 팬 화면 계정ID 숨기기(스트리머별 설정). 열 자체를 뺀다. 검색은 원문 기준 그대로.
+  hideIds?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <div className={styles.emptyState}>
@@ -1502,7 +1522,7 @@ function HistoryTable({ rows, searchQuery }: { rows: UpboEntry[]; searchQuery: s
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            <th>계정ID</th>
+            {hideIds ? null : <th>계정ID</th>}
             <th>상품</th>
             {showSet ? <th className={styles.probCol}>룰렛 세트</th> : null}
             <th className={styles.donateCol} title="위플랩 표시시간 원문">
@@ -1514,7 +1534,7 @@ function HistoryTable({ rows, searchQuery }: { rows: UpboEntry[]; searchQuery: s
           {rows.map((e) => (
             <tr key={e.id}>
               <td className={styles.nameCell}>{e.fanNickname}</td>
-              <td className={styles.idCell}>{e.fanId}</td>
+              {hideIds ? null : <td className={styles.idCell}>{e.fanId}</td>}
               <td>
                 {/* 확률 열은 표기하지 않는다(sy 확정 2026-07-07). 정가는 배지+이름(접두어 제거)으로 표기. */}
                 {e.sourceKey.startsWith("fixed:") ? (
@@ -2087,6 +2107,16 @@ function AdminPanel({
               적용됩니다. 기본은 &quot;반영 안 함&quot;이라, 바꾸지 않으면 지금 그대로예요.
             </p>
             <FanDeliveryModeForm slug={state.slug} initial={state.fanDeliveryReflect ?? "off"} />
+          </CollapsibleCard>
+
+          {/* 팬 화면 계정ID 숨기기 */}
+          <CollapsibleCard sectionKey="fan-id-privacy" title="팬 화면 계정ID 숨기기">
+            <p className={styles.fieldHint}>
+              켜면 팬 화면 표(업보·획득 기록·쿠폰)에서 계정ID 열이 통째로 사라져요. 관리자
+              화면과 검색(본인 ID로 찾기)은 그대로예요. 기본은 &quot;끔&quot;이라, 켜지 않으면
+              지금 그대로입니다. 이 스트리머에게만 적용됩니다.
+            </p>
+            <FanIdPrivacyForm slug={state.slug} initial={state.fanIdHidden === true} />
           </CollapsibleCard>
 
           {/* 최신 결과 반영 요약 */}
