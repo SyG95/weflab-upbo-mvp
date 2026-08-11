@@ -25,6 +25,13 @@
   display: grid;
 }
 
+/* grid 자식의 기본 min-width:auto 가 표 최소 폭을 카드 밖까지 밀어
+   모바일에서 페이지 전체가 가로로 넘치는 결함 수리(2026-08-12 리루리 485px 실측).
+   표는 .tableWrap 내부 스크롤로만 움직여야 한다. */
+.shell > * {
+  min-width: 0;
+}
+
 /* ---------- 테마 효과(fx): 살아있는 배경 + 유리 카드 (themes.ts fx 옵션) ---------- */
 
 /* 살아있는 배경이 켜지면 페이지 자체 배경을 비워 캔버스가 비치게 하고, 내용을 그 위층으로 */
@@ -555,6 +562,9 @@
 
 .ledgerHeader {
   display: flex;
+  /* 탭이 4개(쿠폰·옷장 활성)면 좁은 화면에서 한 줄 최소 폭이 417px까지 커져
+     페이지를 밀어냈다(2026-08-12 나월 실측) — 줄바꿈 허용으로 수리 */
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
@@ -2252,6 +2262,18 @@
 
   .searchRow {
     flex-direction: column;
+  }
+
+  /* 업보 표가 안에서 가로 스크롤될 때 핵심 요약값인 건수 열이
+     화면 밖으로 사라지지 않게 우측 고정. 배경은 반투명 --surface 아래에
+     --paper 를 깔아 카드와 같은 색을 유지하면서 뒤 내용 비침을 막는다. */
+  .table th.countCol,
+  .table td.countCell {
+    position: sticky;
+    right: 0;
+    background-image: linear-gradient(var(--surface), var(--surface));
+    background-color: var(--paper);
+    box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18);
   }
 }
 
