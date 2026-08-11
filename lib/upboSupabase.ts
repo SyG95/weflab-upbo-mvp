@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { WARDROBE_PARTS } from "./wardrobeShared";
 import type { WardrobeItem, WardrobeState, WardrobeTheme } from "./wardrobeShared";
 import { normalizeSheetFont } from "./sheetFonts";
 import {
@@ -1251,7 +1252,7 @@ export async function uploadMemoImage(
 // 타입·상수는 클라이언트도 쓰므로 lib/wardrobeShared.ts 에 분리(couponAggregate 선례) —
 // 기존 import 호환을 위해 여기서 재수출한다(타입 import 는 파일 상단).
 
-export { WARDROBE_MAX_ITEMS } from "./wardrobeShared";
+export { WARDROBE_MAX_ITEMS, WARDROBE_PARTS } from "./wardrobeShared";
 export type { WardrobeItem, WardrobePart, WardrobeState, WardrobeTheme } from "./wardrobeShared";
 
 function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): WardrobeItem | null {
@@ -1261,7 +1262,8 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     url: String(raw.url),
     name: typeof raw.name === "string" ? raw.name : "",
     themeId: typeof raw.themeId === "string" ? raw.themeId : "",
-    part: raw.part === "hair" ? "hair" : "outfit",
+    // 목록에 없는 값(손상·구버전)만 의상으로 폴백 — 새 파츠(눈색·악세서리)를 뭉개지 않는다.
+    part: raw.part && WARDROBE_PARTS.includes(raw.part) ? raw.part : "outfit",
     month: typeof raw.month === "string" ? raw.month : "",
     memo: typeof raw.memo === "string" ? raw.memo : "",
     hidden: raw.hidden === true,

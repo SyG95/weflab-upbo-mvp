@@ -1,5 +1,6 @@
 import {
   WARDROBE_MAX_ITEMS,
+  WARDROBE_PARTS,
   deleteWardrobeImages,
   getStreamerRowBySlug,
   getWardrobeBySlug,
@@ -39,8 +40,10 @@ function cleanMonth(value: unknown): string {
 }
 
 function cleanPart(value: unknown): WardrobePart {
-  if (value === "outfit" || value === "hair") return value;
-  badRequest("파츠는 의상 또는 헤어만 가능해요");
+  if (typeof value === "string" && (WARDROBE_PARTS as readonly string[]).includes(value)) {
+    return value as WardrobePart;
+  }
+  badRequest("파츠는 의상·헤어·눈색·악세서리 중에서만 고를 수 있어요");
 }
 
 // 저장된 상태가 없으면 빈 옷장으로 시작한다 — 기본 테마 없음(테마는 스트리머가 직접 생성).

@@ -12,11 +12,20 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import {
   WARDROBE_MAX_ITEMS,
   WARDROBE_MONTH_PATTERN,
+  WARDROBE_PARTS,
+  WARDROBE_PART_LABEL,
   currentMonthKst,
   type WardrobePart,
   type WardrobeItem,
   type WardrobeState,
 } from "../../lib/wardrobeShared";
+
+// 파츠 <option> 목록(묶음 지정·일괄 변경·행 편집 3곳 공용) — 목록은 wardrobeShared 가 단일 출처.
+const partOptions = WARDROBE_PARTS.map((p) => (
+  <option key={p} value={p}>
+    {WARDROBE_PART_LABEL[p]}
+  </option>
+));
 import { optimizeImage } from "./imageOptimize";
 import styles from "./wardrobe.module.css";
 
@@ -325,8 +334,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
             value={preset.part}
             onChange={(e) => setPreset((p) => ({ ...p, part: e.target.value as WardrobePart }))}
           >
-            <option value="outfit">의상</option>
-            <option value="hair">헤어</option>
+            {partOptions}
           </select>
         </label>
         <label>
@@ -438,8 +446,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           }}
         >
           <option value="">파츠 변경…</option>
-          <option value="outfit">의상</option>
-          <option value="hair">헤어</option>
+          {partOptions}
         </select>
         {/* month 미지원 브라우저(파이어폭스·사파리 데스크톱)는 text 폴백이라 타이핑 중 저장 금지 —
             값을 고른 뒤 "월 적용" 버튼으로만 저장한다. 형식 검사는 서버와 같은 규칙. */}
@@ -685,8 +692,7 @@ function ItemRow({
           onChange={(e) => onPatch({ part: e.target.value })}
           aria-label="파츠"
         >
-          <option value="outfit">의상</option>
-          <option value="hair">헤어</option>
+          {partOptions}
         </select>
       </td>
       <td>

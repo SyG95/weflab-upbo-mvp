@@ -3,7 +3,16 @@
 // (node:crypto·supabaseFetch 등)을 절대 import 하지 않는다. upboSupabase.ts 를 클라이언트
 // 번들에 끌고 오지 않기 위한 분리 — lib/couponAggregate.ts 와 같은 이유·같은 선례.
 
-export type WardrobePart = "outfit" | "hair";
+// 파츠 목록·이름표의 단일 출처 — 관리 화면 select, 팬 필터 칩, 서버 검증이 전부 이걸 쓴다.
+// 새 파츠는 여기에만 추가하면 된다(눈색·악세서리=8/11 sy 지시로 추가).
+export const WARDROBE_PARTS = ["outfit", "hair", "eyes", "accessory"] as const;
+export type WardrobePart = (typeof WARDROBE_PARTS)[number];
+export const WARDROBE_PART_LABEL: Record<WardrobePart, string> = {
+  outfit: "의상",
+  hair: "헤어",
+  eyes: "눈색",
+  accessory: "악세서리",
+};
 export type WardrobeTheme = { id: string; name: string };
 export type WardrobeItem = {
   id: string;

@@ -6,15 +6,32 @@
 // 크게보기 모달은 ShowcasePosterRail 의 UX(←→/Esc/배경 클릭)를 따르고, 컷별 링크 복사를 더했다.
 // 월/테마/파츠 전환은 전부 클라이언트 계산 — 서버 왕복 없음(전체 컷을 한 번에 받는다, 상한 100장).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { currentMonthKst, type WardrobeItem, type WardrobeTheme } from "../../lib/wardrobeShared";
+
+// SSR/하이드레이션 판별용 — 서버·하이드레이션 렌더=false, 그 후 클라이언트=true.
+// (effect 내 setState 없이 클라이언트 전용 렌더를 여는 React 공식 패턴)
+const emptySubscribe = () => () => {};
+function useIsClient(): boolean {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+}
+import {
+  WARDROBE_PARTS,
+  WARDROBE_PART_LABEL as PART_LABEL,
+  currentMonthKst,
+  type WardrobeItem,
+  type WardrobePart,
+  type WardrobeTheme,
+} from "../../lib/wardrobeShared";
 import styles from "./wardrobe.module.css";
 
 const NEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // NEW 배지: 공개 시작 + 2주
-const PART_LABEL: Record<WardrobeItem["part"], string> = { outfit: "의상", hair: "헤어" };
 
-type PartFilter = "all" | "outfit" | "hair";
+type PartFilter = "all" | WardrobePart;
 type ViewMode = "month" | "theme";
 
 function isNew(item: WardrobeItem, now: number): boolean {
@@ -48,10 +65,17 @@ export default function WardrobeFanView({
 }) {
   // 렌더 중 Date.now() 호출은 lint(purity) 위반 — 마운트 시각으로 고정(NEW 2주 판정엔 충분).
   const [now] = useState(() => Date.now());
+  const isClient = useIsClient();
   const themeName = useMemo(() => new Map(themes.map((t) => [t.id, t.name])), [themes]);
 
   // 검색(상단 "내 업보 확인" 검색창 공유) + 파츠 필터.
   const [part, setPart] = useState<PartFilter>("all");
+  // 파츠 칩은 실제 등록된 파츠만 노출 — 4종 상시 노출은 안 쓰는 스트리머에게 빈 필터 소음.
+  // 1종뿐이면 필터 자체가 무의미하므로 칩 줄을 통째로 숨긴다.
+  const presentParts = useMemo(() => {
+    const has = new Set(items.map((i) => i.part));
+    return WARDROBE_PARTS.filter((p) => has.has(p));
+  }, [items]);
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return items.filter((item) => {
@@ -206,12 +230,16 @@ export default function WardrobeFanView({
           <button type="button" className={view === "theme" ? styles.chipOn : styles.chip} onClick={() => setView("theme")}>
             테마별
           </button>
-          <span className={styles.chipDivider} aria-hidden="true" />
-          {(["all", "outfit", "hair"] as const).map((p) => (
-            <button key={p} type="button" className={part === p ? styles.chipOn : styles.chip} onClick={() => setPart(p)}>
-              {p === "all" ? "전체" : PART_LABEL[p]}
-            </button>
-          ))}
+          {presentParts.length > 1 ? (
+            <>
+              <span className={styles.chipDivider} aria-hidden="true" />
+              {(["all", ...presentParts] as PartFilter[]).map((p) => (
+                <button key={p} type="button" className={part === p ? styles.chipOn : styles.chip} onClick={() => setPart(p)}>
+                  {p === "all" ? "전체" : PART_LABEL[p]}
+                </button>
+              ))}
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -232,7 +260,10 @@ export default function WardrobeFanView({
         ))
       )}
 
-      {openItem
+      {/* 딥링크(?w=)로 첫 렌더부터 모달이 열리면 서버에서도 이 분기를 타는데, SSR 에는
+          document 가 없어 500이 났다(8/11 실측). typeof document 분기는 하이드레이션
+          불일치 에러를 내므로(실측), isClient 로 하이드레이션 후에만 포털을 붙인다. */}
+      {openItem && isClient
         ? createPortal(
             <div className={styles.modalBackdrop} onClick={close} role="dialog" aria-modal="true" aria-label={openItem.name}>
               <div className={styles.modalBody} onClick={(e) => e.stopPropagation()}>
