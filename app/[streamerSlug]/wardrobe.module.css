@@ -189,6 +189,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
+  /* 메모가 아주 길어 화면을 넘겨도 버튼이 잘리지 않게 — body 의 margin:auto 와 한 쌍 */
+  overflow-y: auto;
 }
 
 .modalBody {
@@ -197,12 +199,15 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  max-width: min(560px, 92vw);
+  margin: auto;
+  /* 팬 건의(8/11): 크게보기가 작다 — 저장 원본이 최대 1200px 이라 이 폭까지는 선명함 보장 */
+  max-width: min(1100px, 92vw);
 }
 
 .modalImage {
   max-width: 100%;
-  max-height: 70vh;
+  /* 이미지 + 정보영역(이름·메모·버튼, 실측 ~125px)이 한 화면에 들어오는 상한 */
+  max-height: calc(94vh - 160px);
   border-radius: 10px;
   display: block;
 }
@@ -263,21 +268,13 @@
   cursor: pointer;
 }
 
+/* 모달이 넓어져 바깥 배치(-52px)는 중간 화면에서 잘림 — 쇼케이스처럼 안쪽 겹침으로 통일 */
 .modalPrev {
-  left: -52px;
+  left: 8px;
 }
 
 .modalNext {
-  right: -52px;
-}
-
-@media (max-width: 700px) {
-  .modalPrev {
-    left: 4px;
-  }
-  .modalNext {
-    right: 4px;
-  }
+  right: 8px;
 }
 
 /* ── 관리 화면 ───────────────────────────────────────────── */
