@@ -38,7 +38,6 @@ export default function WardrobeStandaloneView({
         searchQuery={query}
         initialItemId={initialItemId}
         wide
-        deepLinkBase={`/${encodeURIComponent(slug)}/wardrobe`}
       />
     </>
   );

@@ -1274,6 +1274,7 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     order: Number.isFinite(raw.order) ? Number(raw.order) : 0,
     setId: typeof raw.setId === "string" ? raw.setId : "",
     variant: typeof raw.variant === "string" ? raw.variant : "",
+    featured: raw.featured === true,
   };
 }
 

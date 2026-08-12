@@ -32,7 +32,7 @@ import styles from "./wardrobe.module.css";
 const NEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // NEW 배지: 공개 시작 + 2주
 
 type PartFilter = "all" | WardrobePart;
-type ViewMode = "month" | "theme";
+type ViewMode = "main" | "month" | "theme";
 
 // 표시 단위: 색상 세트(공개 멤버 2장 이상)는 카드 1장으로 접히고 칩으로 색을 고른다.
 // firstId = 현재 필터·정렬에서 먼저 걸린 컷 — 칩 기본 선택("화이트" 검색 → 화이트가 먼저 보이게).
@@ -66,7 +66,6 @@ export default function WardrobeFanView({
   searchQuery,
   initialItemId,
   wide = false,
-  deepLinkBase,
 }: {
   slug: string;
   themes: WardrobeTheme[];
@@ -74,7 +73,6 @@ export default function WardrobeFanView({
   searchQuery: string;
   initialItemId: string | null; // ?w=<id> 딥링크 — 해당 컷의 크게보기를 바로 연다
   wide?: boolean; // 독립 화면(넓은 판): 카드 최소 폭을 키워 컷을 크게 보여준다
-  deepLinkBase?: string; // 링크 복사가 가리킬 주소(기본=업보시트 옷장 탭, 독립 화면은 자기 주소)
 }) {
   // 렌더 중 Date.now() 호출은 lint(purity) 위반 — 마운트 시각으로 고정(NEW 2주 판정엔 충분).
   const [now] = useState(() => Date.now());
@@ -160,7 +158,9 @@ export default function WardrobeFanView({
     return [...set].sort((a, b) => b.localeCompare(a));
   }, [filtered]);
   const [currentMonth] = useState(() => currentMonthKst());
-  const [view, setView] = useState<ViewMode>("month");
+  // 메인 고정 컷이 있으면 첫 진입 = 메인 탭(sy 확정 8/12). 0장이면 탭 자체가 없고 월별이 기본.
+  const hasFeatured = useMemo(() => items.some((i) => i.featured), [items]);
+  const [view, setView] = useState<ViewMode>(() => (items.some((i) => i.featured) ? "main" : "month"));
   const [month, setMonth] = useState<string | null>(null);
   const selectedMonth = month && months.includes(month) ? month : months.includes(currentMonth) ? currentMonth : months[0] ?? null;
   const monthIdx = selectedMonth ? months.indexOf(selectedMonth) : -1;
@@ -174,6 +174,11 @@ export default function WardrobeFanView({
     [filtered, selectedMonth],
   );
   const monthUnits = useMemo(() => toUnits(monthItems), [monthItems, toUnits]);
+  // 메인 탭 = 스트리머가 고정한 컷(등록순). 세트는 멤버 중 하나라도 고정이면 세트째 오른다.
+  const mainUnits = useMemo(
+    () => toUnits([...filtered].filter((i) => i.featured).sort(byUploadOrder)),
+    [filtered, toUnits],
+  );
   // 테마별 보기: 스트리머가 정한 테마 순서, 테마 안은 수동 순서(order).
   // 세트는 같은 테마 안에서만 성립(서버 검증)하므로 섹션마다 온전한 세트로 접힌다.
   const themeSections = useMemo(
@@ -196,10 +201,11 @@ export default function WardrobeFanView({
   // 크게보기 모달. ←→ 넘김 = 카드(세트) 단위, 세트 안 색 전환은 칩으로.
   // 테마별 보기는 지금 열린 색인(테마) 안에서만 넘긴다.
   // 딥링크 컷이 현재 필터에 없으면 그 컷(세트면 세트 통째)만 단독으로 연다.
-  const displayUnits = useMemo(
-    () => (view === "month" ? monthUnits : activeThemeSection?.units ?? []),
-    [view, monthUnits, activeThemeSection],
-  );
+  const displayUnits = useMemo(() => {
+    if (view === "main") return mainUnits;
+    if (view === "month") return monthUnits;
+    return activeThemeSection?.units ?? [];
+  }, [view, mainUnits, monthUnits, activeThemeSection]);
   // 딥링크(?w=)는 초기 상태로 바로 연다(effect 내 setState 는 lint 위반 + 불필요한 재렌더).
   const [openId, setOpenId] = useState<string | null>(() =>
     initialItemId && items.some((i) => i.id === initialItemId) ? initialItemId : null,
@@ -246,25 +252,6 @@ export default function WardrobeFanView({
     };
   }, [openItem, close, move]);
 
-  // 컷별 공유 링크 복사(스트리머가 공지에서 특정 컷을 바로 가리킬 때).
-  // 독립 화면에서 복사하면 독립 화면 주소가, 탭에서 복사하면 탭 주소가 나가게 base 를 받는다.
-  const [copied, setCopied] = useState(false);
-  const copyLink = useCallback(
-    async (id: string) => {
-      const base = deepLinkBase ?? `/${encodeURIComponent(slug)}?tab=wardrobe`;
-      const sep = base.includes("?") ? "&" : "?";
-      const url = `${window.location.origin}${base}${sep}w=${encodeURIComponent(id)}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1600);
-      } catch {
-        window.prompt("이 주소를 복사해 주세요", url);
-      }
-    },
-    [slug, deepLinkBase],
-  );
-
   // 카드 = 표시 단위(세트면 1장으로 접힘). 본체 버튼 + 색상 칩 줄이 형제 —
   // 칩도 버튼이라 카드 전체를 button 으로 두면 중첩 버튼(HTML 위반)이 된다.
   const card = (unit: Unit) => {
@@ -306,7 +293,9 @@ export default function WardrobeFanView({
   return (
     <div className={wide ? `${styles.fanWrap} ${styles.fanWrapWide}` : styles.fanWrap}>
       <div className={styles.controls}>
-        {view === "month" ? (
+        {view === "main" ? (
+          <span className={styles.themeViewLabel}>메인 고정 컷</span>
+        ) : view === "month" ? (
           <div className={styles.monthNav} aria-label="월 이동">
             <button
               type="button"
@@ -330,6 +319,11 @@ export default function WardrobeFanView({
           <span className={styles.themeViewLabel}>테마별 보기</span>
         )}
         <div className={styles.chipRow}>
+          {hasFeatured ? (
+            <button type="button" className={view === "main" ? styles.chipOn : styles.chip} onClick={() => setView("main")}>
+              메인
+            </button>
+          ) : null}
           <button type="button" className={view === "month" ? styles.chipOn : styles.chip} onClick={() => setView("month")}>
             월별
           </button>
@@ -353,6 +347,8 @@ export default function WardrobeFanView({
         <p className={styles.empty}>
           {searchQuery ? `'${searchQuery}'에 해당하는 컷이 없어요.` : "조건에 맞는 컷이 없어요."}
         </p>
+      ) : view === "main" ? (
+        <div className={styles.grid}>{mainUnits.map(card)}</div>
       ) : view === "month" ? (
         <div className={styles.grid}>{monthUnits.map(card)}</div>
       ) : themeSections.length <= 1 ? (
@@ -385,61 +381,73 @@ export default function WardrobeFanView({
         </>
       )}
 
-      {/* 딥링크(?w=)로 첫 렌더부터 모달이 열리면 서버에서도 이 분기를 타는데, SSR 에는
-          document 가 없어 500이 났다(8/11 실측). typeof document 분기는 하이드레이션
-          불일치 에러를 내므로(실측), isClient 로 하이드레이션 후에만 포털을 붙인다. */}
+      {/* 크게보기 = 피팅룸(무대+패널) — 이미지 뷰어에서 상세 무대로 승격(sy 지시 8/12).
+          왼쪽(모바일=위) 무대에 이미지 고정, 오른쪽(모바일=아래) 패널에 이름·메타·색상·메모·
+          액션이 줄 단위로 쌓인다 — 파츠 토글·주문 문구 같은 미래 컨트롤도 "패널 한 줄 추가"로
+          끝나고 무대는 안 줄어든다. Esc/배경 클릭/←→ 키보드/딥링크/색 기억은 기존 그대로.
+          딥링크(?w=)로 첫 렌더부터 열리면 SSR 에 document 가 없어 500(8/11 실측) —
+          typeof document 분기는 하이드레이션 불일치라 isClient 로 하이드레이션 후에만 포털. */}
       {openItem && isClient
         ? createPortal(
             <div className={styles.modalBackdrop} onClick={close} role="dialog" aria-modal="true" aria-label={openItem.name}>
-              <div className={styles.modalBody} onClick={(e) => e.stopPropagation()}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className={styles.modalImage} src={openItem.url} alt={openItem.name} />
-                <div className={styles.modalInfo}>
-                  <strong>{openItem.name}</strong>
-                  <span>
-                    {themeName.get(openItem.themeId) ?? "테마 없음"} · {PART_LABEL[openItem.part]}
-                    {openItem.variant ? ` · ${openItem.variant}` : ""}
-                    {openItem.month ? ` · ${monthLabel(openItem.month)}` : ""}
-                  </span>
+              <div className={styles.fitRoom} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.fitStage}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className={styles.fitImage} src={openItem.url} alt={openItem.name} />
+                  {modalUnits.length > 1 ? (
+                    <>
+                      <button type="button" className={styles.modalPrev} onClick={() => move(-1)} aria-label="이전 컷">
+                        ‹
+                      </button>
+                      <button type="button" className={styles.modalNext} onClick={() => move(1)} aria-label="다음 컷">
+                        ›
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                <aside className={styles.fitPanel}>
+                  <div className={styles.fitPanelHead}>
+                    <strong className={styles.fitName}>{openItem.name}</strong>
+                    <span className={styles.fitMeta}>
+                      {themeName.get(openItem.themeId) ?? "테마 없음"} · {PART_LABEL[openItem.part]}
+                      {openItem.month ? ` · ${monthLabel(openItem.month)}` : ""}
+                    </span>
+                  </div>
                   {openUnit && openUnit.members.length > 1 ? (
-                    <div className={styles.modalChips} role="group" aria-label="색상 선택">
-                      {openUnit.members.map((m, i) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          className={m.id === openItem.id ? styles.modalChipOn : styles.modalChip}
-                          onClick={() => {
-                            // 모달에서 고른 색은 카드에도 남긴다 — 닫았을 때 그 색이 보이게.
-                            pickVariant(openUnit, m.id);
-                            setOpenId(m.id);
-                          }}
-                        >
-                          {m.variant || i + 1}
-                        </button>
-                      ))}
+                    <div className={styles.fitRow}>
+                      <span className={styles.fitRowLabel}>색상</span>
+                      <div className={styles.modalChips} role="group" aria-label="색상 선택">
+                        {openUnit.members.map((m, i) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={m.id === openItem.id ? styles.modalChipOn : styles.modalChip}
+                            onClick={() => {
+                              // 모달에서 고른 색은 카드에도 남긴다 — 닫았을 때 그 색이 보이게.
+                              pickVariant(openUnit, m.id);
+                              setOpenId(m.id);
+                            }}
+                          >
+                            {m.variant || i + 1}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
-                  {openItem.memo ? <p className={styles.modalMemo}>{openItem.memo}</p> : null}
-                  <div className={styles.modalActions}>
-                    <button type="button" onClick={() => copyLink(openItem.id)}>
-                      {copied ? "복사됨!" : "링크 복사"}
-                    </button>
-                    {/* 모달 열릴 때 키보드 초점을 안으로 — 간이 접근성(전체 포커스 트랩은 아님). */}
+                  {openItem.memo ? (
+                    <div className={styles.fitRow}>
+                      <span className={styles.fitRowLabel}>메모</span>
+                      <p className={styles.fitMemo}>{openItem.memo}</p>
+                    </div>
+                  ) : null}
+                  <div className={styles.fitActions}>
+                    {/* 링크 복사는 제거(sy 확정 8/12) — 딥링크(?w=)로 들어오는 길은 그대로 산다.
+                        모달 열릴 때 키보드 초점을 안으로 — 간이 접근성(전체 포커스 트랩은 아님). */}
                     <button type="button" onClick={close} autoFocus>
                       닫기
                     </button>
                   </div>
-                </div>
-                {modalUnits.length > 1 ? (
-                  <>
-                    <button type="button" className={styles.modalPrev} onClick={() => move(-1)} aria-label="이전 컷">
-                      ‹
-                    </button>
-                    <button type="button" className={styles.modalNext} onClick={() => move(1)} aria-label="다음 컷">
-                      ›
-                    </button>
-                  </>
-                ) : null}
+                </aside>
               </div>
             </div>,
             document.body,

@@ -113,6 +113,7 @@ export async function POST(request: Request, context: RouteContext) {
         order: maxOrder + 1,
         setId: "",
         variant,
+        featured: false,
       };
       const next: WardrobeState = { themes: state.themes, items: [...state.items, item] };
       await setWardrobe(streamer, next);
@@ -123,7 +124,7 @@ export async function POST(request: Request, context: RouteContext) {
     const body = await readJson<{
       action?: string;
       ids?: string[];
-      set?: Partial<Pick<WardrobeItem, "name" | "memo" | "themeId" | "part" | "month" | "hidden" | "variant">>;
+      set?: Partial<Pick<WardrobeItem, "name" | "memo" | "themeId" | "part" | "month" | "hidden" | "variant" | "featured">>;
       themeId?: string;
       orderedIds?: string[];
       themes?: Array<{ id?: string; name?: string }>;
@@ -174,6 +175,7 @@ export async function POST(request: Request, context: RouteContext) {
         if (typeof set.memo === "string") next.memo = set.memo.trim().slice(0, MAX_MEMO_LENGTH);
         // 색상 라벨은 빈 값 저장 허용(라벨 지우기) — 이름과 달리 기본값 폴백이 없다.
         if (typeof set.variant === "string") next.variant = set.variant.trim().slice(0, MAX_VARIANT_LENGTH);
+        if (typeof set.featured === "boolean") next.featured = set.featured;
         if (set.themeId !== undefined && set.themeId !== item.themeId) {
           next.themeId = set.themeId;
           moveOrder += 1;

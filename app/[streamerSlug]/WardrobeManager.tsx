@@ -631,12 +631,13 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
                 <th>적용 월</th>
                 <th>한줄메모</th>
                 <th>상태</th>
+                <th title="체크한 컷은 팬 옷장 '메인' 탭에 고정되고, 첫 화면이 메인 탭으로 열려요">메인</th>
               </tr>
             </thead>
             {grouped.map((g) => (
               <tbody key={g.theme.id}>
                 <tr>
-                  <td colSpan={9} className={styles.sectionLabel}>
+                  <td colSpan={10} className={styles.sectionLabel}>
                     {g.theme.name} ({g.items.length})
                   </td>
                 </tr>
@@ -883,6 +884,16 @@ function ItemRow({
         >
           {item.hidden ? "숨김 → 공개" : "공개 → 숨김"}
         </button>
+      </td>
+      <td>
+        {/* 메인 고정(8/12 sy 지시) — 체크한 컷이 팬 옷장 "메인" 탭에 오르고 첫 화면이 된다. */}
+        <input
+          type="checkbox"
+          checked={item.featured}
+          disabled={busy}
+          onChange={(e) => onPatch({ featured: e.target.checked })}
+          aria-label={`${item.name} 메인 고정`}
+        />
       </td>
     </tr>
   );

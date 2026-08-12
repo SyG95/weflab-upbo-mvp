@@ -32,6 +32,9 @@ export type WardrobeItem = {
   // 세트는 같은 테마·같은 파츠 안에서만 성립(서버가 검증), 2장 미만이 되면 자동 해체.
   setId: string;
   variant: string;
+  // 메인 고정(8/12 sy 지시): 스트리머가 체크한 컷은 팬 옷장의 "메인" 탭에 오르고,
+  // 고정 컷이 1장 이상이면 옷장 첫 진입이 메인 탭이 된다(0장=메인 탭 자체가 없음).
+  featured: boolean;
 };
 export type WardrobeState = { themes: WardrobeTheme[]; items: WardrobeItem[] };
 
