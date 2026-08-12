@@ -43,6 +43,7 @@ type QueueEntry = {
   status: "ready" | "uploading" | "done" | "error";
   error?: string;
   addedId?: string; // 업로드 완료 후 서버가 준 컷 id — "방금 올린 N장 세트로 묶기"에 쓴다
+  variant: string; // 업로드 시 장별 색상 라벨(8/12 sy 지시) — 전송 전엔 폼으로, 완료 후엔 patch 로 반영
 };
 
 function queueKey(): string {
@@ -141,6 +142,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           part: preset.part,
           month: preset.month,
           status: "ready" as const,
+          variant: "",
         })),
       ]);
     },
@@ -164,6 +166,8 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         formData.set("themeId", next.themeId);
         formData.set("part", next.part);
         formData.set("month", next.month);
+        // 색상은 전송 직전의 최신 입력값을 쓴다(압축하는 동안 타이핑한 값도 반영).
+        formData.set("variant", (queueRef.current.find((q) => q.key === next.key)?.variant ?? "").trim());
         const res = await fetch(`/api/s/${encodeURIComponent(slug)}/wardrobe`, {
           method: "POST",
           body: formData,
@@ -245,6 +249,12 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
   );
 
   const patchItems = (ids: string[], set: Record<string, unknown>) => postAction({ action: "patch", ids, set });
+
+  // 일괄 변경(테마/파츠/월/숨김/공개) 성공 시 선택 자동 해제 — 변경 후 체크가 남아
+  // 하나하나 꺼야 했던 불편(sy 실측 8/12). 행 단위 수정(patchItems 직접 호출)은 해제 안 함.
+  const bulkPatch = async (set: Record<string, unknown>) => {
+    if (await patchItems(selectedIds, set)) clearSelection();
+  };
 
   // ── 선택/일괄 ─────────────────────────────────────────────
 
@@ -469,6 +479,25 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img className={styles.queueThumb} src={q.preview} alt="" />
               <span className={styles.queueName}>{q.name}</span>
+              {/* 장별 색상(선택) — 올라가기 전엔 전송에 실리고, 이미 완료된 장은 바로 저장(patch)한다.
+                  여기 적고 "방금 올린 N장 세트로 묶기"를 누르면 색상 칩까지 한 번에 끝난다. */}
+              <input
+                className={styles.queueVariantInput}
+                value={q.variant}
+                placeholder="색상"
+                maxLength={20}
+                onChange={(e) =>
+                  setQueue((prev) => prev.map((p) => (p.key === q.key ? { ...p, variant: e.target.value } : p)))
+                }
+                onBlur={() => {
+                  const cur = queueRef.current.find((p) => p.key === q.key);
+                  if (cur?.status !== "done" || !cur.addedId) return;
+                  const item = state.items.find((i) => i.id === cur.addedId);
+                  const v = cur.variant.trim();
+                  if (item && v !== item.variant) void patchItems([cur.addedId], { variant: v });
+                }}
+                aria-label={`${q.name} 색상`}
+              />
               {q.status === "error" ? (
                 <>
                   <span className={`${styles.queueStatus} ${styles.queueError}`}>{q.error}</span>
@@ -506,7 +535,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           disabled={selectedIds.length === 0 || locked}
           value=""
           onChange={(e) => {
-            if (e.target.value) void patchItems(selectedIds, { themeId: e.target.value });
+            if (e.target.value) void bulkPatch({ themeId: e.target.value });
           }}
         >
           <option value="">테마 변경…</option>
@@ -520,7 +549,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           disabled={selectedIds.length === 0 || locked}
           value=""
           onChange={(e) => {
-            if (e.target.value) void patchItems(selectedIds, { part: e.target.value });
+            if (e.target.value) void bulkPatch({ part: e.target.value });
           }}
         >
           <option value="">파츠 변경…</option>
@@ -559,7 +588,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
               setMsg({ kind: "err", text: "월은 2026-08 형식으로 골라 주세요." });
               return;
             }
-            void patchItems(selectedIds, { month: v });
+            void bulkPatch({ month: v });
           }}
         >
           월 적용
@@ -567,14 +596,14 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         <button
           type="button"
           disabled={selectedIds.length === 0 || locked}
-          onClick={() => void patchItems(selectedIds, { hidden: true })}
+          onClick={() => void bulkPatch({ hidden: true })}
         >
           숨기기
         </button>
         <button
           type="button"
           disabled={selectedIds.length === 0 || locked}
-          onClick={() => void patchItems(selectedIds, { hidden: false })}
+          onClick={() => void bulkPatch({ hidden: false })}
         >
           공개
         </button>

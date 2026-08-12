@@ -89,6 +89,9 @@ export async function POST(request: Request, context: RouteContext) {
       const month = cleanMonth(formData.get("month"));
       const nameRaw = formData.get("name");
       const name = (typeof nameRaw === "string" ? nameRaw : "").trim().slice(0, MAX_NAME_LENGTH);
+      // 업로드 시 색상 지정(8/12 sy 지시) — 큐에서 장별로 적은 색상 라벨. 빈 값 허용.
+      const variantRaw = formData.get("variant");
+      const variant = (typeof variantRaw === "string" ? variantRaw : "").trim().slice(0, MAX_VARIANT_LENGTH);
 
       const url = await uploadWardrobeImage(streamerSlug, {
         bytes: await file.arrayBuffer(),
@@ -109,7 +112,7 @@ export async function POST(request: Request, context: RouteContext) {
         publishedAt: new Date().toISOString(),
         order: maxOrder + 1,
         setId: "",
-        variant: "",
+        variant,
       };
       const next: WardrobeState = { themes: state.themes, items: [...state.items, item] };
       await setWardrobe(streamer, next);

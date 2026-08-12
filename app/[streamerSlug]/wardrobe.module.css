@@ -194,25 +194,52 @@
   color: var(--muted);
 }
 
-.themeSection {
+/* 테마별 보기 = 노트 색인(책갈피) — 3방식 실험 중 sy 확정(8/12), 서랍·선택기 폐기.
+   알약(칩)과 달리 각지고, 선택된 색인은 아래 종이(패널)와 한 몸 */
+.themeIndexRow {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 6px;
+  align-items: flex-end;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 0 10px;
+  margin-bottom: -1px; /* 선택 색인의 아래 테두리가 패널 윗선을 덮게 */
 }
 
-.themeTitle {
-  font-size: 0.95rem;
-  color: var(--ink);
-  border-bottom: 1px solid var(--paper-line);
-  padding-bottom: 6px;
-}
-
-.themeCount {
-  font-size: 0.75rem;
+.themeIndexTab,
+.themeIndexTabOn {
+  padding: 7px 14px 6px;
+  border: 1px solid var(--paper-line);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
   color: var(--muted);
-  margin-left: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
 }
+
+.themeIndexTabOn {
+  background: var(--paper);
+  color: var(--stamp);
+  border-color: var(--stamp);
+  position: relative;
+  /* 패널과 이어 붙이기: 패널 윗선 위로 1px 내려앉아 경계를 지운다 */
+  box-shadow: 0 1px 0 0 var(--paper);
+}
+
+.themeIndexCount {
+  margin-left: 5px;
+  font-size: 0.7rem;
+  opacity: 0.75;
+}
+
+.themePanel {
+  border: 1px solid var(--stamp);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--paper);
+}
+
 
 .empty {
   padding: 28px 12px;
@@ -453,6 +480,23 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 큐 장별 색상 입력(업로드 시 색상 지정) — 좁은 폭 고정, 이름을 밀어내지 않게 */
+.queueVariantInput {
+  width: 76px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+
+.queueVariantInput:focus {
+  outline: none;
+  border-color: var(--stamp);
 }
 
 .bulkBar {

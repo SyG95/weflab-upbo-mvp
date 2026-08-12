@@ -49,10 +49,15 @@ function monthLabel(month: string): string {
   return y && m ? `${y}. ${m}` : month;
 }
 
-// 최신 등록순(월별 보기 고정 정렬). publishedAt 이 없으면 뒤로.
-function byNewest(a: WardrobeItem, b: WardrobeItem): number {
-  return (b.publishedAt ? Date.parse(b.publishedAt) : 0) - (a.publishedAt ? Date.parse(a.publishedAt) : 0);
+// 월별 보기 정렬 = 등록순(먼저 올린 컷이 앞). 옛 규칙은 최신순이었으나 "헤어A 먼저 올리면
+// A가 뒤로 밀린다"는 실측 불편으로 sy 가 번복 확정(8/12). publishedAt 없으면 맨 뒤.
+function byUploadOrder(a: WardrobeItem, b: WardrobeItem): number {
+  return (
+    (a.publishedAt ? Date.parse(a.publishedAt) : Number.POSITIVE_INFINITY) -
+    (b.publishedAt ? Date.parse(b.publishedAt) : Number.POSITIVE_INFINITY)
+  );
 }
+
 
 export default function WardrobeFanView({
   slug,
@@ -163,9 +168,9 @@ export default function WardrobeFanView({
   const monthItems = useMemo(
     () =>
       selectedMonth
-        ? filtered.filter((i) => i.month === selectedMonth).sort(byNewest)
-        : // month 값이 빈(손상) 항목만 있는 경우 — 말없이 빈 격자를 보여주지 않고 전체를 최신순으로.
-          [...filtered].sort(byNewest),
+        ? filtered.filter((i) => i.month === selectedMonth).sort(byUploadOrder)
+        : // month 값이 빈(손상) 항목만 있는 경우 — 말없이 빈 격자를 보여주지 않고 전체를 등록순으로.
+          [...filtered].sort(byUploadOrder),
     [filtered, selectedMonth],
   );
   const monthUnits = useMemo(() => toUnits(monthItems), [monthItems, toUnits]);
@@ -182,11 +187,18 @@ export default function WardrobeFanView({
     [themes, filtered, toUnits],
   );
 
+  // 테마별 보기 = 노트 색인(책갈피) 방식 — 3방식 실험 중 sy 확정(8/12): 색인 채택, 서랍·선택기 폐기.
+  // 테마가 1개뿐이면 색인 줄을 숨기고 격자만(11명 중 대부분이 단일 테마 — 군더더기 금지).
+  const [themeSel, setThemeSel] = useState<string>(""); // 현재 색인(빈 값=첫 테마)
+  const activeThemeSection =
+    themeSections.find((s) => s.theme.id === themeSel) ?? themeSections[0] ?? null;
+
   // 크게보기 모달. ←→ 넘김 = 카드(세트) 단위, 세트 안 색 전환은 칩으로.
+  // 테마별 보기는 지금 열린 색인(테마) 안에서만 넘긴다.
   // 딥링크 컷이 현재 필터에 없으면 그 컷(세트면 세트 통째)만 단독으로 연다.
   const displayUnits = useMemo(
-    () => (view === "month" ? monthUnits : themeSections.flatMap((s) => s.units)),
-    [view, monthUnits, themeSections],
+    () => (view === "month" ? monthUnits : activeThemeSection?.units ?? []),
+    [view, monthUnits, activeThemeSection],
   );
   // 딥링크(?w=)는 초기 상태로 바로 연다(effect 내 setState 는 lint 위반 + 불필요한 재렌더).
   const [openId, setOpenId] = useState<string | null>(() =>
@@ -315,7 +327,7 @@ export default function WardrobeFanView({
             </button>
           </div>
         ) : (
-          <span className={styles.themeViewLabel}>테마별 전체 보기</span>
+          <span className={styles.themeViewLabel}>테마별 보기</span>
         )}
         <div className={styles.chipRow}>
           <button type="button" className={view === "month" ? styles.chipOn : styles.chip} onClick={() => setView("month")}>
@@ -343,16 +355,34 @@ export default function WardrobeFanView({
         </p>
       ) : view === "month" ? (
         <div className={styles.grid}>{monthUnits.map(card)}</div>
+      ) : themeSections.length <= 1 ? (
+        // 테마가 1개(또는 0개)면 색인 줄 없이 격자만 — 단일 테마 스트리머에게 군더더기 금지.
+        <div className={styles.grid}>{activeThemeSection?.units.map(card)}</div>
       ) : (
-        themeSections.map((s) => (
-          <section key={s.theme.id} className={styles.themeSection}>
-            <h3 className={styles.themeTitle}>
-              {/* 세트=1로 센다(카드 수) — 색상 3벌짜리 세트가 3으로 잡히면 체감과 어긋난다 */}
-              {s.theme.name} <span className={styles.themeCount}>{s.units.length}</span>
-            </h3>
-            <div className={styles.grid}>{s.units.map(card)}</div>
-          </section>
-        ))
+        <>
+          {/* 노트 색인(책갈피) — 선택된 색인이 아래 종이(패널)와 한 몸으로 붙는다 */}
+          <div className={styles.themeIndexRow} role="tablist" aria-label="테마 색인">
+            {themeSections.map((s) => {
+              const on = s.theme.id === activeThemeSection?.theme.id;
+              return (
+                <button
+                  key={s.theme.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  className={on ? styles.themeIndexTabOn : styles.themeIndexTab}
+                  onClick={() => setThemeSel(s.theme.id)}
+                >
+                  {s.theme.name}
+                  <span className={styles.themeIndexCount}>{s.units.length}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className={styles.themePanel}>
+            <div className={styles.grid}>{activeThemeSection?.units.map(card)}</div>
+          </div>
+        </>
       )}
 
       {/* 딥링크(?w=)로 첫 렌더부터 모달이 열리면 서버에서도 이 분기를 타는데, SSR 에는
