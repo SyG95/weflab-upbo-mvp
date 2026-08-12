@@ -268,6 +268,8 @@ export type StreamerState = {
   fanRevealEnabled?: boolean;
   // 팬 화면 계정ID 숨기기(스트리머별). 켜면 팬 화면 표에서 계정ID 열이 통째로 빠진다. 기본 off.
   fanIdHidden?: boolean;
+  // 팬 쿠폰 탭 이름(스트리머별, 표시 전용). ""=기본 "쿠폰". 예: 꾸폰, 마일리지.
+  couponTabLabel?: string;
   // 팬 화면 블록 배치(포스터/확률표/공지 × 슬롯). 없으면 DEFAULT_FAN_LAYOUT(기존 배치).
   fanLayout?: FanLayout;
   // 관리자 상위탭 순서/이름 + 섹션 접힘 커스텀(스트리머별 오버레이). 없으면 코드 기본.

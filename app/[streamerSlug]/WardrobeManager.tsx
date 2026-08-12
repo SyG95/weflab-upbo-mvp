@@ -42,6 +42,7 @@ type QueueEntry = {
   month: string;
   status: "ready" | "uploading" | "done" | "error";
   error?: string;
+  addedId?: string; // 업로드 완료 후 서버가 준 컷 id — "방금 올린 N장 세트로 묶기"에 쓴다
 };
 
 function queueKey(): string {
@@ -52,6 +53,22 @@ function queueKey(): string {
 
 function baseName(fileName: string): string {
   return fileName.replace(/\.[^./\\]+$/, "").trim() || "이름 없음";
+}
+
+// 여러 이름의 공통 앞부분(문자 단위) — 세트 이름 기본값과 색상 라벨 추정에 쓴다.
+// 예: ["리본키니화이트","리본키니블랙"] → "리본키니" / 나머지("화이트","블랙")가 색상 후보.
+function commonRawPrefix(names: string[]): string {
+  if (names.length === 0) return "";
+  let prefix = names[0];
+  for (const name of names.slice(1)) {
+    while (prefix && !name.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  }
+  return prefix;
+}
+
+// 접두사·라벨 경계의 구분 문자(공백/언더바/하이픈/점) 정리.
+function trimEdge(value: string): string {
+  return value.replace(/^[\s_\-–·.]+/, "").replace(/[\s_\-–·.]+$/, "").trim();
 }
 
 export default function WardrobeManager({ slug, initial }: { slug: string; initial: WardrobeState | null }) {
@@ -156,7 +173,8 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           throw new Error(data?.error || "업로드 실패");
         }
         setState(data.wardrobe as WardrobeState);
-        setQueue((prev) => prev.map((q) => (q.key === next.key ? { ...q, status: "done" } : q)));
+        const addedId = typeof data.addedId === "string" ? data.addedId : undefined;
+        setQueue((prev) => prev.map((q) => (q.key === next.key ? { ...q, status: "done", addedId } : q)));
       } catch (error) {
         setQueue((prev) =>
           prev.map((q) =>
@@ -172,11 +190,14 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 
   const retryEntry = (key: string) =>
     setQueue((prev) => prev.map((q) => (q.key === key ? { ...q, status: "ready", error: undefined } : q)));
-  const clearFinished = () =>
-    setQueue((prev) => {
-      for (const q of prev) if (q.status === "done") URL.revokeObjectURL(q.preview);
-      return prev.filter((q) => q.status !== "done");
-    });
+  const clearFinished = useCallback(
+    () =>
+      setQueue((prev) => {
+        for (const q of prev) if (q.status === "done") URL.revokeObjectURL(q.preview);
+        return prev.filter((q) => q.status !== "done");
+      }),
+    [],
+  );
 
   // 화면이 떠 있는 동안 Ctrl+V 로 이미지 붙여넣기(디스코드·카톡에서 복사한 짤).
   useEffect(() => {
@@ -234,7 +255,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
       else next.add(id);
       return next;
     });
-  const clearSelection = () => setSelected(new Set());
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
   const selectedIds = useMemo(() => [...selected].filter((id) => state.items.some((i) => i.id === id)), [selected, state.items]);
 
   const bulkDelete = async () => {
@@ -242,6 +263,58 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
     if (!window.confirm(`선택한 ${selectedIds.length}장을 삭제할까요? 삭제하면 되돌릴 수 없어요. (지난 의상은 삭제 대신 숨기기를 추천)`)) return;
     if (await postAction({ action: "delete", ids: selectedIds })) clearSelection();
   };
+
+  // ── 색상 세트 ─────────────────────────────────────────────
+  // 세트별 장수(이름 옆 "세트" 배지 툴팁·해체 판단은 서버 몫, 여기선 표시용).
+  const setSizes = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const i of state.items) if (i.setId) map.set(i.setId, (map.get(i.setId) ?? 0) + 1);
+    return map;
+  }, [state.items]);
+
+  // 색상 세트로 묶기 — 세트 이름 하나를 물어 전원에 통일하고, 기존 이름의 공통 접두사를
+  // 뺀 나머지를 색상 라벨로 미리 채워 준다("리본키니화이트" → 세트 "리본키니" + 색상 "화이트").
+  const groupByIds = useCallback(
+    async (ids: string[], clearQueueAfter = false) => {
+      const members = state.items.filter((i) => ids.includes(i.id));
+      if (members.length < 2) {
+        setMsg({ kind: "err", text: "색상 세트는 2장 이상 골라야 묶을 수 있어요." });
+        return;
+      }
+      const rawPrefix = commonRawPrefix(members.map((m) => m.name));
+      const defaultName = trimEdge(rawPrefix) || members[0].name;
+      const input = window.prompt("세트 이름 — 묶인 컷 전부 이 이름으로 통일돼요", defaultName);
+      if (input === null) return;
+      const variants: Record<string, string> = {};
+      for (const m of members) {
+        variants[m.id] = m.variant || trimEdge(m.name.slice(rawPrefix.length));
+      }
+      if (await postAction({ action: "group", ids, name: input.trim() || defaultName, variants })) {
+        clearSelection();
+        if (clearQueueAfter) clearFinished();
+        setMsg({ kind: "ok", text: "세트로 묶었어요 — 색상 칸이 비어 있으면 각 컷의 색 이름을 적어 주세요." });
+      }
+    },
+    // clearSelection/clearFinished 는 매 렌더 새로 만들어지는 함수 — deps 에 넣어 린트 규칙을
+    // 지키되, 내부는 setState 만 쓰므로 재생성 비용 외 부작용은 없다.
+    [state.items, postAction, clearSelection, clearFinished],
+  );
+
+  const ungroupSelected = async () => {
+    if (selectedIds.length === 0) return;
+    if (await postAction({ action: "ungroup", ids: selectedIds })) clearSelection();
+  };
+
+  // 방금 올린 묶음(업로드 큐에서 완료된 컷들) — 큐가 다 끝났을 때만 원클릭 묶기를 권한다.
+  const justUploadedIds = useMemo(
+    () =>
+      uploading
+        ? []
+        : queue
+            .filter((q) => q.status === "done" && q.addedId && state.items.some((i) => i.id === q.addedId))
+            .map((q) => q.addedId as string),
+    [queue, uploading, state.items],
+  );
 
   // ── 항목 표(테마별 그룹) + 드래그 순서 ─────────────────────
 
@@ -411,7 +484,12 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
             </div>
           ))}
           {queue.some((q) => q.status === "done") ? (
-            <div>
+            <div className={styles.queueFootRow}>
+              {justUploadedIds.length >= 2 ? (
+                <button type="button" className={styles.rowBtn} onClick={() => void groupByIds(justUploadedIds, true)}>
+                  방금 올린 {justUploadedIds.length}장 색상 세트로 묶기
+                </button>
+              ) : null}
               <button type="button" className={styles.rowBtn} onClick={clearFinished}>
                 완료된 항목 지우기
               </button>
@@ -448,6 +526,21 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           <option value="">파츠 변경…</option>
           {partOptions}
         </select>
+        <button
+          type="button"
+          disabled={selectedIds.length < 2 || locked}
+          title="색상만 다른 같은 의상을 한 카드로 묶어요 (같은 테마·같은 파츠끼리만)"
+          onClick={() => void groupByIds(selectedIds)}
+        >
+          색상 세트 묶기
+        </button>
+        <button
+          type="button"
+          disabled={selectedIds.length === 0 || locked}
+          onClick={() => void ungroupSelected()}
+        >
+          세트 풀기
+        </button>
         {/* month 미지원 브라우저(파이어폭스·사파리 데스크톱)는 text 폴백이라 타이핑 중 저장 금지 —
             값을 고른 뒤 "월 적용" 버튼으로만 저장한다. 형식 검사는 서버와 같은 규칙. */}
         <input
@@ -504,6 +597,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
                 <th aria-label="선택" />
                 <th>컷</th>
                 <th>이름</th>
+                <th>색상</th>
                 <th>파츠</th>
                 <th>적용 월</th>
                 <th>한줄메모</th>
@@ -513,7 +607,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
             {grouped.map((g) => (
               <tbody key={g.theme.id}>
                 <tr>
-                  <td colSpan={8} className={styles.sectionLabel}>
+                  <td colSpan={9} className={styles.sectionLabel}>
                     {g.theme.name} ({g.items.length})
                   </td>
                 </tr>
@@ -522,6 +616,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
                     key={item.id}
                     item={item}
                     themes={state.themes}
+                    setSize={item.setId ? setSizes.get(item.setId) ?? 0 : 0}
                     selected={selected.has(item.id)}
                     busy={locked}
                     dragOver={dragOverItemId === item.id}
@@ -607,6 +702,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 function ItemRow({
   item,
   themes,
+  setSize,
   selected,
   busy,
   dragOver,
@@ -619,6 +715,7 @@ function ItemRow({
 }: {
   item: WardrobeItem;
   themes: WardrobeState["themes"];
+  setSize: number; // 이 컷이 속한 색상 세트의 장수(세트 없으면 0) — 배지 표시용
   selected: boolean;
   busy: boolean;
   dragOver: boolean;
@@ -667,21 +764,43 @@ function ItemRow({
         <img className={styles.rowThumb} src={item.url} alt="" loading="lazy" />
       </td>
       <td>
-        {/* key 에 값 포함 — 일괄 변경 등 외부 갱신 시 defaultValue 를 다시 반영(리마운트). */}
+        <div className={styles.nameCell}>
+          {setSize > 0 ? (
+            <span className={styles.setBadge} title={`색상 세트 (${setSize}벌)`}>
+              세트
+            </span>
+          ) : null}
+          {/* key 에 값 포함 — 일괄 변경 등 외부 갱신 시 defaultValue 를 다시 반영(리마운트). */}
+          <input
+            key={`name-${item.name}`}
+            className={styles.inlineInput}
+            defaultValue={item.name}
+            disabled={busy}
+            onBlur={(e) => {
+              // 빈 이름은 서버가 기존 이름을 유지하므로, 입력창도 되돌려 화면·상태 불일치를 막는다.
+              if (!e.target.value.trim()) {
+                e.target.value = item.name;
+                return;
+              }
+              saveText("name", e.target.value, item.name);
+            }}
+            aria-label="이름"
+          />
+        </div>
+      </td>
+      <td>
+        {/* 색상 라벨 — 세트 안 칩 이름. 빈 값 저장 허용(지우기)이라 name 과 달리 되돌리지 않는다. */}
         <input
-          key={`name-${item.name}`}
-          className={styles.inlineInput}
-          defaultValue={item.name}
+          key={`variant-${item.variant}`}
+          className={styles.variantInput}
+          defaultValue={item.variant}
+          placeholder="색상"
           disabled={busy}
           onBlur={(e) => {
-            // 빈 이름은 서버가 기존 이름을 유지하므로, 입력창도 되돌려 화면·상태 불일치를 막는다.
-            if (!e.target.value.trim()) {
-              e.target.value = item.name;
-              return;
-            }
-            saveText("name", e.target.value, item.name);
+            const v = e.target.value.trim();
+            if (v !== item.variant) onPatch({ variant: v });
           }}
-          aria-label="이름"
+          aria-label="색상(세트 칩 라벨)"
         />
       </td>
       <td>

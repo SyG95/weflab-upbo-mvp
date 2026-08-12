@@ -3192,3 +3192,36 @@
   background: var(--paper);
   color: var(--ink);
 }
+
+/* "내 업보 확인" 제목 옆 — 옷장 독립 화면(/slug/wardrobe)으로 가는 상시 노출 문.
+   제목 바로 옆에 소폭 간격(14px)으로 붙이고(오른쪽 끝 정렬 아님, sy 확정 8/12),
+   아래 검색줄과는 행 자체의 여백으로 띄워 겹치지 않게 한다. */
+.finderTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.finderTitleRow h2 {
+  margin: 0;
+}
+
+.wardrobeDoor {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border: 2px solid var(--stamp);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--stamp);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.wardrobeDoor:hover {
+  background: var(--stamp);
+  color: var(--on-accent);
+}

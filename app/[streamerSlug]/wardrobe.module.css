@@ -91,10 +91,29 @@
   gap: 12px;
 }
 
+/* 독립 화면(넓은 판): 카드 최소 폭을 키워 컷이 크게 — 탭(좁은 판)은 기존 그대로 */
+.fanWrapWide .grid {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 16px;
+}
+
+.fanWrapWide .cardName {
+  font-size: 0.95rem;
+}
+
+/* 카드가 div 로 바뀜(색상 칩도 버튼이라 중첩 버튼 회피) — 클릭 본체는 .cardMain */
 .card {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
+}
+
+.cardMain {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
   padding: 0;
   border: none;
   background: none;
@@ -119,8 +138,32 @@
   display: block;
 }
 
-.card:hover .thumb {
+.cardMain:hover .thumb {
   border-color: var(--stamp);
+}
+
+/* 색상 세트 칩(카드 아래) — 파츠 칩보다 한 단계 작게, 줄바꿈 허용(모바일 가로 넘침 금지) */
+.variantChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.variantChip,
+.variantChipOn {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.variantChipOn {
+  background: var(--stamp);
+  border-color: var(--stamp);
+  color: var(--on-accent);
 }
 
 .newBadge {
@@ -234,6 +277,32 @@
   font-size: 0.82rem;
   opacity: 0.9;
   max-width: 46ch;
+}
+
+/* 모달 안 색상 칩 — 어두운 배경 위라 테마 변수 대신 모달 버튼 문법(흰 고스트)을 따른다 */
+.modalChips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.modalChip,
+.modalChipOn {
+  padding: 3px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.modalChipOn {
+  background: #fff;
+  border-color: #fff;
+  color: #111;
 }
 
 .modalActions {
@@ -380,6 +449,12 @@
   cursor: pointer;
 }
 
+.queueFootRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .bulkBar {
   display: flex;
   align-items: center;
@@ -487,6 +562,31 @@
   border-color: var(--stamp);
   background: var(--surface);
   outline: none;
+}
+
+/* 이름 칸: 세트 배지 + 이름 입력을 한 줄에 */
+.nameCell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 130px;
+}
+
+.setBadge {
+  padding: 1px 6px;
+  border: 1px solid var(--stamp);
+  border-radius: 4px;
+  color: var(--stamp);
+  font-size: 0.65rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 색상 라벨 입력 — 이름보다 짧은 고정 폭(표가 이미 가로 스크롤 안전) */
+.variantInput {
+  composes: inlineInput;
+  min-width: 56px;
+  width: 76px;
 }
 
 .rowSelect {

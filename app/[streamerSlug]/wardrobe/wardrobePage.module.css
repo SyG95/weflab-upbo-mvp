@@ -1,0 +1,122 @@
+/* 옷장 독립 화면 — 업보시트 탭이 아니라 옷장이 주인공인 전용 페이지.
+   후원집계(donations.module.css)의 페이지 껍데기 문법(괘선 종이 + 테마 fx)을 그대로 잇되,
+   판을 넓게(1240px) 잡아 컷이 크게 보이게 한다. 팬 공개 화면(인증 없음). */
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 20px 64px;
+  /* 팬 시트(.page)와 동일: 테마 래퍼에서 color 재선언 (다크 테마 상속 버그 방지) */
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent,
+    transparent 27px,
+    var(--paper-line) 27px,
+    var(--paper-line) 28px
+  );
+}
+
+.shell {
+  width: 100%;
+  max-width: 1240px;
+  display: grid;
+  gap: 16px;
+}
+
+/* 살아있는 배경(테마 fx): 페이지 배경을 비워 캔버스가 비치게 하고 내용은 위층으로 */
+.page[data-fx] {
+  background-color: transparent;
+  background-image: none;
+}
+
+.page[data-fx] .shell {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 머리말 ---------- */
+
+.cover {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.kicker {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--stamp);
+}
+
+.title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  color: var(--ink);
+  font-family: var(--font-display, inherit);
+}
+
+.backLink {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 8px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  background: var(--surface);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.backLink:hover {
+  color: var(--ink);
+  border-color: var(--stamp);
+}
+
+/* ---------- 검색(업보시트 검색과 분리된 옷장 전용) ---------- */
+
+.searchRow {
+  display: flex;
+}
+
+.searchRow input {
+  width: 100%;
+  max-width: 420px;
+  padding: 10px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.searchRow input:focus {
+  outline: none;
+  border-color: var(--stamp);
+}
+
+/* 유리 카드(테마 glass): 검색창만 가볍게 — 컷 이미지가 주인공이라 연출은 여기까지 */
+.page[data-glass] .searchRow input {
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  backdrop-filter: blur(16px) saturate(1.25);
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+}
+
+.empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+  border: 1px dashed var(--paper-line);
+  border-radius: 14px;
+  background: var(--surface);
+}

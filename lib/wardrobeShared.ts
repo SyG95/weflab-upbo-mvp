@@ -27,6 +27,11 @@ export type WardrobeItem = {
   // 지난 의상을 다시 켜도 NEW 로 둔갑하지 않는다.
   publishedAt: string | null;
   order: number; // 테마 안 수동 순서(테마별 보기 전용, 월별 보기는 최신 등록순 고정)
+  // 색상 세트(8/12 sy 지시): 같은 setId = 같은 의상의 색상 변형 묶음("" = 세트 없음).
+  // 팬 화면에서 한 카드로 접히고 variant 가 색상 칩 라벨이 된다(예: "화이트").
+  // 세트는 같은 테마·같은 파츠 안에서만 성립(서버가 검증), 2장 미만이 되면 자동 해체.
+  setId: string;
+  variant: string;
 };
 export type WardrobeState = { themes: WardrobeTheme[]; items: WardrobeItem[] };
 

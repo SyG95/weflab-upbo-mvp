@@ -24,6 +24,7 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_NAME_LENGTH = 60;
 const MAX_MEMO_LENGTH = 200;
 const MAX_THEME_NAME_LENGTH = 30;
+const MAX_VARIANT_LENGTH = 20;
 const MAX_THEMES = 20;
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -50,6 +51,14 @@ function cleanPart(value: unknown): WardrobePart {
 async function loadState(slug: string): Promise<WardrobeState> {
   const state = await getWardrobeBySlug(slug);
   return state ?? { themes: [], items: [] };
+}
+
+// 멤버가 1장만 남은 색상 세트는 자동 해체 — 삭제·풀기·부분 재묶기 뒤 "혼자 남은 세트"가
+// 팬 화면에 칩 없는 세트로 어정쩡하게 남지 않게 한다.
+function dissolveLonelySets(items: WardrobeItem[]): WardrobeItem[] {
+  const counts = new Map<string, number>();
+  for (const i of items) if (i.setId) counts.set(i.setId, (counts.get(i.setId) ?? 0) + 1);
+  return items.map((i) => (i.setId && (counts.get(i.setId) ?? 0) < 2 ? { ...i, setId: "" } : i));
 }
 
 // 옷장(의상) 탭 편집. 관리자 로그인 세션(스트리머별 비밀번호)으로 인증한다.
@@ -99,6 +108,8 @@ export async function POST(request: Request, context: RouteContext) {
         hidden: false,
         publishedAt: new Date().toISOString(),
         order: maxOrder + 1,
+        setId: "",
+        variant: "",
       };
       const next: WardrobeState = { themes: state.themes, items: [...state.items, item] };
       await setWardrobe(streamer, next);
@@ -109,10 +120,12 @@ export async function POST(request: Request, context: RouteContext) {
     const body = await readJson<{
       action?: string;
       ids?: string[];
-      set?: Partial<Pick<WardrobeItem, "name" | "memo" | "themeId" | "part" | "month" | "hidden">>;
+      set?: Partial<Pick<WardrobeItem, "name" | "memo" | "themeId" | "part" | "month" | "hidden" | "variant">>;
       themeId?: string;
       orderedIds?: string[];
       themes?: Array<{ id?: string; name?: string }>;
+      name?: string;
+      variants?: Record<string, string>;
     }>(request);
     const action = body.action ?? "";
 
@@ -122,6 +135,23 @@ export async function POST(request: Request, context: RouteContext) {
       const set = body.set ?? {};
       if (set.themeId !== undefined && !state.themes.some((t) => t.id === set.themeId)) {
         badRequest("없는 테마예요 — 새로고침 후 다시 시도해 주세요");
+      }
+      // 세트에 묶인 컷의 테마 이동은 세트 전체가 함께일 때만 — 부분 이동은 "세트=같은 테마"
+      // 불변식을 깨므로 명시적으로 막는다(조용한 자동 해체보다 안내가 낫다).
+      if (set.themeId !== undefined) {
+        const bySet = new Map<string, { total: number; moving: number }>();
+        for (const item of state.items) {
+          if (!item.setId) continue;
+          const c = bySet.get(item.setId) ?? { total: 0, moving: 0 };
+          c.total += 1;
+          if (ids.has(item.id)) c.moving += 1;
+          bySet.set(item.setId, c);
+        }
+        for (const c of bySet.values()) {
+          if (c.moving > 0 && c.moving < c.total) {
+            badRequest("색상 세트로 묶인 컷은 세트 전체를 함께 옮기거나, 먼저 세트를 풀어 주세요");
+          }
+        }
       }
       const part = set.part !== undefined ? cleanPart(set.part) : undefined;
       const month = set.month !== undefined ? cleanMonth(set.month) : undefined;
@@ -139,6 +169,8 @@ export async function POST(request: Request, context: RouteContext) {
         const next = { ...item };
         if (typeof set.name === "string") next.name = set.name.trim().slice(0, MAX_NAME_LENGTH) || item.name;
         if (typeof set.memo === "string") next.memo = set.memo.trim().slice(0, MAX_MEMO_LENGTH);
+        // 색상 라벨은 빈 값 저장 허용(라벨 지우기) — 이름과 달리 기본값 폴백이 없다.
+        if (typeof set.variant === "string") next.variant = set.variant.trim().slice(0, MAX_VARIANT_LENGTH);
         if (set.themeId !== undefined && set.themeId !== item.themeId) {
           next.themeId = set.themeId;
           moveOrder += 1;
@@ -172,11 +204,54 @@ export async function POST(request: Request, context: RouteContext) {
       return jsonOk({ ok: true, wardrobe: next });
     }
 
+    if (action === "group") {
+      // ── 색상 세트 묶기: 같은 의상의 색상 변형들을 한 세트로(이름 통일 + 컷별 색상 라벨) ──
+      const ids = [...new Set((body.ids ?? []).filter((id): id is string => typeof id === "string"))];
+      if (ids.length < 2) badRequest("색상 세트는 2장 이상 골라야 묶을 수 있어요");
+      const members = state.items.filter((i) => ids.includes(i.id));
+      if (members.length !== ids.length) badRequest("없는 컷이 있어요 — 새로고침 후 다시 시도해 주세요");
+      if (new Set(members.map((i) => i.part)).size > 1) badRequest("파츠가 다른 컷은 한 세트로 묶을 수 없어요");
+      if (new Set(members.map((i) => i.themeId)).size > 1) {
+        badRequest("테마가 다른 컷은 먼저 같은 테마로 옮긴 뒤 묶어 주세요");
+      }
+      // 선택 안에 기존 세트가 정확히 하나면 그 세트에 흡수(세트에 컷 추가), 아니면 새 세트.
+      const existing = [...new Set(members.map((i) => i.setId).filter(Boolean))];
+      const setId = existing.length === 1 ? existing[0] : `set-${randomBytes(6).toString("hex")}`;
+      const setName = typeof body.name === "string" ? body.name.trim().slice(0, MAX_NAME_LENGTH) : "";
+      const variants = body.variants && typeof body.variants === "object" ? body.variants : {};
+      let items = state.items.map((item) => {
+        if (!ids.includes(item.id)) return item;
+        const v = (variants as Record<string, unknown>)[item.id];
+        return {
+          ...item,
+          setId,
+          name: setName || item.name,
+          variant: typeof v === "string" ? v.trim().slice(0, MAX_VARIANT_LENGTH) : item.variant,
+        };
+      });
+      // 두 세트에서 일부씩 꺼내 새로 묶으면 원래 세트에 1장씩 남을 수 있다 — 자동 해체.
+      items = dissolveLonelySets(items);
+      const next: WardrobeState = { themes: state.themes, items };
+      await setWardrobe(streamer, next);
+      return jsonOk({ ok: true, wardrobe: next });
+    }
+
+    if (action === "ungroup") {
+      const ids = new Set((body.ids ?? []).filter((id) => typeof id === "string"));
+      if (ids.size === 0) badRequest("세트에서 풀 컷을 골라 주세요");
+      const items = dissolveLonelySets(
+        state.items.map((i) => (ids.has(i.id) ? { ...i, setId: "" } : i)),
+      );
+      const next: WardrobeState = { themes: state.themes, items };
+      await setWardrobe(streamer, next);
+      return jsonOk({ ok: true, wardrobe: next });
+    }
+
     if (action === "delete") {
       const ids = new Set((body.ids ?? []).filter((id) => typeof id === "string"));
       if (ids.size === 0) badRequest("삭제할 항목이 없어요");
       const removed = state.items.filter((i) => ids.has(i.id));
-      const items = state.items.filter((i) => !ids.has(i.id));
+      const items = dissolveLonelySets(state.items.filter((i) => !ids.has(i.id)));
       const next: WardrobeState = { themes: state.themes, items };
       await setWardrobe(streamer, next);
       // 저장 성공 후 파일 정리(모범 노력 — 실패해도 삭제는 이미 반영됨).

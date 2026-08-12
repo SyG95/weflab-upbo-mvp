@@ -51,7 +51,7 @@ import {
 } from "../../lib/upboSupabase";
 import CouponManager from "./CouponManager";
 import FanCouponTable from "./FanCouponTable";
-import WardrobeFanView from "./WardrobeFanView";
+import { redirect } from "next/navigation";
 import WardrobeManager from "./WardrobeManager";
 import { groupFanCoupons, filterFanCoupons } from "../../lib/fanCouponView";
 import { resolveTheme } from "../../lib/themes";
@@ -67,6 +67,7 @@ import RouletteConfigManager, {
 } from "./RouletteConfigManager";
 import FanDeliveryModeForm from "./FanDeliveryModeForm";
 import FanIdPrivacyForm from "./FanIdPrivacyForm";
+import CouponTabLabelForm from "./CouponTabLabelForm";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
@@ -99,7 +100,7 @@ type PageProps = {
   }>;
 };
 
-type FanTab = "ledger" | "history" | "coupon" | "wardrobe";
+type FanTab = "ledger" | "history" | "coupon";
 type AdminTab = "delivery" | "items" | "history" | "coupon" | "manual" | "roulettes" | "reveal" | "promo" | "wardrobe" | "signature" | "settings";
 
 // 시스템 시간(끝에 Z 붙은 UTC ISO)을 Asia/Seoul 기준으로 변환해 "YYYY-MM-DD HH:mm KST"로 표시.
@@ -137,7 +138,6 @@ function tabHref(slug: string, tab: FanTab, q: string): string {
   const params = new URLSearchParams();
   if (tab === "history") params.set("tab", "history");
   if (tab === "coupon") params.set("tab", "coupon");
-  if (tab === "wardrobe") params.set("tab", "wardrobe");
   if (q) params.set("q", q);
   const qs = params.toString();
   return `/${slug}${qs ? `?${qs}` : ""}`;
@@ -287,9 +287,14 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w } = await searchParams;
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
-  // URL이 요청한 팬 탭. 쿠폰·옷장 탭은 스트리머가 내용을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
-  const requestedFanTab: FanTab =
-    tab === "history" ? "history" : tab === "coupon" ? "coupon" : tab === "wardrobe" ? "wardrobe" : "ledger";
+  // 옛 옷장 탭 주소(?tab=wardrobe[&w=컷id]) → 독립 화면으로 이동(8/12 탭 제거).
+  // 스트리머가 공지에 붙여둔 컷 딥링크가 죽지 않게 w 를 그대로 넘긴다.
+  if (!isAdminMode && tab === "wardrobe") {
+    const wq = typeof w === "string" && w ? `?w=${encodeURIComponent(w)}` : "";
+    redirect(`/${encodeURIComponent(streamerSlug)}/wardrobe${wq}`);
+  }
+  // URL이 요청한 팬 탭. 쿠폰 탭은 스트리머가 내용을 등록했을 때만 열리므로 아래에서 한 번 더 거른다.
+  const requestedFanTab: FanTab = tab === "history" ? "history" : tab === "coupon" ? "coupon" : "ledger";
   const activeAdminTab: AdminTab =
     atab === "settings"
       ? "settings"
@@ -359,15 +364,9 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       : fanWardrobe;
   // 쿠폰 탭은 관리자에서 쿠폰 종류를 등록한 스트리머에게만 보여준다(안 쓰는 스트리머 = 탭 자체가 없음).
   const showCouponTab = fanCouponItems.length > 0;
-  // 옷장 탭도 같은 규칙: 공개 컷이 1장 이상일 때만 탭 노출(0장=탭 자체가 없음).
+  // 옷장은 독립 화면(/slug/wardrobe)이 본진 — 여기선 "옷장 문(버튼)" 노출 판단에만 쓴다(공개 컷 1장 이상).
   const wardrobeVisibleItems = (wardrobe?.items ?? []).filter((i) => !i.hidden);
-  const showWardrobeTab = wardrobeVisibleItems.length > 0;
-  const activeTab: FanTab =
-    requestedFanTab === "coupon" && !showCouponTab
-      ? "ledger"
-      : requestedFanTab === "wardrobe" && !showWardrobeTab
-        ? "ledger"
-        : requestedFanTab;
+  const activeTab: FanTab = requestedFanTab === "coupon" && !showCouponTab ? "ledger" : requestedFanTab;
   // 팬 "쿠폰" 탭 데이터(잔액). 쿠폰 탭을 실제로 열었을 때만 읽는다(다른 탭은 회귀 0).
   // 실패는 null — 화면에서 "빈 장부"와 다른 오류 문구로 구분해 보여준다.
   const fanCoupons: CouponBalance[] | null =
@@ -511,10 +510,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 excludedNames={fanCouponExcluded}
                 coupons={fanCoupons}
                 showCouponTab={showCouponTab}
-                wardrobe={wardrobe}
                 wardrobeItems={wardrobeVisibleItems}
-                showWardrobeTab={showWardrobeTab}
-                wardrobeItemId={w ?? null}
               />
             </div>
             {rightBlocks.length > 0 ? (
@@ -535,10 +531,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             excludedNames={fanCouponExcluded}
             coupons={fanCoupons}
             showCouponTab={showCouponTab}
-            wardrobe={wardrobe}
             wardrobeItems={wardrobeVisibleItems}
-            showWardrobeTab={showWardrobeTab}
-            wardrobeItemId={w ?? null}
           />
         )}
       </div>
@@ -1178,10 +1171,7 @@ function FanView({
   excludedNames,
   coupons,
   showCouponTab,
-  wardrobe,
   wardrobeItems,
-  showWardrobeTab,
-  wardrobeItemId,
 }: {
   state: StreamerState;
   slug: string;
@@ -1193,14 +1183,14 @@ function FanView({
   excludedNames: Set<string>;
   coupons: CouponBalance[] | null;
   showCouponTab: boolean;
-  wardrobe: WardrobeState | null;
+  // 옷장 공개 컷(버튼 노출 판단 + 건수 표시용) — 옷장 화면 자체는 /slug/wardrobe 독립 페이지.
   wardrobeItems: WardrobeState["items"];
-  showWardrobeTab: boolean;
-  wardrobeItemId: string | null;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
   const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
     computeFanRouletteTabs(state, rouletteIndex, excludedNames);
+  // 쿠폰 탭 이름(스트리머별, 표시 전용) — 기본 "쿠폰", 꾸폰·마일리지처럼 바꿔 부를 수 있다.
+  const couponLabel = state.couponTabLabel?.trim() || "쿠폰";
   // 쿠폰 탭: 잔액을 시청자 단위로 묶고 검색어로 거른다(0=사용완료도 표시). null=조회 실패(빈 장부와 구분).
   const couponLoadFailed = activeTab === "coupon" && coupons === null;
   const couponViewersAll = activeTab === "coupon" && coupons ? groupFanCoupons(coupons) : [];
@@ -1239,20 +1229,26 @@ function FanView({
           : searchQuery
             ? `${couponViewersShown.length} / ${couponViewersAll.length}명`
             : `${couponViewersAll.length}명`
-        : activeTab === "wardrobe"
-          ? `${wardrobeItems.length}컷`
-          : searchQuery
-            ? `${history.length} / ${allEntries.length}건`
-            : `${allEntries.length}건`;
+        : searchQuery
+          ? `${history.length} / ${allEntries.length}건`
+          : `${allEntries.length}건`;
 
   return (
     <>
       <section className={styles.finder} aria-labelledby="finder-title">
-        <h2 id="finder-title">내 업보 확인</h2>
+        <div className={styles.finderTitleRow}>
+          <h2 id="finder-title">내 업보 확인</h2>
+          {/* 옷장 문 — 본진은 독립 화면(/slug/wardrobe), 팬 탭에서는 옷장을 뺐다(sy 확정 8/12).
+              공개 컷 1장 이상일 때만 노출(안 쓰는 스트리머 화면엔 아무 변화 없음). */}
+          {wardrobeItems.length > 0 ? (
+            <a className={styles.wardrobeDoor} href={`/${encodeURIComponent(slug)}/wardrobe`}>
+              옷장
+            </a>
+          ) : null}
+        </div>
         <form className={styles.searchRow} action={`/${slug}`} method="get">
           {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
           {activeTab === "coupon" ? <input type="hidden" name="tab" value="coupon" /> : null}
-          {activeTab === "wardrobe" ? <input type="hidden" name="tab" value="wardrobe" /> : null}
           {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
             <input type="hidden" name="rtab" value={rtabKey} />
           ) : null}
@@ -1296,15 +1292,7 @@ function FanView({
                 className={activeTab === "coupon" ? styles.tabActiveLink : styles.tabLink}
                 href={tabHref(slug, "coupon", searchQuery)}
               >
-                쿠폰
-              </a>
-            ) : null}
-            {showWardrobeTab ? (
-              <a
-                className={activeTab === "wardrobe" ? styles.tabActiveLink : styles.tabLink}
-                href={tabHref(slug, "wardrobe", searchQuery)}
-              >
-                옷장
+                {couponLabel}
               </a>
             ) : null}
           </div>
@@ -1366,14 +1354,7 @@ function FanView({
             searchQuery={searchQuery}
             loadFailed={couponLoadFailed}
             hideIds={state.fanIdHidden === true}
-          />
-        ) : activeTab === "wardrobe" ? (
-          <WardrobeFanView
-            slug={slug}
-            themes={wardrobe?.themes ?? []}
-            items={wardrobeItems}
-            searchQuery={searchQuery}
-            initialItemId={wardrobeItemId}
+            label={couponLabel}
           />
         ) : (
           <HistoryTable rows={history} searchQuery={searchQuery} hideIds={state.fanIdHidden === true} />
@@ -2117,6 +2098,15 @@ function AdminPanel({
               지금 그대로입니다. 이 스트리머에게만 적용됩니다.
             </p>
             <FanIdPrivacyForm slug={state.slug} initial={state.fanIdHidden === true} />
+          </CollapsibleCard>
+
+          {/* 팬 쿠폰 탭 이름 */}
+          <CollapsibleCard sectionKey="coupon-tab-label" title="쿠폰 탭 이름">
+            <p className={styles.fieldHint}>
+              팬 화면의 쿠폰 탭·표에 보일 이름을 정해요 (예: 꾸폰, 마일리지). 표시만 바뀌고
+              장부·집계는 그대로예요. 비우고 저장하면 기본 &quot;쿠폰&quot;으로 돌아갑니다.
+            </p>
+            <CouponTabLabelForm slug={state.slug} initial={state.couponTabLabel ?? ""} />
           </CollapsibleCard>
 
           {/* 최신 결과 반영 요약 */}

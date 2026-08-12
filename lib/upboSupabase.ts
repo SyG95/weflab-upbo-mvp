@@ -831,6 +831,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "product_colors_updated",
   "fan_reveal_updated",
   "fan_id_privacy_updated",
+  "coupon_tab_label_updated",
   "fan_layout_updated",
   "admin_ui_prefs_updated",
   "fan_tab_labels_updated",
@@ -877,7 +878,7 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
@@ -886,6 +887,7 @@ export async function getStreamerState(slug: string) {
     productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
     fanRevealEnabledForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
     fanIdHiddenForStreamer(streamer.id, overlayPick("fan_id_privacy_updated")),
+    couponTabLabelForStreamer(streamer.id, overlayPick("coupon_tab_label_updated")),
     fanLayoutForStreamer(streamer.id, overlayPick("fan_layout_updated")),
     adminUiPrefsForStreamer(streamer.id, overlayPick("admin_ui_prefs_updated")),
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
@@ -931,6 +933,7 @@ export async function getStreamerState(slug: string) {
     productColors,
     fanRevealEnabled,
     fanIdHidden,
+    couponTabLabel,
     fanLayout,
     adminUiPrefs,
     fanTabLabels,
@@ -1269,6 +1272,8 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     hidden: raw.hidden === true,
     publishedAt: typeof raw.publishedAt === "string" ? raw.publishedAt : null,
     order: Number.isFinite(raw.order) ? Number(raw.order) : 0,
+    setId: typeof raw.setId === "string" ? raw.setId : "",
+    variant: typeof raw.variant === "string" ? raw.variant : "",
   };
 }
 
@@ -3041,6 +3046,38 @@ export async function setFanIdHidden(streamer: StreamerRow, enabled: boolean): P
       action: "fan_id_privacy_updated",
       actor: "operator",
       payload: { enabled: clean },
+    }),
+  });
+  return clean;
+}
+
+// ---------- 팬 쿠폰 탭 이름 (스트리머별 선택) ----------
+// 기본 "쿠폰". 스트리머가 자기 화폐 이름(꾸폰·마일리지 등)으로 바꾸면 팬 화면의 탭·표 머리글·
+// 안내문이 따라간다. 표시 전용 — 데이터·집계·관리자 화면은 그대로 "쿠폰"이다.
+// audit_logs 오버레이 최신 1건, 스키마 변경 없음. 빈 값 저장 = 기본으로 되돌리기.
+export const COUPON_TAB_LABEL_MAX = 10;
+
+export function cleanCouponTabLabel(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, COUPON_TAB_LABEL_MAX) : "";
+}
+
+export async function couponTabLabelForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<string> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { label?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.coupon_tab_label_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return cleanCouponTabLabel(rows[0]?.payload?.label);
+}
+
+export async function setCouponTabLabel(streamer: StreamerRow, label: unknown): Promise<string> {
+  const clean = cleanCouponTabLabel(label);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "coupon_tab_label_updated",
+      actor: "operator",
+      payload: { label: clean },
     }),
   });
   return clean;

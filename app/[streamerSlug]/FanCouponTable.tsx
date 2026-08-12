@@ -6,23 +6,33 @@
 import styles from "./page.module.css";
 import type { FanCouponViewer } from "../../lib/fanCouponView";
 
+// 받침 유무에 따라 이/가를 고른다("쿠폰이", "마일리지가") — 탭 이름이 스트리머별이라 필요.
+function withSubjectParticle(word: string): string {
+  const code = word.charCodeAt(word.length - 1);
+  const hasJong = code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0;
+  return `${word}${hasJong ? "이" : "가"}`;
+}
+
 export default function FanCouponTable({
   viewers,
   searchQuery,
   loadFailed,
   hideIds,
+  label = "쿠폰",
 }: {
   viewers: FanCouponViewer[];
   searchQuery: string;
   loadFailed?: boolean;
   // 팬 화면 계정ID 숨기기(스트리머별 설정). 열 자체를 뺀다. 검색은 원문 기준 그대로.
   hideIds?: boolean;
+  // 쿠폰 탭 이름(스트리머별, 표시 전용) — 머리글·안내문이 함께 따라간다.
+  label?: string;
 }) {
   if (loadFailed) {
     return (
       <div className={styles.emptyState}>
         <span className={`${styles.stamp} ${styles.stampGhost}`}>오류</span>
-        <p>쿠폰 정보를 못 불러왔어요. 새로고침해 보고, 계속 그러면 스트리머에게 알려 주세요.</p>
+        <p>{label} 정보를 못 불러왔어요. 새로고침해 보고, 계속 그러면 스트리머에게 알려 주세요.</p>
       </div>
     );
   }
@@ -33,7 +43,7 @@ export default function FanCouponTable({
         <p>
           {searchQuery
             ? `'${searchQuery}'에 해당하는 시청자가 없어요.`
-            : "아직 쌓인 쿠폰이 없어요."}
+            : `아직 쌓인 ${withSubjectParticle(label)} 없어요.`}
         </p>
       </div>
     );
@@ -46,7 +56,7 @@ export default function FanCouponTable({
           <tr>
             <th className={styles.nameCol}>닉네임</th>
             {hideIds ? null : <th>계정ID</th>}
-            <th>쿠폰</th>
+            <th>{label}</th>
             <th className={styles.countCol}>합계</th>
           </tr>
         </thead>
