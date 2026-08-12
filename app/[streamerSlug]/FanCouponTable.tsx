@@ -64,7 +64,17 @@ export default function FanCouponTable({
           {/* 숨김 모드에선 key(계정ID 기반)도 페이지 소스(RSC 페이로드)에 실리므로 행 번호로 대체한다. */}
           {viewers.map((v, i) => (
             <tr key={hideIds ? `r${i}` : v.key}>
-              <td className={styles.nameCell}>{v.nickname}</td>
+              {/* 닉네임 빈 기록 표시 규칙(sy 2026-08-12, page.tsx FanNameLabel과 동일):
+                  계정ID 승격, 단 숨김 시트에선 ID 미노출 자리표시만. */}
+              <td className={styles.nameCell}>
+                {v.nickname.trim() ? (
+                  v.nickname
+                ) : !hideIds && v.accountId ? (
+                  <span className={styles.nameFallbackId}>{v.accountId}</span>
+                ) : (
+                  <span className={styles.nameFallbackNone}>닉네임 미등록</span>
+                )}
+              </td>
               {hideIds ? null : <td className={styles.idCell}>{v.accountId}</td>}
               <td>
                 <div className={styles.upboCell}>

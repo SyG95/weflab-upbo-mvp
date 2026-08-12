@@ -1364,6 +1364,16 @@ function FanView({
   );
 }
 
+// 닉네임이 빈 기록(수집 원본에 닉네임 없음 — 리루리 23행 실측)의 표시 규칙(sy 2026-08-12):
+// 계정ID를 이름 자리에 승격해 "빈 줄"로 보이지 않게 한다. 단 계정ID 숨김 시트에선
+// ID를 어떤 자리에도 노출하지 않고 자리표시 문구만 보여준다(8/10 프라이버시 결정 유지).
+function FanNameLabel({ nickname, fanId, hideIds }: { nickname: string; fanId: string; hideIds?: boolean }) {
+  const name = (nickname ?? "").trim();
+  if (name) return <>{name}</>;
+  if (!hideIds && fanId) return <span className={styles.nameFallbackId}>{fanId}</span>;
+  return <span className={styles.nameFallbackNone}>닉네임 미등록</span>;
+}
+
 function LedgerTable({
   viewers,
   searchQuery,
@@ -1407,7 +1417,9 @@ function LedgerTable({
           {/* 숨김 모드에선 key(계정ID 기반)도 페이지 소스(RSC 페이로드)에 실리므로 행 번호로 대체한다. */}
           {viewers.map((v, i) => (
             <tr key={hideIds ? `r${i}` : v.key}>
-              <td className={styles.nameCell}>{v.fanNickname}</td>
+              <td className={styles.nameCell}>
+                <FanNameLabel nickname={v.fanNickname} fanId={v.fanId} hideIds={hideIds} />
+              </td>
               {hideIds ? null : <td className={styles.idCell}>{v.fanId}</td>}
               <td>
                 <div className={styles.upboCell}>
@@ -1514,7 +1526,9 @@ function HistoryTable({
         <tbody>
           {rows.map((e) => (
             <tr key={e.id}>
-              <td className={styles.nameCell}>{e.fanNickname}</td>
+              <td className={styles.nameCell}>
+                <FanNameLabel nickname={e.fanNickname} fanId={e.fanId} hideIds={hideIds} />
+              </td>
               {hideIds ? null : <td className={styles.idCell}>{e.fanId}</td>}
               <td>
                 {/* 확률 열은 표기하지 않는다(sy 확정 2026-07-07). 정가는 배지+이름(접두어 제거)으로 표기. */}

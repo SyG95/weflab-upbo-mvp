@@ -604,7 +604,8 @@
 
 .table th {
   color: var(--muted);
-  font-size: 11px;
+  /* 판독 하한(2026-08-12): 11px는 모바일에서 판독 미달 — 12px로 */
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
@@ -665,8 +666,21 @@
 .summaryLine {
   margin: 14px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  /* 판독 하한(2026-08-12): 12px 저대비가 접근성 기준 미달이라 13px + 테마별 --muted 대비 교정과 세트 */
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+/* 닉네임 빈 기록의 이름 자리 폴백 — ID 승격(모노)과 자리표시 문구 */
+.nameFallbackId {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.nameFallbackNone {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .tableWrap {
@@ -682,7 +696,8 @@
 .idCell {
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  /* 판독 하한(2026-08-12): 12→13px */
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -761,7 +776,8 @@
   border-radius: 9px;
   background: var(--paper);
   border: 1px solid var(--paper-line);
-  font-size: 12px;
+  /* 판독 하한(2026-08-12): 팬이 실제로 읽는 본문이라 12→13px */
+  font-size: 13px;
   /* 시트 글씨체를 고른 시트만 상품 칩까지 통일(--font-chip 주입). 미설정 = 기존 본문 고딕 그대로. */
   font-family: var(--font-chip, var(--font-base));
   white-space: nowrap;
