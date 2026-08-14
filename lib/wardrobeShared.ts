@@ -38,7 +38,9 @@ export type WardrobeItem = {
 };
 export type WardrobeState = { themes: WardrobeTheme[]; items: WardrobeItem[] };
 
-export const WARDROBE_MAX_ITEMS = 100; // 숨김 포함 총 보관 상한(저장소 보호 기준)
+// 숨김 포함 총 보관 상한. 100→500 상향(8/14 sy 확정 — 꾸야 이틀 만에 100 도달 실측).
+// 500장 실측 추정 ~350MB/스트리머(1200px webp 평균 722KB). 다음 대비=목록용 썸네일 분리(전송량 1/10).
+export const WARDROBE_MAX_ITEMS = 500;
 
 // 기본 테마는 제공하지 않는다(sy 확정 8/4: 예시 전부 제외) — 판만 주고,
 // 테마 이름·구성은 스트리머가 처음부터 직접 만든다.
