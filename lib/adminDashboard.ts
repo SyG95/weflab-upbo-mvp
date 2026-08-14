@@ -17,6 +17,8 @@ import {
   type AdminStreamerIndexRow,
 } from "@/lib/upboSupabase";
 import {
+  applyThresholdOverrides,
+  cleanThresholdOverrides,
   normalizeResultCapture,
   reconcileResults,
   type ModifierState,
@@ -232,7 +234,15 @@ function buildLiveDashboard(
       continue;
     }
     const catalog = catalogByVersion.get(batch.catalogVersion);
-    const catalogItems = ((catalog?.items ?? []) as NormalizedCatalogItem[]) || [];
+    // 판정 당시 배치 summary 에 스냅샷된 룰렛표별 기준확률 예외를 그대로 얹어 재현한다.
+    // 스냅샷이 없는(예외 미사용) 배치는 원본 그대로 = 기존 재현과 100% 동일.
+    const batchThresholdOverrides = cleanThresholdOverrides(
+      ((batch.summary ?? {}) as { thresholdOverrides?: unknown }).thresholdOverrides,
+    );
+    const catalogItems = applyThresholdOverrides(
+      ((catalog?.items ?? []) as NormalizedCatalogItem[]) || [],
+      batchThresholdOverrides,
+    );
     const normalized = normalizeResultCapture(raw);
     const recon = reconcileResults({
       catalogItems,

@@ -1,5 +1,5 @@
 import styles from "./page.module.css";
-import ThresholdForm from "./ThresholdForm";
+import ThresholdForm, { type ThresholdGroupRow } from "./ThresholdForm";
 import CatalogManager from "./CatalogManager";
 import DeliveryManager from "./DeliveryManager";
 import ItemEventManager from "./ItemEventManager";
@@ -581,6 +581,8 @@ type RouletteIndex = {
   // 관리자 "룰렛 관리" 탭 데이터
   managerGroups: GroupForManager[];
   managerRoulettes: NamedRouletteForManager[];
+  // 기준 확률 설정용 — 예외 키(금액대 라벨) 단위로 묶은 확률표 목록.
+  thresholdGroups: ThresholdGroupRow[];
   // 확률 공개 하위탭 토글 목록(보관 제외한 모든 룰렛).
   revealRoulettes: RevealRoulette[];
   // 관리자 "팬 탭 이름" 섹션 데이터 — 팬 탭 순서와 같은 목록(보관 제외) + 지문/현재 이름.
@@ -755,6 +757,29 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     }))
     .filter((r) => r.groupIndices.length > 0);
 
+  // 기준 확률 설정용 — 예외 키(금액대 라벨) 단위로 묶은 확률표 목록.
+  // 라벨이 비어 있는 그룹은 예외 키를 만들 수 없어 제외한다(기본 기준으로만 판정됨).
+  const thresholdGroups: ThresholdGroupRow[] = (() => {
+    const byLabel = new Map<string, ThresholdGroupRow>();
+    for (const g of managerGroups) {
+      if (!g.amountLabel) continue;
+      const cur = byLabel.get(g.amountLabel);
+      if (cur) {
+        cur.itemCount += g.itemCount;
+        if (cur.sampleItems.length < 2) {
+          cur.sampleItems = [...cur.sampleItems, ...g.sampleItems].slice(0, 2);
+        }
+      } else {
+        byLabel.set(g.amountLabel, {
+          label: g.amountLabel,
+          itemCount: g.itemCount,
+          sampleItems: g.sampleItems.slice(0, 2),
+        });
+      }
+    }
+    return [...byLabel.values()];
+  })();
+
   // 확률 공개 토글 목록: rid별 멤버 그룹 지문(위에서 계산한 groupsByRid) + 현재 공개 여부.
   const revealRoulettes: RevealRoulette[] = Object.keys(itemsByRid)
     .filter((rid) => itemsByRid[rid].size > 0 && !(rouletteArchivedById[rid] ?? false))
@@ -777,6 +802,7 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     fanTabSequence,
     managerGroups,
     managerRoulettes,
+    thresholdGroups,
     revealRoulettes,
     fanTabManager,
     fixedTabLabel,
@@ -1624,7 +1650,7 @@ function AdminPanel({
   // ── 룰렛(교환 후보) 계산 ──────────────────────────────────────────────
   // 룰렛 클러스터링·이름/보관 매칭은 팬 화면과 공용이라 buildRouletteIndex 로 뽑아 쓴다.
   const rouletteIndex = buildRouletteIndex(state);
-  const { rouletteByGroupIndex, rouletteLabelById, rouletteArchivedById, managerGroups, managerRoulettes, revealRoulettes, fanTabManager } =
+  const { rouletteByGroupIndex, rouletteLabelById, rouletteArchivedById, managerGroups, managerRoulettes, thresholdGroups, revealRoulettes, fanTabManager } =
     rouletteIndex;
   // 팬 탭 이름 관리 목록 = 카탈로그 전체가 아니라 "팬 화면에 실제 탭으로 구분 표시되는 룰렛"만(sy 2026-07-08).
   // 팬 화면과 동일 계산(computeFanRouletteTabs)을 공유해 목록이 항상 팬 탭과 일치한다.
@@ -1998,7 +2024,12 @@ function AdminPanel({
 
               {/* 기준 확률 설정 */}
               <CollapsibleCard sectionKey="threshold" title="기준 확률 설정">
-                <ThresholdForm slug={state.slug} current={state.settings?.thresholdPercent ?? 0} />
+                <ThresholdForm
+                  slug={state.slug}
+                  current={state.settings?.thresholdPercent ?? 0}
+                  groups={thresholdGroups}
+                  overrides={state.thresholdOverrides ?? {}}
+                />
               </CollapsibleCard>
 
               {/* 두배권/특수 보상 확인 */}

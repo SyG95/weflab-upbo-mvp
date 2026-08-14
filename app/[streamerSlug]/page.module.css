@@ -1202,6 +1202,65 @@
   display: block;
 }
 
+/* 룰렛표(금액대)별 기준확률 예외 목록 */
+.thresholdGroupList {
+  margin-top: 14px;
+  border-top: 1px dashed var(--paper-line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thresholdGroupRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1.5px solid var(--paper-line);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.thresholdGroupInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.thresholdGroupLabel {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.thresholdGroupMeta {
+  font-size: 12px;
+  color: var(--ink-soft, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thresholdGroupWarn {
+  font-size: 12px;
+  color: #b4552f;
+}
+
+.thresholdGroupRow input {
+  width: 90px;
+  height: 38px;
+  flex-shrink: 0;
+  border: 2px solid var(--paper-line);
+  border-radius: 10px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+}
+
 .thresholdRow {
   display: flex;
   gap: 8px;

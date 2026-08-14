@@ -28,6 +28,9 @@ export type NormalizedCatalogItem = {
   probability: number;
   sortOrder: number;
   raw: unknown;
+  // 룰렛표(금액대)별 기준확률 예외(applyThresholdOverrides)가 얹는 선택 필드.
+  // 값이 없으면 전역 기준확률로 판정한다 — 오버레이 미사용 시 기존 판정과 100% 동일.
+  thresholdOverridePercent?: number | null;
 };
 
 export type NormalizedCatalog = {
@@ -357,6 +360,38 @@ export function findCatalogMatch(
   return sameName[0];
 }
 
+// ---------- 룰렛표(금액대)별 기준확률 오버레이 — 순수 계산 ----------
+// "이 금액대 룰렛표는 기준 몇 %" 예외만 확률표 상품에 얹는다. 키 = 금액대 라벨
+// (amountRangeLabel, 예: "33", "330"). 룰렛 묶기(roulette_config, 팬 표시용)와는
+// 완전히 별개인 판정 전용 설정이다 — 팬 화면 정리가 장부 판정을 건드리지 못하게 분리.
+// 오버라이드가 비어 있으면 원본 배열을 그대로 반환한다(=기존 판정과 100% 동일 보장).
+
+export type ThresholdOverrides = Record<string, number>;
+
+export function cleanThresholdOverrides(raw: unknown): ThresholdOverrides {
+  const cleaned: ThresholdOverrides = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return cleaned;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const label = cleanText(key);
+    const pct = Number(value);
+    if (!label || label.length > 40) continue;
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) continue;
+    cleaned[label] = pct;
+  }
+  return cleaned;
+}
+
+export function applyThresholdOverrides(
+  items: NormalizedCatalogItem[],
+  overrides: ThresholdOverrides,
+): NormalizedCatalogItem[] {
+  if (Object.keys(overrides).length === 0) return items;
+  return items.map((item) => {
+    const pct = overrides[item.amountRangeLabel];
+    return pct === undefined ? item : { ...item, thresholdOverridePercent: pct };
+  });
+}
+
 export function reconcileResults({
   catalogItems = [],
   results = [],
@@ -394,6 +429,8 @@ export function reconcileResults({
   const decisions: ReconcileDecision[] = results.map((result) => {
     const sourceKey = result.sourceKey || createSourceKey(result);
     const catalogItem = findCatalogMatch(result, catalogItems);
+    // 상품이 속한 룰렛표에 기준확률 예외가 얹혀 있으면 그 값으로, 없으면 전역 기준으로 판정.
+    const itemThreshold = toNumber(catalogItem?.thresholdOverridePercent) ?? threshold;
     const ruleKey = catalogItem ? specialRuleKeyForItem(catalogItem) : "";
     const modifierRule = ruleKey ? confirmedRuleMap.get(ruleKey) || null : null;
     let decision: ReconcileDecision["decision"];
@@ -411,13 +448,13 @@ export function reconcileResults({
       reason = `confirmed modifier ${modifierRule.ruleType}`;
       summary.ignoreCount += 1;
       summary.modifierCount += 1;
-    } else if (catalogItem.probability <= threshold) {
+    } else if (catalogItem.probability <= itemThreshold) {
       decision = "record";
-      reason = `catalog probability ${catalogItem.probability}% <= threshold ${threshold}%`;
+      reason = `catalog probability ${catalogItem.probability}% <= threshold ${itemThreshold}%`;
       summary.recordCount += 1;
     } else {
       decision = "ignore";
-      reason = `catalog probability ${catalogItem.probability}% > threshold ${threshold}%`;
+      reason = `catalog probability ${catalogItem.probability}% > threshold ${itemThreshold}%`;
       summary.ignoreCount += 1;
     }
     return {

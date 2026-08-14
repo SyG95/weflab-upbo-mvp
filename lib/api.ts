@@ -236,6 +236,9 @@ export type StreamerState = {
   // 룰렛확률표 사용여부 오버라이드(버전별 최신 1건). 키 "g0"=그룹, "g0-i2"=상품.
   // 없거나 비면 위플랩 캡처 값을 그대로 따른다.
   catalogUsageByVersion?: Record<number, Record<string, boolean>>;
+  // 룰렛표(금액대)별 기준확률 예외. 키 = 금액대 라벨(예: "33"), 값 = 기준 %.
+  // 없거나 비면 전역 thresholdPercent 하나로 판정한다(기존과 동일).
+  thresholdOverrides?: Record<string, number>;
   // 정가기록(시그니처 후원) — 스트리머가 지정한 시그니처 갯수와 기록별 수기 메모.
   signatureCounts?: number[];
   // 시그니처 갯수별 표시·유형 정보(구성품·이미지·유형·기간). 팬 레일·관리자 편집·기간 판정에 쓴다.

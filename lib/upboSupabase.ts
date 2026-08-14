@@ -21,14 +21,17 @@ import {
   type ViewerHolding,
 } from "./api";
 import {
+  applyThresholdOverrides,
   buildSpecialItemRuleCandidates,
   buildUpboEntry,
   cleanText,
+  cleanThresholdOverrides,
   normalizeCatalogCapture,
   normalizeName,
   normalizeResultCapture,
   reconcileResults,
   toNumber,
+  type ThresholdOverrides,
   type CatalogCapture,
   type ModifierState,
   type NormalizedCatalogItem,
@@ -837,6 +840,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "fan_tab_labels_updated",
   "weflab_link_updated",
   "sheet_font_updated",
+  "threshold_overrides_updated",
 ] as const;
 
 type OverlayLatestRow = { action: string; payload: Record<string, unknown> | null; created_at: string };
@@ -878,7 +882,7 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, fanLayout, adminUiPrefs, fanTabLabels, weflabLink] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
@@ -892,6 +896,7 @@ export async function getStreamerState(slug: string) {
     adminUiPrefsForStreamer(streamer.id, overlayPick("admin_ui_prefs_updated")),
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
     weflabLinkForStreamer(streamer.id, overlayPick("weflab_link_updated")),
+    latestThresholdOverrides(streamer.id, overlayPick("threshold_overrides_updated")),
   ]);
   const sheetFontKey = sheetFontKeyFromOverlay(overlayPick("sheet_font_updated"));
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
@@ -937,6 +942,7 @@ export async function getStreamerState(slug: string) {
     fanLayout,
     adminUiPrefs,
     fanTabLabels,
+    thresholdOverrides,
     weflabLink,
     sheetFontKey,
   };
@@ -1940,6 +1946,43 @@ async function resolveCatalogUsageForCatalog(
     usageByVersion,
     groupsByVersion,
   );
+}
+
+// ---------- 룰렛표(금액대)별 기준확률 오버레이 — 저장/조회 ----------
+// 전역 기준확률(streamers.threshold_percent)은 그대로 두고, "이 금액대 룰렛표는 기준 몇 %"
+// 예외만 audit_logs 에 얹는다(action=threshold_overrides_updated, append-only 최신 1건이 현재값).
+// 키 = 금액대 라벨(amountRangeLabel) — catalogVersion 에 안 묶여서 새 캡처가 와도 같은
+// 금액대면 자동 유지된다. 순수 계산(clean/apply)은 upboCore 에 있다(판정 계약과 한몸).
+
+export async function latestThresholdOverrides(
+  streamerId: string,
+  prefetched?: OverlayPrefetch,
+): Promise<ThresholdOverrides> {
+  const rows =
+    prefetched ??
+    (await supabaseFetch<Array<{ payload: { overrides?: unknown } | null }>>(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.threshold_overrides_updated&select=payload&order=created_at.desc&limit=1`,
+    ));
+  return cleanThresholdOverrides((rows[0]?.payload as { overrides?: unknown } | null)?.overrides);
+}
+
+// 저장(append-only 새 스냅샷, 전체 교체 방식 — catalog_usage 와 동일 규약).
+export async function setThresholdOverrides(
+  streamer: StreamerRow,
+  overrides: unknown,
+): Promise<ThresholdOverrides> {
+  const cleaned = cleanThresholdOverrides(overrides);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "threshold_overrides_updated",
+      actor: "sheet_admin",
+      payload: { overrides: cleaned },
+    }),
+  });
+  return cleaned;
 }
 
 // ---------- 시트 관리자 비밀번호(스트리머별) ----------
@@ -3382,8 +3425,15 @@ export async function setItemAliases(streamer: StreamerRow, aliases: ItemAliasMa
 
 async function rejudgeContextForStreamer(streamer: StreamerRow) {
   const catalog = await latestCatalog(streamer.id);
-  const catalogUsage = await resolveCatalogUsageForCatalog(streamer.id, catalog);
-  const catalogItems = applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage);
+  const [catalogUsage, thresholdOverrides] = await Promise.all([
+    resolveCatalogUsageForCatalog(streamer.id, catalog),
+    latestThresholdOverrides(streamer.id),
+  ]);
+  // 사용여부 + 룰렛표별 기준확률 오버레이 적용(둘 다 없으면 원본 그대로 = 기존 판정과 동일).
+  const catalogItems = applyThresholdOverrides(
+    applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage),
+    thresholdOverrides,
+  );
   const aliases = await itemAliasesForStreamer(streamer.id);
   const [rawRows, knownSourceKeys, specialItemRules] = await Promise.all([
     supabaseFetch<Array<{ batch_id: string | null; raw: Json }>>(
@@ -3502,9 +3552,15 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
 export async function previewResultsForStreamer(streamer: StreamerRow, capture: ResultCapture) {
   const catalog = await latestCatalog(streamer.id);
   const normalized = normalizeResultCapture(capture);
-  // 사용여부 오버레이 적용(오버라이드 없으면 원본 그대로 = 기존 판정과 동일).
-  const catalogUsage = await resolveCatalogUsageForCatalog(streamer.id, catalog);
-  const catalogItems = applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage);
+  // 사용여부 + 룰렛표별 기준확률 오버레이 적용(오버라이드 없으면 원본 그대로 = 기존 판정과 동일).
+  const [catalogUsage, previewThresholdOverrides] = await Promise.all([
+    resolveCatalogUsageForCatalog(streamer.id, catalog),
+    latestThresholdOverrides(streamer.id),
+  ]);
+  const catalogItems = applyThresholdOverrides(
+    applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage),
+    previewThresholdOverrides,
+  );
   const knownSourceKeys = await existingSourceKeys(streamer.id);
   const preview = reconcileResults({
     catalogItems,
@@ -3540,9 +3596,15 @@ export async function previewResultsForStreamer(streamer: StreamerRow, capture: 
 export async function applyResultsForStreamer(streamer: StreamerRow, capture: ResultCapture) {
   const catalog = await latestCatalog(streamer.id);
   const normalized = normalizeResultCapture(capture);
-  // 사용여부 오버레이 적용(오버라이드 없으면 원본 그대로 = 기존 판정과 동일).
-  const catalogUsage = await resolveCatalogUsageForCatalog(streamer.id, catalog);
-  const catalogItems = applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage);
+  // 사용여부 + 룰렛표별 기준확률 오버레이 적용(오버라이드 없으면 원본 그대로 = 기존 판정과 동일).
+  const [catalogUsage, thresholdOverrides] = await Promise.all([
+    resolveCatalogUsageForCatalog(streamer.id, catalog),
+    latestThresholdOverrides(streamer.id),
+  ]);
+  const catalogItems = applyThresholdOverrides(
+    applyCatalogUsage((catalog.items as NormalizedCatalogItem[]) || [], catalogUsage),
+    thresholdOverrides,
+  );
   const currentModifierState = await latestModifierState(streamer.id);
   const knownSourceKeys = await existingSourceKeys(streamer.id);
   const preview = reconcileResults({
@@ -3592,7 +3654,12 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
       threshold_percent: Number(streamer.threshold_percent ?? 2),
       source_url: normalized.sourceUrl,
       captured_at: normalized.capturedAt,
-      summary: preview.summary,
+      // 판정에 쓴 룰렛표별 기준확률 예외를 배치에 스냅샷으로 남긴다(검증실 재현·추적용).
+      // 예외가 없으면 기존과 완전히 같은 summary 만 저장된다.
+      summary:
+        Object.keys(thresholdOverrides).length > 0
+          ? { ...preview.summary, thresholdOverrides }
+          : preview.summary,
       entry_count: recordDecisions.length,
     }),
   });
