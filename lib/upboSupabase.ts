@@ -26,6 +26,7 @@ import {
   buildUpboEntry,
   cleanText,
   cleanThresholdOverrides,
+  cleanSheetTitle,
   normalizeCatalogCapture,
   normalizeName,
   normalizeResultCapture,
@@ -835,6 +836,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "fan_reveal_updated",
   "fan_id_privacy_updated",
   "coupon_tab_label_updated",
+  "sheet_title_updated",
   "fan_layout_updated",
   "admin_ui_prefs_updated",
   "fan_tab_labels_updated",
@@ -882,7 +884,7 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, sheetTitle, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
@@ -892,6 +894,7 @@ export async function getStreamerState(slug: string) {
     fanRevealEnabledForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
     fanIdHiddenForStreamer(streamer.id, overlayPick("fan_id_privacy_updated")),
     couponTabLabelForStreamer(streamer.id, overlayPick("coupon_tab_label_updated")),
+    sheetTitleForStreamer(streamer.id, overlayPick("sheet_title_updated")),
     fanLayoutForStreamer(streamer.id, overlayPick("fan_layout_updated")),
     adminUiPrefsForStreamer(streamer.id, overlayPick("admin_ui_prefs_updated")),
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
@@ -939,6 +942,7 @@ export async function getStreamerState(slug: string) {
     fanRevealEnabled,
     fanIdHidden,
     couponTabLabel,
+    sheetTitle,
     fanLayout,
     adminUiPrefs,
     fanTabLabels,
@@ -3122,6 +3126,32 @@ export async function setCouponTabLabel(streamer: StreamerRow, label: unknown): 
       action: "coupon_tab_label_updated",
       actor: "operator",
       payload: { label: clean },
+    }),
+  });
+  return clean;
+}
+
+// ---------- 팬 대문 제목(스트리머별, 표시 전용) ----------
+// 대문 h1 "{이름} 업보시트" 를 스트리머가 직접 정한 문구(이모지 포함)로 바꾼다. 표시 전용 —
+// 브라우저 탭 제목·관리자 화면·옷장/후원 페이지·데이터는 그대로. audit_logs 오버레이 최신 1건,
+// 스키마 변경 없음. 빈 값 저장 = 기본("{이름} 업보시트")으로 되돌리기. 정리 규칙은 upboCore.cleanSheetTitle.
+export async function sheetTitleForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<string> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { title?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.sheet_title_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return cleanSheetTitle(rows[0]?.payload?.title);
+}
+
+export async function setSheetTitle(streamer: StreamerRow, title: unknown): Promise<string> {
+  const clean = cleanSheetTitle(title);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "sheet_title_updated",
+      actor: "operator",
+      payload: { title: clean },
     }),
   });
   return clean;

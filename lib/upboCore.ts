@@ -570,3 +570,17 @@ export function buildUpboEntry({
       : "",
   };
 }
+
+// ---------- 팬 대문 제목(스트리머별, 표시 전용) — 순수 정리 ----------
+// 대문 h1 "{이름} 업보시트" 를 스트리머가 직접 바꿔 부를 수 있게 한다(이모지·특수문자 자유).
+// ""(빈 값) = 기본 "{이름} 업보시트" 그대로. 줄바꿈·탭은 공백으로 접고, 길이 상한은
+// **코드포인트** 기준으로 자른다 — UTF-16 단위(slice)로 자르면 이모지 서로게이트 쌍이
+// 반토막 나서 깨진 문자(�)가 대문에 박히기 때문. ZWJ 조합 이모지는 쪼개져도 낱개 이모지로
+// 보일 뿐 깨지지 않는다. 상한 24 = 30px 대문 폰트에서 모바일 두 줄 안에 드는 길이.
+export const SHEET_TITLE_MAX = 24;
+
+export function cleanSheetTitle(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const flat = value.replace(/[\r\n\t\u3000\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim();
+  return Array.from(flat).slice(0, SHEET_TITLE_MAX).join("").trim();
+}

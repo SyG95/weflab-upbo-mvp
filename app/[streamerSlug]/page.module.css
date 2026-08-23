@@ -445,6 +445,11 @@
   font-size: 30px;
   font-weight: 700;
   line-height: 1.1;
+  /* 스트리머 커스텀 제목(최대 24자, 이모지 포함)이 관리자 탭과 겹치지 않게 줄바꿈 허용.
+     keep-all=한국어 단어 중간 끊김 방지, anywhere=띄어쓰기 없는 긴 문구도 넘치지 않게. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 
 .adminTab {

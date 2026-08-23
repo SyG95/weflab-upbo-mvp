@@ -68,6 +68,7 @@ import RouletteConfigManager, {
 import FanDeliveryModeForm from "./FanDeliveryModeForm";
 import FanIdPrivacyForm from "./FanIdPrivacyForm";
 import CouponTabLabelForm from "./CouponTabLabelForm";
+import SheetTitleForm from "./SheetTitleForm";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
@@ -322,6 +323,9 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   // 화면 제목용 표시 이름 — 슬러그는 주소 전용, 제목은 콘솔에서 입력한 이름(한글 가능).
   // 상태 로딩 실패 시(연결 안내 화면)만 슬러그로 폴백.
   const streamerName = (result.ok && result.state.displayName?.trim()) || streamerSlug;
+  // 대문 제목(스트리머별, 표시 전용). 비어 있으면 기존 그대로 "{이름} 업보시트".
+  const defaultSheetTitle = `${streamerName} 업보시트`;
+  const sheetTitle = (result.ok && result.state.sheetTitle?.trim()) || defaultSheetTitle;
   // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
   const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
   const theme = resolveTheme(themePreview || savedThemeId);
@@ -459,7 +463,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
         <header className={styles.cover}>
           <div className={styles.coverTop}>
             <div>
-              <h1 className={styles.coverName}>{streamerName} 업보시트</h1>
+              <h1 className={styles.coverName}>{sheetTitle}</h1>
             </div>
             <a
               className={styles.adminTab}
@@ -2152,6 +2156,20 @@ function AdminPanel({
               장부·집계는 그대로예요. 비우고 저장하면 기본 &quot;쿠폰&quot;으로 돌아갑니다.
             </p>
             <CouponTabLabelForm slug={state.slug} initial={state.couponTabLabel ?? ""} />
+          </CollapsibleCard>
+
+          {/* 팬 대문 제목 */}
+          <CollapsibleCard sectionKey="sheet-title" title="대문 제목">
+            <p className={styles.fieldHint}>
+              팬 화면 맨 위 대문에 보일 제목을 직접 정해요. 이모지·특수문자도 돼요. 표시만
+              바뀌고 장부·브라우저 탭 제목·관리자 화면은 그대로예요. 비우고 저장하면 기본
+              {` "${state.displayName?.trim() || state.slug} 업보시트"`}로 돌아갑니다.
+            </p>
+            <SheetTitleForm
+              slug={state.slug}
+              initial={state.sheetTitle ?? ""}
+              defaultTitle={`${state.displayName?.trim() || state.slug} 업보시트`}
+            />
           </CollapsibleCard>
 
           {/* 최신 결과 반영 요약 */}
