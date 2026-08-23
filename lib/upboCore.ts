@@ -392,6 +392,19 @@ export function applyThresholdOverrides(
   });
 }
 
+// 표시·후보 계산용: 이 금액대 룰렛표의 유효 기준 확률. 판정(reconcileResults 의
+// thresholdOverridePercent ?? threshold)과 같은 값을 내는 단일 소스 — 화면 배지·팬 확률표·
+// 교환/수동 후보·별칭 힌트가 판정과 어긋나지 않게 여기만 쓴다.
+export function effectiveThresholdForLabel(
+  overrides: ThresholdOverrides,
+  amountRangeLabel: string | null | undefined,
+  globalThreshold: number,
+): number {
+  if (!amountRangeLabel) return globalThreshold;
+  const pct = overrides[amountRangeLabel];
+  return pct === undefined ? globalThreshold : pct;
+}
+
 export function reconcileResults({
   catalogItems = [],
   results = [],

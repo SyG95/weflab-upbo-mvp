@@ -69,6 +69,7 @@ import FanDeliveryModeForm from "./FanDeliveryModeForm";
 import FanIdPrivacyForm from "./FanIdPrivacyForm";
 import CouponTabLabelForm from "./CouponTabLabelForm";
 import SheetTitleForm from "./SheetTitleForm";
+import { effectiveThresholdForLabel } from "@/lib/upboCore";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
@@ -833,8 +834,10 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
   // "기록되는 상품" 판정: 사용설정 오버라이드(상품>그룹>캡처값) + 기준 확률 이하(CatalogManager 규칙 동일).
   const usage = activeCatalog ? state.catalogUsageByVersion?.[activeCatalog.version] ?? {} : {};
   const threshold = Number(state.settings?.thresholdPercent ?? 2);
+  // 룰렛표별 기준확률 예외 반영(판정과 동일 규칙) — 예외로 업보가 된 상품이 팬 확률표에서 빠지지 않게.
+  const revealThresholdOverrides = state.thresholdOverrides ?? {};
   const recorded = (g: CatalogGroup, it: CatalogItem, idx: number): boolean => {
-    if (it.probability > threshold) return false;
+    if (it.probability > effectiveThresholdForLabel(revealThresholdOverrides, g.amountRangeLabel, threshold)) return false;
     const itemKey = `g${g.groupIndex}-i${it.sortOrder ?? idx}`;
     const groupKey = `g${g.groupIndex}`;
     if (usage[itemKey] !== undefined) return usage[itemKey];
@@ -1687,6 +1690,8 @@ function AdminPanel({
   // ItemEventManager에 넘길 교환 후보: "룰렛기록 on(sy 사용설정 반영)" + 당첨 기준(thresholdPercent)
   // 이하 상품만. 룰렛(rouletteId)별로 상품명 중복을 제거한다(단차/연차 중복 합치기).
   const exchangeThreshold = Number(state.settings?.thresholdPercent ?? 2);
+  // 룰렛표별 기준확률 예외 반영 — 예외로 업보가 된 상품도 교환·수동기록 후보에 뜨게(판정과 동일 규칙).
+  const exchangeThresholdOverrides = state.thresholdOverrides ?? {};
   const catalogItems: {
     itemName: string;
     probability: number;
@@ -1702,7 +1707,7 @@ function AdminPanel({
       if (rouletteArchivedById[rid]) continue; // 보관(숨김)된 룰렛은 교환·수동기록 후보에서 제외.
       (g.items ?? []).forEach((it, idx) => {
         if (!effectiveEnabled(g, it, idx)) return;
-        if (it.probability > exchangeThreshold) return;
+        if (it.probability > effectiveThresholdForLabel(exchangeThresholdOverrides, g.amountRangeLabel, exchangeThreshold)) return;
         const dedupeKey = `${rid}::${it.itemName}`;
         if (seen.has(dedupeKey)) return;
         seen.add(dedupeKey);
@@ -1993,6 +1998,7 @@ function AdminPanel({
                     slug={state.slug}
                     groups={activeGroups}
                     threshold={state.settings?.thresholdPercent ?? 0}
+                    thresholdOverrides={state.thresholdOverrides ?? {}}
                     version={activeCatalog?.version ?? state.currentCatalogVersion}
                     catalogs={catalogs}
                     usageByVersion={state.catalogUsageByVersion ?? {}}

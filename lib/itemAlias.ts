@@ -51,7 +51,8 @@ export type AliasCandidate = {
   firstAt: string;
   lastAt: string;
   // 지금 표에서 고를 수 있는 상품들(같은 금액대, 켜져 있는 것만)
-  options: Array<{ itemName: string; probability: number; recommended: boolean; reason?: string }>;
+  // thresholdOverridePercent: 이 상품이 속한 룰렛표의 기준확률 예외(applyThresholdOverrides가 얹은 값).
+  options: Array<{ itemName: string; probability: number; recommended: boolean; reason?: string; thresholdOverridePercent?: number | null }>;
   linked?: ItemAlias; // 이미 연결해 둔 것
   // 추천대로 연결하면 실제로 업보로 기록되는가(추천 상품 확률이 기준 이하인가).
   // 확률이 높은 리액션(뽀뽀·사랑해 등)은 연결해도 기록되지 않으므로 뒤로 보낸다.
@@ -98,7 +99,7 @@ function buildOptions(
       // 비슷하긴 하나 다른 상품일 수 있다 → 추천하지 않고 순서만 위로 올린다.
       reason = "이름이 비슷해요 (직접 확인하세요)";
     }
-    return { itemName: item.itemName, probability: item.probability, recommended, reason };
+    return { itemName: item.itemName, probability: item.probability, recommended, reason, thresholdOverridePercent: item.thresholdOverridePercent };
   });
   // 추천 → 비슷한 것 → 나머지, 각 그룹 안에서는 확률 낮은 순(업보일 가능성이 높은 것부터)
   options.sort((a, b) => {
@@ -152,7 +153,8 @@ export function buildAliasCandidates({
       lastAt: result.donateTimeText || "",
       options,
       linked: aliases[key],
-      wouldRecord: best ? best.probability <= thresholdPercent : false,
+      // 룰렛표별 기준확률 예외가 있으면 그 기준으로(판정과 동일 규칙: override ?? 전역).
+      wouldRecord: best ? best.probability <= (best.thresholdOverridePercent ?? thresholdPercent) : false,
     });
   }
   // ★"연결하면 실제로 업보가 되는 것"을 맨 위로. 그다음 추천 있는 것, 그다음 건수 순.

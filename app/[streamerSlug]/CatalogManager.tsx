@@ -14,6 +14,16 @@ type SortKey = "prob-desc" | "prob-asc" | "name";
 
 type Overrides = Record<string, boolean>;
 
+// 룰렛표(금액대)별 기준확률 예외 — 판정과 같은 규칙(예외 ?? 전역)으로 "업보 대상"을 그린다.
+// upboCore 의 effectiveThresholdForLabel 과 동일 계산(upboCore 는 서버 전용이라 직접 import 불가).
+function effectiveThresholdFor(
+  g: CatalogGroup,
+  overrides: Record<string, number>,
+  globalThreshold: number,
+): number {
+  return (g.amountRangeLabel ? overrides[g.amountRangeLabel] : undefined) ?? globalThreshold;
+}
+
 function groupLabel(g: CatalogGroup): string {
   if (g.amountRangeLabel) return g.amountRangeLabel;
   return g.amountMin === g.amountMax ? `금액 ${g.amountMin}` : `금액 ${g.amountMin}~${g.amountMax}`;
@@ -53,6 +63,7 @@ export default function CatalogManager({
   slug,
   groups,
   threshold,
+  thresholdOverrides = {},
   version,
   catalogs,
   usageByVersion,
@@ -60,6 +71,9 @@ export default function CatalogManager({
   slug: string;
   groups: CatalogGroup[];
   threshold: number;
+  // 룰렛표(금액대)별 기준확률 예외 — 키=금액대 라벨. 판정과 같은 규칙(예외 ?? 전역)으로
+  // "업보 대상" 배지·카운트를 그린다.
+  thresholdOverrides?: Record<string, number>;
   version: number | null;
   catalogs: Catalog[];
   usageByVersion: Record<number, Record<string, boolean>>;
@@ -87,15 +101,22 @@ export default function CatalogManager({
     });
   }, [groups, needle, sort]);
 
+  // 지금 확률표에 실제로 걸리는 예외 개수(다른 금액대 라벨의 예외는 세지 않는다).
+  const overriddenCount = useMemo(
+    () => Object.keys(thresholdOverrides).filter((k) => groups.some((g) => g.amountRangeLabel === k)).length,
+    [thresholdOverrides, groups],
+  );
+
   const totals = useMemo(() => {
     let total = 0;
     let target = 0;
-    for (const { items } of view) {
+    for (const { group, items } of view) {
+      const eff = effectiveThresholdFor(group, thresholdOverrides, threshold);
       total += items.length;
-      target += items.filter(({ item }) => item.probability <= threshold).length;
+      target += items.filter(({ item }) => item.probability <= eff).length;
     }
     return { total, target };
-  }, [view, threshold]);
+  }, [view, threshold, thresholdOverrides]);
 
   // 그룹 접기/펼치기. 기본은 전부 접힘, 검색 중에는 결과가 있는 그룹을 자동으로 펼친다.
   const [expandedGroups, setExpandedGroups] = useState<Record<number, boolean>>({});
@@ -353,7 +374,10 @@ export default function CatalogManager({
       <div className={styles.cmSummary}>
         <span className={styles.tagActive}>catalog v{version ?? "?"}</span>
         <span className={styles.tagMuted}>전체 {totals.total}개</span>
-        <span className={styles.tag}>업보 대상 {totals.target}개 (기준 {threshold}% 이하)</span>
+        <span className={styles.tag}>
+          업보 대상 {totals.target}개 (기준 {threshold}% 이하
+          {overriddenCount > 0 ? ` · 룰렛별 예외 ${overriddenCount}개 반영` : ""})
+        </span>
         {dirtyCount > 0 ? <span className={cu.dirtyBadge}>저장 안 된 변경 {dirtyCount}건</span> : null}
       </div>
 
@@ -413,6 +437,9 @@ export default function CatalogManager({
                 <span className={styles.cmGroupName}>{groupLabel(group)}</span>
               </button>
               <span className={styles.tagMuted}>{items.length}개</span>
+              {group.amountRangeLabel && thresholdOverrides[group.amountRangeLabel] !== undefined ? (
+                <span className={styles.tag}>예외 기준 {thresholdOverrides[group.amountRangeLabel]}%</span>
+              ) : null}
               {!groupCaptureOn ? <span className={cu.groupOffBadge}>위플랩에선 꺼짐</span> : null}
               <button type="button" className={cu.expandBtn} onClick={() => toggleExpanded(group.groupIndex)}>
                 {isExpanded ? "접기" : "펼치기"}
@@ -434,7 +461,7 @@ export default function CatalogManager({
                   </thead>
                   <tbody>
                     {items.map(({ item, idx }) => {
-                      const isTarget = item.probability <= threshold;
+                      const isTarget = item.probability <= effectiveThresholdFor(group, thresholdOverrides, threshold);
                       const effectiveOn = effectiveEnabled(group, item, idx, overrides);
                       const ik = itemKey(group, item, idx);
                       const mineOverridden = overrides[ik] !== undefined;
