@@ -3348,6 +3348,12 @@ export function buildFixedPriceCandidates(
     if (!judgeEntry) continue;
     // 구독은 갯수 단위가 풍선이 아니라 개월이라 정가 매칭에서 제외한다.
     if ((row.donationType || "").includes("구독")) continue;
+    // 미션 성공 정산 뭉치("대결/도전미션 별풍선 성공")는 계정 없는 모금 정산이라 정가가 될 수 없다 —
+    // 갯수가 우연히 일치하면 미션명이 시청자로 둔갑한 유령 정가가 생긴다(포로미 실사고 2026-08-24).
+    // 개인이 미션에 넣은 후원(타입에 "성공" 없음)은 기록을 유지한다 — 한 사람이 정가 갯수를 통째로
+    // 쏘는 정당한 구매가 있어서(스트리머가 배송관리 "미션" 배지를 보고 판단·삭제).
+    const missionType = row.donationType || "";
+    if (missionType.includes("미션") && missionType.includes("성공")) continue;
     // 기간 한정(이벤트·서버) 정가: 위플랩에 찍힌 후원 시각이 기간 밖이면 제외(sy 확정 2026-08-09).
     // 시각 해석 실패도 제외(쿠폰 소급 선례) — 구제는 수동기록 "정가 시그니처" 옵션.
     if (judgeFixedPeriod(judgeEntry, row.donateTimeText) !== "in") continue;

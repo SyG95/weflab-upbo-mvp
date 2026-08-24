@@ -210,13 +210,18 @@ function groupByViewer(entries: UpboEntry[]): ViewerSummary[] {
 //   probability는 화면에 안 보여도 "귀한 순" 정렬용으로 대푯값(최대)을 유지한다.
 function holdingsToViewerSummaries(
   holdings: ViewerHolding[],
-  opts?: { mergeSets?: boolean },
+  opts?: { mergeSets?: boolean; withOps?: boolean },
 ): ViewerSummary[] {
   const mergeSets = opts?.mergeSets ?? false;
+  // withOps(배송관리 전용): 줄마다 원본 기록 조각(refs=삭제용)과 미션 배지 플래그를 함께 싣는다.
+  // 팬 화면 호출에는 싣지 않는다 — entryId 뭉치가 팬 페이지 payload 를 불릴 이유가 없다.
+  const withOps = opts?.withOps ?? false;
   return holdings.map((h) => {
     const aggMap = new Map<string, AggItem>();
     for (const it of h.items) {
       const isFixed = it.amountRangeLabel === "정가";
+      // 미션 배지: "정가 갯수와 일치해 정가로 기록된 미션 후원"만 (일반 미션 룰렛 당첨은 대상 아님).
+      const isMissionFixed = isFixed && (it.donationType ?? "").includes("미션");
       const k = mergeSets
         ? `${it.itemName}@@${isFixed ? "정가" : ""}`
         : `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
@@ -224,12 +229,19 @@ function holdingsToViewerSummaries(
       if (cur) {
         cur.count += it.quantity;
         if (mergeSets && it.probability > cur.probability) cur.probability = it.probability;
+        if (withOps) {
+          cur.refs?.push({ entryId: it.entryId, quantity: it.quantity });
+          if (isMissionFixed) cur.mission = true;
+        }
       } else {
         aggMap.set(k, {
           itemName: it.itemName,
           probability: it.probability,
           count: it.quantity,
           amountRangeLabel: mergeSets ? (isFixed ? "정가" : undefined) : it.amountRangeLabel,
+          ...(withOps
+            ? { refs: [{ entryId: it.entryId, quantity: it.quantity }], mission: isMissionFixed || undefined }
+            : {}),
         });
       }
     }
@@ -1237,8 +1249,14 @@ function FanView({
   const fixedMode = state.fanFixedTabMode ?? "sections";
   const onFixedTab = activeTab === "ledger" && rtabKey === "__fixed__";
   const useSigSubtabs = onFixedTab && fixedMode === "subtabs" && sigDetails.some((d) => d.kind !== "sig");
+  // sfk 미지정(탭 첫 진입)이면 기록 있는 첫 유형을 연다 — 시그니처 0명인데 빈 화면부터 보이던 것 수리.
+  // sfk 를 명시한 링크(시그니처 포함)는 그대로 존중한다.
   const sigKind: SignatureKind =
-    activeSigKind === "event" ? "event" : activeSigKind === "server" ? "server" : "sig";
+    activeSigKind === "sig" || activeSigKind === "event" || activeSigKind === "server"
+      ? activeSigKind
+      : (["sig", "event", "server"] as SignatureKind[]).find(
+          (k) => filterViewersBySigKind(activeViewers, sigByCount, k).length > 0,
+        ) ?? "sig";
   const fixedTabViewers = useSigSubtabs
     ? filterViewersBySigKind(activeViewers, sigByCount, sigKind)
     : activeViewers;
@@ -1353,7 +1371,7 @@ function FanView({
           <div className={styles.sigSubTabs} role="tablist" aria-label="정가 유형 구분">
             {(["sig", "event", "server"] as SignatureKind[]).map((k) => {
               const n = filterViewersBySigKind(activeViewers, sigByCount, k).length;
-              const href = `/${slug}?rtab=__fixed__${k === "sig" ? "" : `&sfk=${k}`}${
+              const href = `/${slug}?rtab=__fixed__&sfk=${k}${
                 searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
               }`;
               return (
@@ -1636,7 +1654,7 @@ function AdminPanel({
     computeHoldings(deliveryVisibleEntries, events),
     excludedNames,
   );
-  const viewers = holdingsToViewerSummaries(holdings);
+  const viewers = holdingsToViewerSummaries(holdings, { withOps: true });
   // 숨긴 옛 당첨분의 (fanId,itemKey)별 개수. 이미 배송완료로 저장된 처리수량이 "옛 기록 몫"이므로,
   // 새 당첨이 같은 itemKey일 때 새 기록을 "이미 배송됨"으로 오인시키지 않도록 배송관리에서 이 값만큼
   // 처리수량 기준선을 보정한다(표시 계산 전용 — 원본/스키마 불변, 현재 채루 데이터엔 충돌 없어 대개 무효).

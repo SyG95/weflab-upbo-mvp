@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import fpStyles from "./fixedPriceNote.module.css";
 import HiddenViewersPanel from "./HiddenViewersPanel";
@@ -250,6 +251,11 @@ export default function DeliveryManager({
   const [loadingOps, setLoadingOps] = useState(true);
   const [savingProgress, setSavingProgress] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const router = useRouter();
+  // 기록 삭제(취소 이벤트) 확인 모달 대상. 삭제는 영구 삭제가 아니라 취소 도장(교환·양도 이력에서 되돌리기 가능).
+  const [deleteTarget, setDeleteTarget] = useState<{ viewer: ViewerSummary; item: AggItem } | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [noteTarget, setNoteTarget] = useState<ViewerSummary | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [noteImagesDraft, setNoteImagesDraft] = useState<string[]>([]);
@@ -458,7 +464,8 @@ export default function DeliveryManager({
     v.items.reduce((s, it) => s + Math.min(deliveredOf(v.key, itemKey(it)), it.count), 0);
 
   // 시청자 상세의 상품 한 줄(스테퍼 포함). 미완료 목록과 접힌 완료 목록이 같은 UI를 쓴다.
-  const renderItemRow = (vKey: string, it: AggItem) => {
+  const renderItemRow = (v: ViewerSummary, it: AggItem) => {
+    const vKey = v.key;
     const k = itemKey(it);
     const n = Math.min(deliveredOf(vKey, k), it.count);
     const itemDone = n >= it.count;
@@ -474,6 +481,15 @@ export default function DeliveryManager({
           ) : null}
           {it.itemName}
           {isFixed ? null : <span className={styles.dmItemProb}>{it.probability}%</span>}
+          {it.mission ? (
+            <span
+              className={fpStyles.fixedBadge}
+              style={{ background: "#b3541e", marginLeft: 6 }}
+              title="미션 후원이 정가 갯수와 일치해 기록된 건 — 모금 참여라면 오른쪽 삭제로 정리하세요"
+            >
+              미션
+            </span>
+          ) : null}
         </span>
         <div className={styles.dmStepper}>
           <button
@@ -496,6 +512,21 @@ export default function DeliveryManager({
             +
           </button>
         </div>
+        {it.refs && it.refs.length > 0 ? (
+          <button
+            type="button"
+            className={styles.dmClearBtn}
+            style={{ marginLeft: 8, color: "#b3261e", borderColor: "#e5b5b1" }}
+            onClick={() => {
+              setDeleteReason(it.mission ? "미션 모금 오인 기록" : "");
+              setDeleteTarget({ viewer: v, item: it });
+            }}
+            disabled={deleting}
+            aria-label={`${it.itemName} 기록 삭제`}
+          >
+            삭제
+          </button>
+        ) : null}
       </div>
     );
   };
@@ -598,6 +629,48 @@ export default function DeliveryManager({
     ),
   });
 
+  // 기록 삭제 = 취소 이벤트(교환·양도의 취소와 같은 엔진). 원본은 남고 되돌리기 가능,
+  // 팬 화면·배송관리에서 즉시 사라진다. 줄이 여러 원본 조각이면 전부 순서대로 취소한다.
+  const commitDelete = async () => {
+    if (!deleteTarget) return;
+    const { item } = deleteTarget;
+    const reason = deleteReason.trim();
+    if (!reason) return;
+    setDeleting(true);
+    setMessage(null);
+    let failed = 0;
+    for (const ref of item.refs ?? []) {
+      try {
+        const res = await fetch(`/api/s/${encodeURIComponent(slug)}/item-events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            upboEntryId: ref.entryId,
+            actorType: "operator",
+            eventType: "cancel",
+            quantityDelta: ref.quantity,
+            reason,
+          }),
+        });
+        const json = (await res.json().catch(() => ({}))) as { ok?: boolean };
+        if (!res.ok || json.ok === false) failed += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setDeleting(false);
+    setDeleteTarget(null);
+    if (failed > 0) {
+      setMessage({ type: "err", text: `일부(${failed}건) 삭제에 실패했어요. 새로고침 후 다시 시도해 주세요.` });
+    } else {
+      setMessage({
+        type: "ok",
+        text: `"${item.itemName}" ${item.count}개 기록을 삭제(취소 처리)했어요. 실수였다면 교환·양도 탭 이력에서 되돌릴 수 있어요.`,
+      });
+    }
+    router.refresh();
+  };
+
   const commitSave = async () => {
     setSavingProgress(true);
     setMessage(null);
@@ -610,7 +683,19 @@ export default function DeliveryManager({
       if (!res.ok) throw new Error(String(res.status));
       setCommitted(draft);
       setConfirmOpen(false);
-      setMessage({ type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." });
+      // 계정ID 없는 시청자의 처리 수량은 서버가 저장하지 않는다(saveDeliveryProgress 필터) —
+      // 성공 메시지가 이를 숨기면 "처리했는데 팬 화면 그대로" 사고가 된다(2026-08-24 포로미 실사고).
+      const skippedIdless = nonArchivedViewers.filter(
+        (v) => !v.fanId.trim() && deliveredTotal(v) > 0,
+      ).length;
+      setMessage(
+        skippedIdless > 0
+          ? {
+              type: "err",
+              text: `저장했지만 계정ID 없는 시청자 ${skippedIdless}명의 처리 수량은 저장되지 않았어요(새로고침하면 되돌아감). 업보가 아닌 기록이면 줄의 "삭제"로 정리하세요.`,
+            }
+          : { type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." },
+      );
     } catch {
       setMessage({ type: "err", text: "처리 수량 저장 실패. 잠시 후 다시 저장해 주세요." });
     } finally {
@@ -934,14 +1019,14 @@ export default function DeliveryManager({
                     onClick={() => clearViewer(v)}
                     disabled={isNone}
                   >
-                    취소
+                    처리 초기화
                   </button>
                 </div>
               </div>
 
               {open ? (
                 <div className={styles.dmDetail}>
-                  {pendingItems.map((it) => renderItemRow(v.key, it))}
+                  {pendingItems.map((it) => renderItemRow(v, it))}
 
                   {foldedItems.length > 0 ? (
                     <>
@@ -959,7 +1044,7 @@ export default function DeliveryManager({
                           저장된 완료분 · {foldOpen ? "접기" : "펼치기"}
                         </span>
                       </button>
-                      {foldOpen ? foldedItems.map((it) => renderItemRow(v.key, it)) : null}
+                      {foldOpen ? foldedItems.map((it) => renderItemRow(v, it)) : null}
                     </>
                   ) : null}
 
@@ -1113,6 +1198,67 @@ export default function DeliveryManager({
             <button type="button" className={styles.dmSaveBtn} onClick={() => setConfirmOpen(true)} disabled={savingProgress}>
               저장
             </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 기록 삭제 확인 모달 — 취소 엔진 재사용(되돌리기 가능) */}
+      {deleteTarget ? (
+        <div className={styles.modalOverlay} onClick={() => (deleting ? null : setDeleteTarget(null))} role="presentation">
+          <div
+            className={styles.modal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dm-delete-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="dm-delete-title" className={styles.modalTitle}>
+              이 기록을 삭제할까요?
+            </h3>
+            <p className={styles.fieldHint}>
+              <b>{deleteTarget.viewer.fanNickname || deleteTarget.viewer.fanId}</b> ·{" "}
+              <b>{deleteTarget.item.itemName}</b> {deleteTarget.item.count}개를 업보에서 지웁니다. 팬
+              화면·배송관리에서 사라지고, 교환·양도 탭 이력에는 취소로 남아 되돌릴 수 있어요.
+            </p>
+            <label style={{ display: "block", margin: "10px 0" }}>
+              <span className={styles.fieldHint}>삭제 사유 (필수)</span>
+              <input
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="예: 미션 모금 오인 기록 / 중복 집계"
+                disabled={deleting}
+                style={{
+                  width: "100%",
+                  marginTop: 4,
+                  padding: "8px 10px",
+                  border: "1px solid var(--paper-line)",
+                  borderRadius: 8,
+                  background: "var(--paper)",
+                  color: "var(--ink)",
+                  fontSize: 13,
+                }}
+                aria-label="삭제 사유"
+              />
+            </label>
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className={styles.modalCancel}
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+              >
+                닫기
+              </button>
+              <button
+                type="button"
+                className={styles.modalConfirm}
+                style={{ background: "#b3261e" }}
+                onClick={() => void commitDelete()}
+                disabled={deleting || !deleteReason.trim()}
+              >
+                {deleting ? "삭제 중…" : "삭제"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

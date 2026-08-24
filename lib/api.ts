@@ -553,6 +553,10 @@ export type AggItem = {
   amountRangeLabel?: string;
   // 배송완료 수량(팬 화면 "배송 반영: 표시(mark)" 모드에서만 채움). 표시용.
   delivered?: number;
+  // 미션 유래 정가 기록(donation_type에 "미션" 포함 + 정가) — 배송관리 "미션" 배지용(withOps 때만 채움).
+  mission?: boolean;
+  // 이 줄을 구성하는 원본 기록 조각(entryId, 남은 수량) — 배송관리 "기록 삭제"(취소 이벤트)용(withOps 때만).
+  refs?: Array<{ entryId: string; quantity: number }>;
   // 다 배송됨(remaining_done 모드에서만): 개수는 0이지만 "배송완료"로 남겨 표시한다.
   done?: boolean;
 };
@@ -582,6 +586,8 @@ export type HoldingItem = {
   itemName: string;
   probability: number;
   amountRangeLabel?: string;
+  // 원본 기록의 후원 유형(도전미션 별풍선 등). 배송관리 "미션" 배지 판별용 — 교환돼도 원본 유형 유지.
+  donationType?: string;
   // 현재 남은 수량(양도/교환으로 빠져나간 분, 취소/완료된 분을 차감한 값).
   quantity: number;
   // 원본 수량(effectiveCount 기준). 표시용 "원본 N개 중 M개".
@@ -787,6 +793,7 @@ function foldEntryHoldings(entry: UpboEntry, events: ItemEvent[]): HoldingItem[]
       itemName: lot.itemName,
       probability: lot.probability,
       amountRangeLabel: lot.amountRangeLabel,
+      donationType: entry.donationType,
       quantity: lot.quantity,
       originalQuantity,
       originalItemName: entry.itemName,
