@@ -20,6 +20,8 @@ export const runtime = "nodejs";
 type RouteContext = { params: Promise<{ streamerSlug: string }> };
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+// 목록용 썸네일(~320px)은 수십 KB 가 정상 — 2MB 넘으면 썸네일이 아니라 실수다.
+const MAX_THUMB_BYTES = 2 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_NAME_LENGTH = 60;
 const MAX_MEMO_LENGTH = 200;
@@ -73,11 +75,34 @@ export async function POST(request: Request, context: RouteContext) {
     const state = await loadState(streamerSlug);
 
     if (contentType.includes("multipart/form-data")) {
+      const formData = await request.formData();
+
+      // ── thumbFor: 기존 컷에 목록용 썸네일 부착(구버전 컷 마이그레이션·재생성 전용) ──
+      // 보관 상한과 무관(새 컷이 아니라 파생본 추가). 옛 썸네일은 교체 후 모범 노력으로 정리.
+      const thumbFor = formData.get("thumbFor");
+      if (typeof thumbFor === "string" && thumbFor) {
+        const target = state.items.find((i) => i.id === thumbFor);
+        if (!target) badRequest("없는 컷이에요 — 새로고침 후 다시 시도해 주세요");
+        const file = formData.get("file");
+        if (!(file instanceof File) || file.size === 0) badRequest("썸네일 파일이 없어요");
+        if (!ALLOWED_IMAGE_TYPES.has(file.type)) badRequest("jpg/png/webp 이미지만 올릴 수 있어요");
+        if (file.size > MAX_THUMB_BYTES) badRequest("썸네일은 2MB 이하여야 해요");
+        const url = await uploadWardrobeImage(streamerSlug, {
+          bytes: await file.arrayBuffer(),
+          contentType: file.type,
+        });
+        const oldThumb = target.thumbUrl;
+        const items = state.items.map((i) => (i.id === thumbFor ? { ...i, thumbUrl: url } : i));
+        const next: WardrobeState = { themes: state.themes, items };
+        await setWardrobe(streamer, next);
+        if (oldThumb) await deleteWardrobeImages([oldThumb]);
+        return jsonOk({ ok: true, wardrobe: next });
+      }
+
       // ── add: 이미지 1장 등록(클라이언트 업로드 큐가 한 장씩 보낸다 — 장별 실패 재시도용) ──
       if (state.items.length >= WARDROBE_MAX_ITEMS) {
         badRequest(`옷장은 숨김 포함 최대 ${WARDROBE_MAX_ITEMS}장까지 보관할 수 있어요`);
       }
-      const formData = await request.formData();
       const file = formData.get("file");
       if (!(file instanceof File) || file.size === 0) badRequest("이미지 파일이 없어요");
       if (!ALLOWED_IMAGE_TYPES.has(file.type)) badRequest("jpg/png/webp 이미지만 올릴 수 있어요");
@@ -93,10 +118,24 @@ export async function POST(request: Request, context: RouteContext) {
       const variantRaw = formData.get("variant");
       const variant = (typeof variantRaw === "string" ? variantRaw : "").trim().slice(0, MAX_VARIANT_LENGTH);
 
+      // 목록용 썸네일(선택) — 클라이언트가 ~320px 파생본을 함께 보낸다. 없으면 원본 폴백("").
+      const thumbFile = formData.get("thumb");
+      let thumbUrl = "";
+      if (thumbFile instanceof File && thumbFile.size > 0) {
+        if (!ALLOWED_IMAGE_TYPES.has(thumbFile.type)) badRequest("썸네일은 jpg/png/webp 만 돼요");
+        if (thumbFile.size > MAX_THUMB_BYTES) badRequest("썸네일은 2MB 이하여야 해요");
+      }
+
       const url = await uploadWardrobeImage(streamerSlug, {
         bytes: await file.arrayBuffer(),
         contentType: file.type,
       });
+      if (thumbFile instanceof File && thumbFile.size > 0) {
+        thumbUrl = await uploadWardrobeImage(streamerSlug, {
+          bytes: await thumbFile.arrayBuffer(),
+          contentType: thumbFile.type,
+        });
+      }
       const maxOrder = state.items
         .filter((i) => i.themeId === themeId)
         .reduce((max, i) => Math.max(max, i.order), 0);
@@ -114,6 +153,7 @@ export async function POST(request: Request, context: RouteContext) {
         setId: "",
         variant,
         featured: false,
+        thumbUrl,
       };
       const next: WardrobeState = { themes: state.themes, items: [...state.items, item] };
       await setWardrobe(streamer, next);
@@ -259,8 +299,8 @@ export async function POST(request: Request, context: RouteContext) {
       const items = dissolveLonelySets(state.items.filter((i) => !ids.has(i.id)));
       const next: WardrobeState = { themes: state.themes, items };
       await setWardrobe(streamer, next);
-      // 저장 성공 후 파일 정리(모범 노력 — 실패해도 삭제는 이미 반영됨).
-      await deleteWardrobeImages(removed.map((i) => i.url));
+      // 저장 성공 후 파일 정리(모범 노력 — 실패해도 삭제는 이미 반영됨). 썸네일도 함께.
+      await deleteWardrobeImages(removed.flatMap((i) => [i.url, i.thumbUrl].filter(Boolean)));
       return jsonOk({ ok: true, wardrobe: next });
     }
 

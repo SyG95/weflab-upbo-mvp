@@ -30,6 +30,7 @@ import { optimizeImage } from "./imageOptimize";
 import styles from "./wardrobe.module.css";
 
 const IMAGE_MAX_WIDTH = 1200; // 포스터와 같은 폭 기준으로 압축
+const THUMB_MAX_WIDTH = 320; // 목록용 썸네일 폭 — 목록·메인·관리 표 전용(피팅룸=원본)
 const ACCEPT = "image/png,image/jpeg,image/webp";
 
 type QueueEntry = {
@@ -160,8 +161,11 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
       setQueue((prev) => prev.map((q) => (q.key === next.key ? { ...q, status: "uploading" } : q)));
       try {
         const optimized = await optimizeImage(next.file, IMAGE_MAX_WIDTH);
+        // 목록용 썸네일 파생본 — 실패해도 업로드는 진행(썸네일 없으면 화면이 원본 폴백).
+        const thumb = await optimizeImage(next.file, THUMB_MAX_WIDTH).catch(() => null);
         const formData = new FormData();
         formData.set("file", optimized);
+        if (thumb) formData.set("thumb", thumb);
         formData.set("name", next.name);
         formData.set("themeId", next.themeId);
         formData.set("part", next.part);
@@ -791,7 +795,7 @@ function ItemRow({
       </td>
       <td>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className={styles.rowThumb} src={item.url} alt="" loading="lazy" />
+        <img className={styles.rowThumb} src={item.thumbUrl || item.url} alt="" loading="lazy" />
       </td>
       <td>
         <div className={styles.nameCell}>

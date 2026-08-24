@@ -35,6 +35,10 @@ export type WardrobeItem = {
   // 메인 고정(8/12 sy 지시): 스트리머가 체크한 컷은 팬 옷장의 "메인" 탭에 오르고,
   // 고정 컷이 1장 이상이면 옷장 첫 진입이 메인 탭이 된다(0장=메인 탭 자체가 없음).
   featured: boolean;
+  // 목록용 썸네일(썸네일 분리 라운드, sy 승인): 업로드 시 ~320px 파생본을 함께 저장하고
+  // 목록·메인·관리 표는 이걸, 피팅룸(크게보기)만 원본(url)을 내려받는다 — 전송량 ~1/10.
+  // "" = 썸네일 없음(구버전 컷) → 화면은 원본으로 폴백(깨짐 없음, 마이그레이션으로 채움).
+  thumbUrl: string;
 };
 export type WardrobeState = { themes: WardrobeTheme[]; items: WardrobeItem[] };
 

@@ -1285,6 +1285,7 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     setId: typeof raw.setId === "string" ? raw.setId : "",
     variant: typeof raw.variant === "string" ? raw.variant : "",
     featured: raw.featured === true,
+    thumbUrl: typeof raw.thumbUrl === "string" ? raw.thumbUrl : "",
   };
 }
 
