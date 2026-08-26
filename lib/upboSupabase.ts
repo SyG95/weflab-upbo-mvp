@@ -1416,11 +1416,12 @@ async function deliveryProgressFromAuditLogs(streamerId: string) {
 
 export async function getOperatorState(slug: string) {
   const streamer = await requireStreamer(slug);
-  const [viewerNotes, deliveryProgress] = await Promise.all([
+  const [viewerNotes, deliveryProgress, deliveryAssignments] = await Promise.all([
     getViewerNotes(streamer.id),
     getDeliveryProgress(streamer.id),
+    getDeliveryAssignments(streamer.id),
   ]);
-  return { viewerNotes, deliveryProgress };
+  return { viewerNotes, deliveryProgress, deliveryAssignments };
 }
 
 // 시청자 메모 첨부 이미지(fanId별 최신 1건). 텍스트 메모(viewer_notes 테이블)와는 별도 오버레이.
@@ -1570,11 +1571,40 @@ export async function saveDeliveryProgress(
 
   if (rows.length === 0) return { saved: 0 };
 
+  // diff 저장: 값이 실제로 바뀐 행만 upsert 해 updated_at 이 "그 항목이 마지막으로 바뀐 시각"이 되게
+  // 한다(항목별 완료 시각의 근거, DELIVERY_PROGRESS_TS_CUTOFF 이후분). 기준은 테이블 단독 GET 이
+  // 아니라 getDeliveryProgress(정규화 병합+audit 폴백 포함) — 테이블 없는 레인·레거시 괄호 ID 행도
+  // 같은 눈으로 비교한다. 부수 효과: 없던 항목의 0 행은 만들지 않는다(0-행 적치 중단).
+  // 조회가 실패하면 diff 없이 기존 전량 저장으로 강등한다(저장이 죽는 것보다 낫다).
+  let toWrite = rows;
+  try {
+    const existing = await getDeliveryProgress(streamer.id);
+    const keyOf = (fanId: string, itemKey: string) => `${normalizeAccountId(fanId)}@@${itemKey}`;
+    const byKey = new Map(existing.map((e) => [keyOf(e.fanId, e.itemKey), e]));
+    toWrite = rows.filter((row) => {
+      const cur = byKey.get(keyOf(row.fan_id, row.item_key));
+      if (!cur) return row.processed_count > 0;
+      // 비교는 수량만 — 닉네임을 넣으면 안 된다. 팬 닉네임은 방송마다 바뀌어(채루 실측: 282행 중
+      // 118행 불일치) 첫 저장에서 절반이 "변경"으로 다시 찍히고, 그 행들의 updated_at 이 전부
+      // 저장 시각으로 덮여 가짜 완료 시각이 된다. 트레이드오프: 닉네임 스냅샷은 수량이 바뀔 때만
+      // 갱신된다(검증실 닉네임 열이 다소 낡을 수 있음 — 감수, 2026-08-26 미러 실측으로 확정).
+      return cur.processedCount !== row.processed_count;
+    });
+  } catch (error) {
+    // 전량 저장 강등은 "테이블 없는 레인"(목업 등)에서만. 일시 조회 실패(타임아웃 등)에 강등하면
+    // 전 행 updated_at 이 now 로 덮여 컷오프 이후의 가짜 완료 시각이 대량 생긴다 — 그 경우는
+    // 저장 실패로 돌려 재시도를 유도한다(클라이언트에 실패 메시지 흐름 이미 있음).
+    if (!isMissingTableError(error)) throw error;
+    toWrite = rows;
+  }
+
+  if (toWrite.length === 0) return { saved: 0 };
+
   try {
     await supabaseFetch(`/${tableName("delivery_progress")}?on_conflict=streamer_id,fan_id,item_key`, {
       method: "POST",
       headers: { prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify(rows),
+      body: JSON.stringify(toWrite),
     });
   } catch (error) {
     if (!isMissingTableError(error)) throw error;
@@ -1586,7 +1616,7 @@ export async function saveDeliveryProgress(
         action: "delivery_progress_updated",
         actor: "operator",
         payload: {
-          items: rows.map((row) => ({
+          items: toWrite.map((row) => ({
             fanId: row.fan_id,
             fanNickname: row.fan_nickname_snapshot ?? "",
             itemKey: row.item_key,
@@ -1599,7 +1629,81 @@ export async function saveDeliveryProgress(
       }),
     });
   }
-  return { saved: rows.length };
+  return { saved: toWrite.length };
+}
+
+// ── 시트 보기(B뷰) 배정 메모: "어느 후원 건을 완료로 쳤는지" ─────────────────────────
+// 수량 장부(delivery_progress)가 항상 진실이고 이 배열은 힌트(표시 보정용)다.
+// 저장 방식은 옷장(wardrobe_updated)과 동일한 audit_logs 스냅샷 append + 최신 1건 읽기.
+// ★ OVERLAY_LATEST_ACTIONS 에 절대 넣지 않는다 — 그 배치는 팬 페이지 핫패스에서 대상 action 의
+//   전체 히스토리를 내려받는 구조라, 이 배열이 실리면 팬 열람마다 수백 KB 를 끌어온다.
+//   읽기는 관리자 전용 ops-state(getOperatorState)에서만, 전용 limit=1 쿼리로 한다.
+const DELIVERY_ASSIGNMENT_ACTION = "delivery_assignment_updated";
+const MAX_DELIVERY_ASSIGNMENTS = 8000;
+
+export type DeliveryAssignmentRow = {
+  entryId: string;
+  ownerKey: string;
+  itemKey: string;
+  doneCount: number;
+  doneAt: string;
+};
+
+function cleanDeliveryAssignments(value: unknown): DeliveryAssignmentRow[] {
+  if (!Array.isArray(value)) return [];
+  const out: DeliveryAssignmentRow[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const rec = raw as Record<string, unknown>;
+    // 필드별 길이 상한(저장소 검증 관례) — audit_logs 한 행·ops-state 응답이 무한정 부풀지 않게.
+    const entryId = typeof rec.entryId === "string" ? rec.entryId.trim().slice(0, 200) : "";
+    const ownerKey = typeof rec.ownerKey === "string" ? rec.ownerKey.trim().slice(0, 200) : "";
+    const itemKey = typeof rec.itemKey === "string" ? rec.itemKey.slice(0, 400) : "";
+    const doneCount = Math.floor(Number(rec.doneCount));
+    // doneAt: 해석 가능한 시각만 인정. ""(빈 문자열)은 "시각 미상의 기존 완료 고정(pin)"으로 유효 —
+    // FIFO 재배치를 막는 힌트로 쓰이고 화면에는 "수량 기준"으로 표시된다.
+    const doneAtRaw = typeof rec.doneAt === "string" ? rec.doneAt.slice(0, 40) : "";
+    const doneAt = doneAtRaw && !Number.isNaN(Date.parse(doneAtRaw)) ? doneAtRaw : "";
+    if (!entryId || !ownerKey || !itemKey) continue;
+    if (!Number.isFinite(doneCount) || doneCount <= 0) continue;
+    out.push({ entryId, ownerKey, itemKey, doneCount, doneAt });
+    if (out.length >= MAX_DELIVERY_ASSIGNMENTS) break;
+  }
+  return out;
+}
+
+async function getDeliveryAssignments(streamerId: string): Promise<DeliveryAssignmentRow[]> {
+  // 일시 오류를 [] 로 삼키면 안 된다 — 클라이언트가 "배정 없음" 기준으로 저장해 서버 스냅샷을
+  // 통째로 덮어(기존 완료 시각 힌트 전부 유실) 버린다. 테이블 없는 레인만 빈 배열, 나머지는 실패 전파.
+  let rows: Array<{ payload: { assignments?: unknown } | null }>;
+  try {
+    rows = await supabaseFetch(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${DELIVERY_ASSIGNMENT_ACTION}&select=payload&order=created_at.desc&limit=1`,
+    );
+  } catch (error) {
+    if (isMissingTableError(error)) return [];
+    throw error;
+  }
+  return cleanDeliveryAssignments(rows[0]?.payload?.assignments);
+}
+
+export async function setDeliveryAssignments(
+  slug: string,
+  assignments: unknown,
+): Promise<{ saved: number }> {
+  const streamer = await requireStreamer(slug);
+  const clean = cleanDeliveryAssignments(assignments);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: DELIVERY_ASSIGNMENT_ACTION,
+      actor: "operator",
+      payload: { assignments: clean },
+    }),
+  });
+  return { saved: clean.length };
 }
 
 async function latestCatalog(streamerId: string): Promise<CatalogRow> {

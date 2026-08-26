@@ -225,12 +225,21 @@ function holdingsToViewerSummaries(
       const k = mergeSets
         ? `${it.itemName}@@${isFixed ? "정가" : ""}`
         : `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
+      // withOps ref 1조각 — 시각(recordedAtMs 등)·금액은 배송관리 시각 표시·시트 보기용(팬 호출엔 미포함).
+      const opsRef = () => ({
+        entryId: it.entryId,
+        quantity: it.quantity,
+        recordedAtMs: it.recordedAtMs,
+        recordedKind: it.recordedKind,
+        recordedText: it.recordedText || undefined,
+        amount: it.donationAmount,
+      });
       const cur = aggMap.get(k);
       if (cur) {
         cur.count += it.quantity;
         if (mergeSets && it.probability > cur.probability) cur.probability = it.probability;
         if (withOps) {
-          cur.refs?.push({ entryId: it.entryId, quantity: it.quantity });
+          cur.refs?.push(opsRef());
           if (isMissionFixed) cur.mission = true;
         }
       } else {
@@ -240,7 +249,7 @@ function holdingsToViewerSummaries(
           count: it.quantity,
           amountRangeLabel: mergeSets ? (isFixed ? "정가" : undefined) : it.amountRangeLabel,
           ...(withOps
-            ? { refs: [{ entryId: it.entryId, quantity: it.quantity }], mission: isMissionFixed || undefined }
+            ? { refs: [opsRef()], mission: isMissionFixed || undefined }
             : {}),
         });
       }
@@ -1867,6 +1876,7 @@ function AdminPanel({
               archivedHiddenCounts={archivedHiddenCounts}
               hiddenViewers={hiddenViewerSummaries}
               archivedFanAt={deliveryArchivedFanAt}
+              entryCount={(state.upboEntries ?? []).length}
             />
           ) : (
             <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>

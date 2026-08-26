@@ -3305,3 +3305,184 @@
   background: var(--stamp);
   color: var(--on-accent);
 }
+
+/* ── 배송관리 시각 표시(기록 날짜·경과일·완료 시각) + 시트 보기(B뷰) ───────────────── */
+
+/* 기록 날짜 칩 — 위플랩 원문 후원 시각(또는 대체 시각) 기준. 이름 옆 보조 정보라 muted 톤. */
+.dmTimeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted, var(--ink));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 시각 출처 배지(수동/교환/반영) — donate(원문)는 배지 없음. */
+.dmTimeKind {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+/* 경과일 배지 — 기록 후 며칠째인지. 30일 이상은 경고 톤으로 강조. */
+.dmAge,
+.dmAgeOld {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dmAge {
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+.dmAgeOld {
+  background: #f7e8dc;
+  color: #a85320;
+}
+
+/* 저장된 배송완료 시각 — diff 저장(컷오프) 이후분만 표시된다. */
+.dmDoneAt {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #e3f4e8;
+  color: #2f7d4f;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 시트 보기 정렬 select — cmSearch 와 같은 결의 입력 요소. */
+.sheetSortSel {
+  margin-left: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.sheetNumCell {
+  text-align: center;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.sheetDateCol {
+  width: 128px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sheetStateCol {
+  width: 168px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sheetDateCell {
+  white-space: nowrap;
+}
+
+.sheetDateCell .dmTimeChip {
+  margin-left: 0;
+}
+
+.sheetStateCell {
+  white-space: nowrap;
+}
+
+.sheetFanId {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--muted, var(--ink));
+  opacity: 0.7;
+  word-break: break-all;
+}
+
+/* 계정ID 없는 줄 — 처리 저장이 안 되므로 상태 조작 잠금 안내. */
+.sheetLock {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px dashed var(--paper-line);
+  color: var(--muted, var(--ink));
+  opacity: 0.75;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 줄 상태 드롭다운 — 완료 상태는 진한 도장 톤(참고 캡처의 완료 pill 문법). */
+.sheetSel,
+.sheetSelDone {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  font-size: 12.5px;
+  font-weight: 700;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.sheetSelDone {
+  background: #2e3b33;
+  color: #f2f7f3;
+  border-color: #2e3b33;
+}
+
+.sheetDoneAt {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e3f4e8;
+  color: #2f7d4f;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sheetDoneAtWeak {
+  margin-left: 6px;
+  font-size: 11.5px;
+  color: var(--muted, var(--ink));
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  /* 시트 보기: 가로 스크롤 시에도 조작 열(상태)이 화면 밖으로 사라지지 않게 우측 고정 —
+     기존 countCol 고정과 같은 문법(배경 이중 레이어로 뒤 내용 비침 차단). */
+  .table th.sheetStateCol,
+  .table td.sheetStateCell {
+    position: sticky;
+    right: 0;
+    background-image: linear-gradient(var(--surface), var(--surface));
+    background-color: var(--paper);
+    box-shadow: -6px 0 8px -6px rgba(0, 0, 0, 0.18);
+  }
+}

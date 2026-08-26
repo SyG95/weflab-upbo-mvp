@@ -5,12 +5,16 @@ import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import fpStyles from "./fixedPriceNote.module.css";
 import HiddenViewersPanel from "./HiddenViewersPanel";
-import type {
-  AggItem,
-  DeliveryProgressItem,
-  OpsState,
-  ViewerNote,
-  ViewerSummary,
+import {
+  allocateDeliveryToRefs,
+  DELIVERY_PROGRESS_TS_CUTOFF,
+  type AggItem,
+  type DeliveryAssignment,
+  type DeliveryProgressItem,
+  type OpsState,
+  type RecordedKind,
+  type ViewerNote,
+  type ViewerSummary,
 } from "../../lib/api";
 
 // 정가기록(시그니처 후원) 1건 — 이 스트리머의 fixed: 프리픽스 entry 목록(page.tsx 에서 전달).
@@ -172,6 +176,66 @@ type Change = {
 const itemKey = (it: AggItem) =>
   `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
 
+// ── 시각 표시 도우미 ──────────────────────────────────────────────────────────
+// diff 저장 도입(컷오프) 이전의 delivery_progress.updated_at 은 "마지막 전체 저장 시각"이라
+// 항목별 완료 시각이 아니다 — 컷오프 이후 값만 완료 시각으로 표시한다(결정 1 = A안: 이전분 미표시).
+const TS_CUTOFF_MS = Date.parse(DELIVERY_PROGRESS_TS_CUTOFF);
+
+// epoch ms → "6.10" (Asia/Seoul). 시각 없음은 호출 전에 걸러진다.
+function fmtShortDate(ms: number): string {
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(new Date(ms));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("month")}.${get("day")}`;
+}
+
+// ISO/epoch → "8/25 20:45" (Asia/Seoul) — 완료 시각 표시용.
+function fmtShortDateTime(input: string | number): string {
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+// 기록 시각으로부터의 경과일(그날=1일째). 오래 밀린 줄 강조 기준(30일)과 함께 쓴다.
+const AGE_OLD_DAYS = 30;
+function ageDaysFrom(ms: number, nowMs: number): number {
+  return Math.max(1, Math.floor((nowMs - ms) / 86_400_000) + 1);
+}
+
+// 시각 출처 배지 문구 — donate(원문 후원 시각)는 배지 없이 날짜만.
+const KIND_BADGE: Partial<Record<RecordedKind, { label: string; title: string }>> = {
+  manual: { label: "수동", title: "수동기록 — 원문 후원 시각이 없어 기록 생성 시각으로 표시" },
+  exchange: { label: "교환", title: "교환으로 받은 기록 — 교환된 시각이라 실제 대기 기간보다 짧아 보일 수 있어요" },
+  created: { label: "반영", title: "원문 후원 시각을 해석하지 못해 시트 반영 시각으로 표시" },
+};
+
+// 한 줄(같은 상품 묶음)의 대표 기록 시각 = 조각들 중 가장 오래된 것(제일 밀린 빚 기준).
+function lineRecordedInfo(it: AggItem): { ms: number; kind: RecordedKind | null; text?: string } | null {
+  let best: { ms: number; kind: RecordedKind | null; text?: string } | null = null;
+  for (const ref of it.refs ?? []) {
+    const ms = ref.recordedAtMs;
+    if (ms === null || ms === undefined) continue;
+    if (!best || ms < best.ms) best = { ms, kind: ref.recordedKind ?? null, text: ref.recordedText };
+  }
+  return best;
+}
+
+// 배정 메모의 클라이언트 키(스트리머 전체에서 조각 1개를 특정).
+const assignKey = (ownerKey: string, iKey: string, entryId: string) =>
+  `${ownerKey}@@${iKey}@@${entryId}`;
+
 function computeChanges(
   viewers: ViewerSummary[],
   committed: DeliveryState,
@@ -221,6 +285,7 @@ export default function DeliveryManager({
   archivedHiddenCounts,
   hiddenViewers,
   archivedFanAt,
+  entryCount,
 }: {
   slug: string;
   viewers: ViewerSummary[];
@@ -235,11 +300,18 @@ export default function DeliveryManager({
   hiddenViewers?: ViewerSummary[];
   // fanId -> 숨긴 시각(ISO). 숨긴 시청자 탭의 날짜 표시·정렬용.
   archivedFanAt?: Record<string, string>;
+  // 서버가 로드한 upbo_entries 총 건수 — 5,000건(조회 상한) 도달 시 시트 보기에 잘림 경고를 띄운다.
+  entryCount?: number;
 }) {
   const [committed, setCommitted] = useState<DeliveryState>({});
   const [draft, setDraft] = useState<DeliveryState>({});
   // 서버 저장 처리수량 원본(기준선 보정 전) — 숨긴 시청자 탭의 복구 미리보기 계산용.
   const [rawCommitted, setRawCommitted] = useState<DeliveryState>({});
+  // 항목별 저장 시각(fanId → itemKey → updated_at ISO). diff 저장 이후분만 완료 시각으로 신뢰.
+  const [committedAt, setCommittedAt] = useState<Record<string, Record<string, string>>>({});
+  // 시트 보기 배정 메모(assignKey → 배정). assignments=현재 편집본, savedAssignments=서버 저장본.
+  const [assignments, setAssignments] = useState<Record<string, DeliveryAssignment>>({});
+  const [savedAssignments, setSavedAssignments] = useState<Record<string, DeliveryAssignment>>({});
   const [notes, setNotes] = useState<Record<string, ViewerNote>>({});
   const [q, setQ] = useState("");
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
@@ -261,8 +333,12 @@ export default function DeliveryManager({
   const [noteImagesDraft, setNoteImagesDraft] = useState<string[]>([]);
   const [savingNote, setSavingNote] = useState(false);
 
-  // 배송 관리 하위탭: 시청자별 목록(기존 화면) / 상품별 목록(상품 총량) / 숨긴 시청자(복구).
-  const [mode, setMode] = useState<"viewers" | "products" | "hidden">("viewers");
+  // 배송 관리 하위탭: 시청자별 목록(기존 화면) / 상품별 목록(상품 총량) / 시트 보기(엑셀형) / 숨긴 시청자(복구).
+  const [mode, setMode] = useState<"viewers" | "products" | "sheet" | "hidden">("viewers");
+  // 시트 보기 정렬(기준 select + 방향 토글 — 검증실 FilterableTable 문법)과 표시 상한(대량 기록 청크).
+  const [sheetSort, setSheetSort] = useState<"date" | "name" | "amount" | "qty" | "item" | "state">("date");
+  const [sheetDir, setSheetDir] = useState<"asc" | "desc">("asc");
+  const [sheetLimit, setSheetLimit] = useState(300);
   // 배송 중 / 배송완료 탭. 배송완료 탭 = 처리 완료 + 보관되지 않은 시청자만.
   const [tab, setTab] = useState<"active" | "done">("active");
   // 이번 세션에서 방금 보관한 fanId — 즉시 목록에서 숨긴다.
@@ -363,6 +439,20 @@ export default function DeliveryManager({
         setCommitted(loaded);
         setDraft(loaded);
         setNotes(notesToMap(json.viewerNotes || []));
+        // 항목별 저장 시각(완료 시각 표시용 — 컷오프 이후분만 화면에 노출).
+        const atMap: Record<string, Record<string, string>> = {};
+        for (const item of json.deliveryProgress || []) {
+          if (!item.fanId || !item.itemKey || !item.updatedAt) continue;
+          (atMap[item.fanId] ??= {})[item.itemKey] = item.updatedAt;
+        }
+        setCommittedAt(atMap);
+        // 시트 보기 배정 메모.
+        const aMap: Record<string, DeliveryAssignment> = {};
+        for (const a of json.deliveryAssignments || []) {
+          aMap[assignKey(a.ownerKey, a.itemKey, a.entryId)] = a;
+        }
+        setAssignments(aMap);
+        setSavedAssignments(aMap);
       } catch {
         if (!cancelled) {
           setMessage({ type: "err", text: "운영 저장값을 불러오지 못했어요. 새로고침 후 다시 확인해 주세요." });
@@ -429,7 +519,19 @@ export default function DeliveryManager({
     () => computeChanges(nonArchivedViewers, committed, draft),
     [nonArchivedViewers, committed, draft],
   );
-  const dirty = changes.length > 0;
+  // 시트 보기 배정 메모의 미저장 변경 수(추가/삭제/수량 변경 합).
+  const assignChangedCount = useMemo(() => {
+    let n = 0;
+    for (const [k, a] of Object.entries(assignments)) {
+      const s = savedAssignments[k];
+      if (!s || s.doneCount !== a.doneCount || s.doneAt !== a.doneAt) n += 1;
+    }
+    for (const k of Object.keys(savedAssignments)) {
+      if (!assignments[k]) n += 1;
+    }
+    return n;
+  }, [assignments, savedAssignments]);
+  const dirty = changes.length > 0 || assignChangedCount > 0;
   const changedItemCount = changes.reduce((s, c) => s + c.items.length, 0);
 
   // 저장 안 된 변경이 있으면 페이지 이탈 시 경고
@@ -471,6 +573,14 @@ export default function DeliveryManager({
     const itemDone = n >= it.count;
     // 정가기록 판별: amountRangeLabel === "정가" (집계 단계에서 sourceKey는 유실됨).
     const isFixed = it.amountRangeLabel === "정가";
+    // 기록 시각(줄의 가장 오래된 조각 기준)·경과일·저장된 완료 시각(컷오프 이후분만).
+    const rec = lineRecordedInfo(it);
+    const recBadge = rec?.kind ? KIND_BADGE[rec.kind] : undefined;
+    const ageDays = rec ? ageDaysFrom(rec.ms, nowMs) : null;
+    const savedDone = (committed[vKey]?.[k] ?? 0) >= it.count;
+    const doneAtIso = savedDone ? committedAt[v.fanId]?.[k] : undefined;
+    const doneAtMs = doneAtIso ? Date.parse(doneAtIso) : NaN;
+    const showDoneAt = savedDone && Number.isFinite(doneAtMs) && doneAtMs >= TS_CUTOFF_MS;
     return (
       <div key={k} className={styles.dmItemRow}>
         <span className={styles.dmItemName}>
@@ -488,6 +598,26 @@ export default function DeliveryManager({
               title="미션 후원이 정가 갯수와 일치해 기록된 건 — 모금 참여라면 오른쪽 삭제로 정리하세요"
             >
               미션
+            </span>
+          ) : null}
+          {rec ? (
+            <span
+              className={styles.dmTimeChip}
+              title={
+                (rec.kind === "donate" && rec.text ? `후원 시각(위플랩 원문): ${rec.text}` : recBadge?.title) ??
+                undefined
+              }
+            >
+              {fmtShortDate(rec.ms)}
+              {recBadge ? <em className={styles.dmTimeKind}>{recBadge.label}</em> : null}
+            </span>
+          ) : null}
+          {rec && ageDays !== null && !itemDone ? (
+            <span className={ageDays >= AGE_OLD_DAYS ? styles.dmAgeOld : styles.dmAge}>{ageDays}일째</span>
+          ) : null}
+          {showDoneAt ? (
+            <span className={styles.dmDoneAt} title="배송완료로 저장된 시각">
+              완료 {fmtShortDateTime(doneAtMs)}
             </span>
           ) : null}
         </span>
@@ -682,6 +812,92 @@ export default function DeliveryManager({
       });
       if (!res.ok) throw new Error(String(res.status));
       setCommitted(draft);
+      // 방금 바뀐 항목의 완료 시각을 즉시 반영(서버 updated_at=지금과 근사 — 새로고침하면 서버값).
+      const nowIso = new Date().toISOString();
+      setCommittedAt((prev) => {
+        const next = { ...prev };
+        for (const c of changes) {
+          if (!c.fanId.trim()) continue;
+          const row = { ...(next[c.fanId] ?? {}) };
+          for (const v of nonArchivedViewers) {
+            if (v.key !== c.viewerKey) continue;
+            for (const it of v.items) {
+              const k = itemKey(it);
+              const from = Math.min(committed[v.key]?.[k] ?? 0, it.count);
+              const to = Math.min(draft[v.key]?.[k] ?? 0, it.count);
+              if (from !== to) row[k] = nowIso;
+            }
+          }
+          next[c.fanId] = row;
+        }
+        return next;
+      });
+      // 시트 보기 배정 메모 저장(변경 있을 때만). 저장 전에 현재 보이는 조각 기준으로 정리(prune):
+      // 취소·보관 등으로 사라진 조각의 배정은 버리고, 수량 초과 배정은 조각 수량으로 자른다.
+      let assignFailed = false;
+      {
+        const pruned: Record<string, DeliveryAssignment> = {};
+        // 화면에 없는 보유자(보관된 시청자 등)의 배정은 판단 근거가 없으므로 그대로 보존한다 —
+        // 지우면 나중에 복구했을 때 완료 시각 힌트가 전부 "수량 기준"으로 강등된다.
+        const visibleOwners = new Set(nonArchivedViewers.map((v) => v.key));
+        for (const [aKey, a] of Object.entries(assignments)) {
+          if (!visibleOwners.has(a.ownerKey)) pruned[aKey] = a;
+        }
+        // pin(doneAt="") 먼저 → doneAt 오래된 순. allocateDeliveryToRefs 의 힌트 소비 순서와 동일.
+        const hintOrderMs = (doneAt: string): number => {
+          if (!doneAt) return Number.NEGATIVE_INFINITY;
+          const ms = Date.parse(doneAt);
+          return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+        };
+        for (const v of nonArchivedViewers) {
+          if (!v.fanId.trim()) continue; // 계정ID 없는 팬은 수량 저장이 안 되므로 배정도 안 남긴다
+          for (const it of v.items) {
+            const k = itemKey(it);
+            const n = Math.min(draft[v.key]?.[k] ?? 0, it.count);
+            const lineAssigns = (it.refs ?? [])
+              .map((ref) => ({ ref, aKey: assignKey(v.key, k, ref.entryId), a: assignments[assignKey(v.key, k, ref.entryId)] }))
+              .filter((x): x is typeof x & { a: DeliveryAssignment } => Boolean(x.a))
+              .sort((x, y) => {
+                const xm = hintOrderMs(x.a.doneAt);
+                const ym = hintOrderMs(y.a.doneAt);
+                return xm === ym ? 0 : xm < ym ? -1 : 1;
+              });
+            // 줄의 처리수량 n 까지만 배정을 남긴다(조각 수량으로도 자름) — 스테퍼로 수량을 줄인 뒤
+            // 초과 배정이 서버에 남아 나중에 옛 doneAt 으로 부활하는 것 방지(리뷰 실측 시나리오).
+            let budget = n;
+            for (const x of lineAssigns) {
+              const take = Math.min(x.a.doneCount, x.ref.quantity, budget);
+              if (take <= 0) continue;
+              budget -= take;
+              pruned[x.aKey] = { ...x.a, doneCount: take };
+            }
+          }
+        }
+        // 정리 결과가 서버 저장본과 다를 때만 저장한다. 시트 조작 없이 스테퍼로 수량만 줄인 저장도
+        // 여기서 초과 배정이 정리되므로(위 clamp), 잔존 배정이 옛 doneAt 으로 부활하는 일이 없다.
+        const prunedChanged =
+          Object.keys(pruned).length !== Object.keys(savedAssignments).length ||
+          Object.entries(pruned).some(([aKey, a]) => {
+            const s = savedAssignments[aKey];
+            return !s || s.doneCount !== a.doneCount || s.doneAt !== a.doneAt;
+          });
+        if (prunedChanged) {
+          const assignRes = await fetch(`/api/s/${encodeURIComponent(slug)}/delivery-assignments`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ assignments: Object.values(pruned) }),
+          }).catch(() => null);
+          if (assignRes?.ok) {
+            setAssignments(pruned);
+            setSavedAssignments(pruned);
+          } else {
+            assignFailed = true;
+          }
+        } else {
+          // 변경 없음 — 편집 중이던 배정 상태도 정리본으로 정돈해 둔다(초과분 표시 잔재 제거).
+          setAssignments(pruned);
+        }
+      }
       setConfirmOpen(false);
       // 계정ID 없는 시청자의 처리 수량은 서버가 저장하지 않는다(saveDeliveryProgress 필터) —
       // 성공 메시지가 이를 숨기면 "처리했는데 팬 화면 그대로" 사고가 된다(2026-08-24 포로미 실사고).
@@ -689,12 +905,17 @@ export default function DeliveryManager({
         (v) => !v.fanId.trim() && deliveredTotal(v) > 0,
       ).length;
       setMessage(
-        skippedIdless > 0
+        assignFailed
           ? {
               type: "err",
-              text: `저장했지만 계정ID 없는 시청자 ${skippedIdless}명의 처리 수량은 저장되지 않았어요(새로고침하면 되돌아감). 업보가 아닌 기록이면 줄의 "삭제"로 정리하세요.`,
+              text: "처리 수량은 저장됐지만 시트 보기 완료 표시(배정)는 저장에 실패했어요. 잠시 후 저장을 한 번 더 눌러 주세요.",
             }
-          : { type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." },
+          : skippedIdless > 0
+            ? {
+                type: "err",
+                text: `저장했지만 계정ID 없는 시청자 ${skippedIdless}명의 처리 수량은 저장되지 않았어요(새로고침하면 되돌아감). 업보가 아닌 기록이면 줄의 "삭제"로 정리하세요.`,
+              }
+            : { type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." },
       );
     } catch {
       setMessage({ type: "err", text: "처리 수량 저장 실패. 잠시 후 다시 저장해 주세요." });
@@ -703,7 +924,10 @@ export default function DeliveryManager({
     }
   };
 
-  const revert = () => setDraft(committed);
+  const revert = () => {
+    setDraft(committed);
+    setAssignments(savedAssignments);
+  };
 
   const openNote = (v: ViewerSummary) => {
     setNoteTarget(v);
@@ -747,7 +971,14 @@ export default function DeliveryManager({
   };
 
   const exportJson = () => {
-    const payload = { slug, exportedAt: new Date().toISOString(), deliveries: committed, notes };
+    const payload = {
+      slug,
+      exportedAt: new Date().toISOString(),
+      deliveries: committed,
+      notes,
+      // 시트 보기 배정 메모(서버 저장본)도 백업에 포함 — 없으면 복구 시 완료 시각·줄 지정이 유실된다.
+      deliveryAssignments: Object.values(savedAssignments),
+    };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -819,6 +1050,126 @@ export default function DeliveryManager({
     }
   };
 
+  // ── 시트 보기(B뷰): 한 후원 조각 = 한 줄. 수량 장부가 진실, 배정은 힌트(allocateDeliveryToRefs) ──
+  // 경과일 기준 시각 — 렌더 순수성(react-hooks/purity) 때문에 마운트 시 1회 고정(일 단위라 충분).
+  const [nowMs] = useState(() => Date.now());
+  type SheetRef = NonNullable<AggItem["refs"]>[number];
+  type SheetRow = {
+    v: ViewerSummary;
+    it: AggItem;
+    ref: SheetRef;
+    alloc: { allocated: number; state: "done" | "part" | "pending"; doneAt: string | null };
+    aKey: string;
+  };
+  const sheetRows = useMemo<SheetRow[]>(() => {
+    const needle = q.trim().toLowerCase();
+    const rows: SheetRow[] = [];
+    for (const v of nonArchivedViewers) {
+      if (
+        needle &&
+        !(v.fanId.toLowerCase().includes(needle) || v.fanNickname.toLowerCase().includes(needle))
+      )
+        continue;
+      for (const it of v.items) {
+        const k = itemKey(it);
+        const refs = it.refs ?? [];
+        if (refs.length === 0) continue;
+        const n = Math.min(draft[v.key]?.[k] ?? 0, it.count);
+        const assignForLine: Record<string, { doneCount: number; doneAt: string }> = {};
+        for (const ref of refs) {
+          const a = assignments[assignKey(v.key, k, ref.entryId)];
+          if (a) assignForLine[ref.entryId] = { doneCount: a.doneCount, doneAt: a.doneAt };
+        }
+        const allocs = allocateDeliveryToRefs(refs, n, assignForLine);
+        refs.forEach((ref, i) => {
+          rows.push({ v, it, ref, alloc: allocs[i], aKey: assignKey(v.key, k, ref.entryId) });
+        });
+      }
+    }
+    // 정렬은 반드시 해석된 값(ms/숫자)으로 — 원문 문자열 비교는 시간대·이형 포맷에서 틀어진다.
+    const dir = sheetDir === "asc" ? 1 : -1;
+    const stateRank = { done: 2, part: 1, pending: 0 } as const;
+    const msOf = (r: SheetRow) => r.ref.recordedAtMs ?? Number.POSITIVE_INFINITY; // 시각 없음=맨 뒤(오름차순 기준)
+    const cmpMs = (a: SheetRow, b: SheetRow) => {
+      const am = msOf(a);
+      const bm = msOf(b);
+      return am === bm ? 0 : am < bm ? -1 : 1;
+    };
+    rows.sort((a, b) => {
+      let d = 0;
+      if (sheetSort === "date") d = cmpMs(a, b);
+      else if (sheetSort === "name")
+        d = (a.v.fanNickname || a.v.fanId).localeCompare(b.v.fanNickname || b.v.fanId, "ko");
+      else if (sheetSort === "amount") d = (a.ref.amount ?? -1) - (b.ref.amount ?? -1);
+      else if (sheetSort === "qty") d = a.ref.quantity - b.ref.quantity;
+      else if (sheetSort === "item") d = a.it.itemName.localeCompare(b.it.itemName, "ko");
+      else d = stateRank[a.alloc.state] - stateRank[b.alloc.state];
+      if (d !== 0) return d * dir;
+      return cmpMs(a, b) || a.ref.entryId.localeCompare(b.ref.entryId);
+    });
+    return rows;
+  }, [nonArchivedViewers, q, draft, assignments, sheetSort, sheetDir]);
+
+  const sheetSummary = useMemo(() => {
+    let done = 0;
+    let part = 0;
+    for (const r of sheetRows) {
+      if (r.alloc.state === "done") done += 1;
+      else if (r.alloc.state === "part") part += 1;
+    }
+    return { total: sheetRows.length, done, part, pending: sheetRows.length - done - part };
+  }, [sheetRows]);
+
+  // 시트 줄 완료 토글: 줄의 조각 수량만큼 묶음 처리수량을 늘리고/줄이고, 배정 메모를 남긴다/지운다.
+  // 부분(part) 줄은 여기서 못 만진다 — A안 스테퍼(수량 입력)로 조정(이진 드롭다운으로 뭉개지 않기).
+  const toggleSheetRow = (row: SheetRow, toDone: boolean) => {
+    const k = itemKey(row.it);
+    const cur = Math.min(deliveredOf(row.v.key, k), row.it.count);
+    if (toDone) {
+      setDelivered(row.v.key, k, cur + (row.ref.quantity - row.alloc.allocated), row.it.count);
+      setAssignments((prev) => ({
+        ...prev,
+        [row.aKey]: {
+          entryId: row.ref.entryId,
+          ownerKey: row.v.key,
+          itemKey: k,
+          doneCount: row.ref.quantity,
+          doneAt: new Date().toISOString(),
+        },
+      }));
+    } else {
+      // 내리기 전에, 같은 줄에서 완료로 배분돼 있던 "다른" 조각들을 시각 미상 pin(doneAt="")으로
+      // 고정한다. 안 하면 수량이 줄어든 뒤 FIFO 재배분이 오래된 조각부터 다시 채워, 사용자가 내린
+      // 조각은 완료로 남고 엉뚱한 조각이 풀린다(리뷰 실측 시나리오). 이미 배정 있는 조각은 그대로.
+      const refs = row.it.refs ?? [];
+      const assignForLine: Record<string, { doneCount: number; doneAt: string }> = {};
+      for (const ref of refs) {
+        const a = assignments[assignKey(row.v.key, k, ref.entryId)];
+        if (a) assignForLine[ref.entryId] = { doneCount: a.doneCount, doneAt: a.doneAt };
+      }
+      const allocs = allocateDeliveryToRefs(refs, cur, assignForLine);
+      setAssignments((prev) => {
+        const next = { ...prev };
+        refs.forEach((ref, i) => {
+          if (ref.entryId === row.ref.entryId) return;
+          const otherKey = assignKey(row.v.key, k, ref.entryId);
+          if (!next[otherKey] && allocs[i].allocated > 0) {
+            next[otherKey] = {
+              entryId: ref.entryId,
+              ownerKey: row.v.key,
+              itemKey: k,
+              doneCount: allocs[i].allocated,
+              doneAt: "",
+            };
+          }
+        });
+        delete next[row.aKey];
+        return next;
+      });
+      setDelivered(row.v.key, k, Math.max(0, cur - row.alloc.allocated), row.it.count);
+    }
+  };
+
   return (
     <div className={styles.cm}>
       <p className={styles.cmBanner}>
@@ -845,6 +1196,13 @@ export default function DeliveryManager({
           onClick={() => setMode("products")}
         >
           상품별 목록
+        </button>
+        <button
+          type="button"
+          className={mode === "sheet" ? styles.subTabActiveLink : styles.subTabLink}
+          onClick={() => setMode("sheet")}
+        >
+          시트 보기
         </button>
         <button
           type="button"
@@ -1173,6 +1531,180 @@ export default function DeliveryManager({
             <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>
           )}
         </>
+      ) : mode === "sheet" ? (
+        <>
+          <p className={styles.fieldHint}>
+            한 후원 기록이 한 줄이에요(엑셀 시트 문법). 상태를 바꾸면 아래 저장 버튼을 눌러야 서버에
+            저장돼요. 처리 수량은 시청자별 목록과 같은 장부를 쓰니 어느 쪽에서 처리해도 숫자가 같아요.
+          </p>
+          <div className={styles.cmToolbar}>
+            <input
+              className={styles.cmSearch}
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="닉네임 또는 계정ID 검색"
+              aria-label="시청자 검색"
+            />
+            <label className={styles.dmCheckLabel}>
+              정렬
+              <select
+                className={styles.sheetSortSel}
+                value={sheetSort}
+                onChange={(e) => setSheetSort(e.target.value as typeof sheetSort)}
+                aria-label="시트 정렬 기준"
+              >
+                <option value="date">날짜</option>
+                <option value="name">닉네임</option>
+                <option value="amount">금액</option>
+                <option value="qty">수량</option>
+                <option value="item">종류</option>
+                <option value="state">상태</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className={styles.cmEditBtn}
+              onClick={() => setSheetDir((d) => (d === "asc" ? "desc" : "asc"))}
+              aria-label="정렬 방향 전환"
+            >
+              {sheetDir === "asc" ? "오름차순 ↑" : "내림차순 ↓"}
+            </button>
+          </div>
+          <div className={styles.cmSummary}>
+            <span className={styles.tag}>전체 {sheetSummary.total}건</span>
+            <span className={styles.tagActive}>완료 {sheetSummary.done}건</span>
+            {sheetSummary.part > 0 ? (
+              <span className={styles.tagWarn}>일부 {sheetSummary.part}건</span>
+            ) : null}
+            <span className={styles.tagMuted}>배송 중 {sheetSummary.pending}건</span>
+          </div>
+          {(entryCount ?? 0) >= 5000 ? (
+            <p className={styles.fieldErr}>
+              기록이 5,000건에 도달했어요 — 가장 오래된 기록부터 화면에서 잘려 이 표가 전체 장부보다
+              적게 보일 수 있어요.
+            </p>
+          ) : null}
+          {sheetRows.length > 0 ? (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>닉네임</th>
+                      <th className={styles.pmCountCol}>금액</th>
+                      <th className={styles.pmCountCol}>수량</th>
+                      <th className={styles.sheetDateCol}>날짜</th>
+                      <th>종류</th>
+                      <th className={styles.sheetStateCol}>상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sheetRows.slice(0, sheetLimit).map((row) => {
+                      const ms = row.ref.recordedAtMs;
+                      const kindBadge = row.ref.recordedKind ? KIND_BADGE[row.ref.recordedKind] : undefined;
+                      const days = ms !== null && ms !== undefined ? ageDaysFrom(ms, nowMs) : null;
+                      const isFixed = row.it.amountRangeLabel === "정가";
+                      return (
+                        <tr key={row.aKey}>
+                          <td>
+                            {row.v.fanNickname || <span className={styles.tagMuted}>닉네임 없음</span>}
+                            {row.v.fanId.trim() ? (
+                              <span className={styles.sheetFanId}>({row.v.fanId})</span>
+                            ) : null}
+                          </td>
+                          {/* countCell 금지: 480px sticky(right:0) 규칙이 걸려 상태 열과 겹쳐 쌓인다 */}
+                          <td className={styles.sheetNumCell}>{row.ref.amount ?? "–"}</td>
+                          <td className={styles.sheetNumCell}>{row.ref.quantity}</td>
+                          <td className={styles.sheetDateCell}>
+                            {ms !== null && ms !== undefined ? (
+                              <span
+                                className={styles.dmTimeChip}
+                                title={
+                                  (row.ref.recordedKind === "donate" && row.ref.recordedText
+                                    ? `후원 시각(위플랩 원문): ${row.ref.recordedText}`
+                                    : kindBadge?.title) ?? undefined
+                                }
+                              >
+                                {fmtShortDate(ms)}
+                                {kindBadge ? <em className={styles.dmTimeKind}>{kindBadge.label}</em> : null}
+                              </span>
+                            ) : (
+                              <span className={styles.tagMuted}>—</span>
+                            )}
+                            {days !== null && row.alloc.state !== "done" ? (
+                              <span className={days >= AGE_OLD_DAYS ? styles.dmAgeOld : styles.dmAge}>
+                                {days}일째
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>
+                            {isFixed ? (
+                              <span className={fpStyles.fixedBadge}>정가</span>
+                            ) : row.it.amountRangeLabel ? (
+                              <span className={styles.upboSet}>{row.it.amountRangeLabel}</span>
+                            ) : null}{" "}
+                            {row.it.itemName}
+                          </td>
+                          <td className={styles.sheetStateCell}>
+                            {!row.v.fanId.trim() ? (
+                              <span
+                                className={styles.sheetLock}
+                                title="계정ID 없는 시청자는 처리 수량이 저장되지 않아요 — 교환·양도 탭에서 계정ID를 채워 주세요"
+                              >
+                                ID 필요
+                              </span>
+                            ) : row.alloc.state === "part" ? (
+                              <span
+                                className={styles.tagWarn}
+                                title="수량 일부만 처리된 조각 — 시청자별 목록의 −/+ 로 조정해요"
+                              >
+                                일부 {row.alloc.allocated}/{row.ref.quantity}
+                              </span>
+                            ) : (
+                              <select
+                                className={row.alloc.state === "done" ? styles.sheetSelDone : styles.sheetSel}
+                                value={row.alloc.state === "done" ? "done" : "pending"}
+                                onChange={(e) => toggleSheetRow(row, e.target.value === "done")}
+                                aria-label={`${row.it.itemName} 배송 상태`}
+                              >
+                                <option value="pending">배송 중</option>
+                                <option value="done">완료</option>
+                              </select>
+                            )}
+                            {row.alloc.state === "done" ? (
+                              row.alloc.doneAt ? (
+                                <span className={styles.sheetDoneAt}>{fmtShortDateTime(row.alloc.doneAt)}</span>
+                              ) : (
+                                <span
+                                  className={styles.sheetDoneAtWeak}
+                                  title="완료 시각을 따로 기록하기 전에 수량으로 저장된 완료분 — 오래된 기록부터 자동 배정"
+                                >
+                                  수량 기준
+                                </span>
+                              )
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {sheetRows.length > sheetLimit ? (
+                <button
+                  type="button"
+                  className={styles.cmEditBtn}
+                  onClick={() => setSheetLimit((n) => n + 300)}
+                >
+                  더 보기 ({Math.min(sheetLimit, sheetRows.length)}/{sheetRows.length}건 표시 중)
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>
+          )}
+        </>
       ) : (
         <HiddenViewersPanel
           slug={slug}
@@ -1190,6 +1722,7 @@ export default function DeliveryManager({
         <div className={styles.dmSaveBar}>
           <span className={styles.dmSaveInfo}>
             저장 안 됨 · 변경 {changes.length}명 · {changedItemCount}건
+            {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}
           </span>
           <div className={styles.dmSaveActions}>
             <button type="button" className={styles.dmRevertBtn} onClick={revert} disabled={savingProgress}>
@@ -1281,8 +1814,15 @@ export default function DeliveryManager({
               이대로 저장할까요?
             </h3>
             <p className={styles.fieldHint}>
-              변경 {changes.length}명 · {changedItemCount}건. 아래 내용으로 처리 상태를 서버 DB에 저장합니다.
+              변경 {changes.length}명 · {changedItemCount}건
+              {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}. 아래 내용으로
+              처리 상태를 서버 DB에 저장합니다.
             </p>
+            {changes.length === 0 && assignChangedCount > 0 ? (
+              <p className={styles.fieldHint}>
+                수량 변경 없이 시트 보기 완료 표시(어느 후원 건을 완료로 쳤는지)만 바뀌었어요.
+              </p>
+            ) : null}
             <div className={styles.modalBody}>
               {changes.map((c) => (
                 <div key={c.viewerKey} className={styles.changeRow}>

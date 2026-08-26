@@ -146,9 +146,68 @@ export type DeliveryProgressItem = {
   updatedAt?: string;
 };
 
+// delivery_progress.updated_at 을 "그 항목이 완료(변경)된 시각"으로 믿을 수 있는 컷오프.
+// 이 시각 이전의 updated_at 은 diff 저장 도입 전 "마지막 전체 저장 시각"이라 항목별 시각이 아니다
+// (매 저장마다 전 행이 같은 now 로 덮였음) — 화면에는 이 시각 이후 값만 완료 시각으로 표시한다.
+// ★ 라이브 배포 시점으로 갱신해야 한다(배포 직전 값 교체).
+// 2026-08-26 20:34 KST 배포 — 롤아웃 중 구코드(전량 저장)가 마지막으로 찍을 수 있는 시각을
+// 넘기도록 10분 여유를 둔다(이전이면 가짜 완료 시각, 이후 몇 분 내 새 저장은 시각 미표시로 안전).
+export const DELIVERY_PROGRESS_TS_CUTOFF = "2026-08-26T20:45:00+09:00";
+
+// 후원 기록 시각의 출처 구분.
+//  donate  = 위플랩 원문 후원 시각(donateTimeText) — 진짜 후원 시각.
+//  manual  = 수동기록: 원문 시각이 없어 기록 생성 시각(createdAt)으로 대체.
+//  exchange= 교환으로 받은 기록: 교환된 시각(createdAt)이지 원 후원 시각이 아니다.
+//  created = 자동수집인데 원문 시각이 비거나 해석 불가 → 시트 반영 시각(createdAt)으로 대체.
+export type RecordedKind = "donate" | "manual" | "exchange" | "created";
+
+// "YYYY-MM-DD HH:MM(:SS)" (위플랩 서버 표시, KST) → epoch ms. 실패 시 null.
+// donationEvents.parseDonateTime 의 자급자족 사본(저장소 관례: 레인 간 직접 import 금지,
+// fixedPricePeriod 와 동일 방식) — 순수 모듈이라 클라이언트/서버 어디서든 쓴다.
+export function parseDonateTimeMs(text: string | null | undefined): number | null {
+  const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+  const match = clean.match(/^(\d{2,4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!match) return null;
+  const year = match[1].length === 2 ? `20${match[1]}` : match[1];
+  const pad = (v: string) => v.padStart(2, "0");
+  const iso = `${year}-${pad(match[2])}-${pad(match[3])}T${pad(match[4])}:${pad(match[5])}:${pad(match[6] || "0")}+09:00`;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+// 기록 1건의 "기록 시각"(epoch ms)과 출처를 정한다. 비교·정렬은 반드시 이 ms 값으로만 한다
+// (donateTimeText 원문은 +09:00, createdAt 은 UTC Z — 문자열 비교는 시간대가 섞여 틀어진다).
+export function entryRecordedAt(entry: {
+  sourceKey?: string;
+  donateTimeText?: string;
+  createdAt?: string;
+}): { ms: number | null; kind: RecordedKind | null } {
+  const sourceKey = entry.sourceKey ?? "";
+  const donateMs = parseDonateTimeMs(entry.donateTimeText);
+  if (donateMs !== null) return { ms: donateMs, kind: "donate" };
+  const createdMs = entry.createdAt ? Date.parse(entry.createdAt) : NaN;
+  const fallback = Number.isNaN(createdMs) ? null : createdMs;
+  if (sourceKey.startsWith("manual:")) return { ms: fallback, kind: fallback === null ? null : "manual" };
+  if (sourceKey.startsWith("exchange:")) return { ms: fallback, kind: fallback === null ? null : "exchange" };
+  return { ms: fallback, kind: fallback === null ? null : "created" };
+}
+
 export type OpsState = {
   viewerNotes: ViewerNote[];
   deliveryProgress: DeliveryProgressItem[];
+  // 시트 보기(B뷰)의 "어느 후원 건을 완료로 쳤는지" 배정 메모(관리자 전용 오버레이).
+  // 수량 장부(deliveryProgress)가 항상 진실이고 이 배열은 힌트다 — 어긋나면 FIFO 로 보정 표시.
+  deliveryAssignments?: DeliveryAssignment[];
+};
+
+// 배정 메모 1건. entryId 만으로는 조각을 못 집는다(부분 양도·교환 시 같은 entryId 가 여러 줄) —
+// ownerKey(현재 보유자 키)+itemKey(상품@@확률@@세트)까지 있어야 배송관리의 한 줄을 특정한다.
+export type DeliveryAssignment = {
+  entryId: string;
+  ownerKey: string; // ViewerSummary.key 와 동일(정규화 계정ID, 없으면 닉네임)
+  itemKey: string; // itemName@@probability@@amountRangeLabel — DeliveryManager itemKey 와 동일
+  doneCount: number;
+  doneAt: string; // ISO — 이 건을 완료로 찍은 시각
 };
 
 // 룰렛 관리(스트리머별 오버레이): 스트리머가 "이 그룹들은 같은 룰렛"이라고 직접 묶고 이름을 붙인다.
@@ -556,7 +615,16 @@ export type AggItem = {
   // 미션 유래 정가 기록(donation_type에 "미션" 포함 + 정가) — 배송관리 "미션" 배지용(withOps 때만 채움).
   mission?: boolean;
   // 이 줄을 구성하는 원본 기록 조각(entryId, 남은 수량) — 배송관리 "기록 삭제"(취소 이벤트)용(withOps 때만).
-  refs?: Array<{ entryId: string; quantity: number }>;
+  // recordedAtMs/recordedKind/recordedText: 기록 시각(entryRecordedAt 계산값)과 원문 — 시각·경과일 표시,
+  // 시트 보기(B뷰) 날짜 열·FIFO 배분용. amount: 후원 금액(있을 때만, 시트 보기 금액 열용).
+  refs?: Array<{
+    entryId: string;
+    quantity: number;
+    recordedAtMs?: number | null;
+    recordedKind?: RecordedKind | null;
+    recordedText?: string;
+    amount?: number;
+  }>;
   // 다 배송됨(remaining_done 모드에서만): 개수는 0이지만 "배송완료"로 남겨 표시한다.
   done?: boolean;
 };
@@ -602,6 +670,13 @@ export type HoldingItem = {
   // 원래 당첨자 정보(양도 추적용).
   sourceOwnerId: string;
   sourceOwnerName: string;
+  // 원본 기록의 시각 정보(entryRecordedAt) — 배송관리 시각·경과일 표시용. 팬 payload 에는 안 실린다
+  // (withOps refs 로만 내려간다).
+  recordedAtMs: number | null;
+  recordedKind: RecordedKind | null;
+  recordedText: string;
+  // 원본 기록의 후원 금액(있을 때만) — 시트 보기 금액 열용.
+  donationAmount?: number;
 };
 
 // 현재 보유자(계정ID 없으면 닉네임) 단위로 묶은 보유 현황.
@@ -649,6 +724,8 @@ function foldEntryHoldings(entry: UpboEntry, events: ItemEvent[]): HoldingItem[]
   const originalQuantity = Math.max(1, Number(entry.effectiveCount ?? 1));
   const sourceOwnerId = normalizeAccountId(entry.fanId);
   const sourceOwnerName = entry.fanNickname ?? "";
+  // 기록 시각은 entry 단위 — 이 entry 에서 나온 모든 조각이 같은 시각을 공유한다.
+  const recordedAt = entryRecordedAt(entry);
 
   // Lot は (보유자, 아이템) 단위 현재 상태. 교환으로 확률·라벨이 달라진 조각을 추적하기 위해
   // probability/amountRangeLabel 도 per-lot 으로 관리한다.
@@ -802,6 +879,10 @@ function foldEntryHoldings(entry: UpboEntry, events: ItemEvent[]): HoldingItem[]
       transferred,
       sourceOwnerId,
       sourceOwnerName,
+      recordedAtMs: recordedAt.ms,
+      recordedKind: recordedAt.kind,
+      recordedText: entry.donateTimeText ?? "",
+      donationAmount: entry.donationAmount,
     });
   }
   return holdings;
@@ -898,6 +979,79 @@ export function mergeHoldingItemsByName(items: HoldingItem[]): MergedHolding[] {
   }
   out.sort((a, b) => b.probability - a.probability || b.quantity - a.quantity);
   return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 시트 보기(B뷰): 한 줄(=보유 조각)별 완료 배분 계산.
+// 진실은 줄 묶음의 처리수량(processed)이고 배정(assignments)은 힌트다:
+//  1) 배정된 조각부터(doneAt 오래된 순) 배정 수량만큼 채우고,
+//  2) 남은 수량은 기록 시각 오래된 조각부터(FIFO, 시각 없음은 맨 뒤) 채운다.
+// 반환은 refs 입력 순서 그대로. doneAt 은 "배정과 수량이 일치해 그 조각이 전량 완료"일 때만
+// 싣는다 — FIFO 로 보정된 완료는 시각을 모르므로 null(화면에서 "수량 기준" 표기).
+// ───────────────────────────────────────────────────────────────────────────
+export type RefAllocation = {
+  allocated: number;
+  state: "done" | "part" | "pending";
+  doneAt: string | null;
+};
+
+export function allocateDeliveryToRefs(
+  refs: Array<{ entryId: string; quantity: number; recordedAtMs?: number | null }>,
+  processed: number,
+  assignments: Record<string, { doneCount: number; doneAt: string }>,
+): RefAllocation[] {
+  const allocated = refs.map(() => 0);
+  let remaining = Math.max(0, Math.floor(processed));
+
+  const indexed = refs.map((ref, i) => ({ ref, i, assign: assignments[ref.entryId] }));
+
+  // 1) 배정 힌트 우선. 순서는 doneAt 을 해석한 ms 기준(문자열 비교 금지 — 시간대 섞이면 틀어진다).
+  //    doneAt 이 비었거나 해석 불가한 배정은 "시각 미상의 기존 완료 고정(pin)"이므로 맨 앞에서 먼저 채운다.
+  const hintMs = (doneAt: string): number => {
+    if (!doneAt) return Number.NEGATIVE_INFINITY;
+    const ms = Date.parse(doneAt);
+    return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
+  };
+  const hinted = indexed
+    .filter((x) => x.assign && x.assign.doneCount > 0)
+    .sort((a, b) => {
+      const am = hintMs(a.assign!.doneAt);
+      const bm = hintMs(b.assign!.doneAt);
+      return am === bm ? 0 : am < bm ? -1 : 1; // -Infinity 동률 안전(빼기 비교는 NaN)
+    });
+  for (const x of hinted) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, Math.floor(x.assign!.doneCount), x.ref.quantity);
+    allocated[x.i] += take;
+    remaining -= take;
+  }
+
+  // 2) 남은 수량은 FIFO(기록 시각 오래된 순, 시각 없음은 맨 뒤, 동률은 entryId).
+  const fifo = [...indexed].sort((a, b) => {
+    const am = a.ref.recordedAtMs ?? Number.POSITIVE_INFINITY;
+    const bm = b.ref.recordedAtMs ?? Number.POSITIVE_INFINITY;
+    return am - bm || a.ref.entryId.localeCompare(b.ref.entryId);
+  });
+  for (const x of fifo) {
+    if (remaining <= 0) break;
+    const room = x.ref.quantity - allocated[x.i];
+    if (room <= 0) continue;
+    const take = Math.min(remaining, room);
+    allocated[x.i] += take;
+    remaining -= take;
+  }
+
+  return refs.map((ref, i) => {
+    const a = allocated[i];
+    const assign = assignments[ref.entryId];
+    const fullyByAssign = assign && a >= ref.quantity && Math.floor(assign.doneCount) >= ref.quantity;
+    return {
+      allocated: a,
+      state: a >= ref.quantity && ref.quantity > 0 ? "done" : a > 0 ? "part" : "pending",
+      // pin(doneAt="")은 시각 미상 — null 로 정규화해 화면이 "수량 기준"으로 표기하게 한다.
+      doneAt: fullyByAssign && assign.doneAt ? assign.doneAt : null,
+    } as RefAllocation;
+  });
 }
 
 export async function fetchStreamerState(slug: string): Promise<StateResult> {
