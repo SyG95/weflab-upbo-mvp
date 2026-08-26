@@ -676,6 +676,87 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── P1 기본값 라운드(2026-08-26, 원정 27): 시간 도장 + 숫자 띠 ──
+   멜론 차트 문법 — 기준 시각을 잔글씨가 아니라 이 장부의 제목급 신뢰 신호로. */
+.stampTimeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px dashed var(--paper-line);
+}
+
+.stampTimeValue {
+  font-size: 16px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.stampTimeLabel {
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid var(--paper-line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--paper);
+}
+
+.statStrip {
+  display: flex;
+  margin-top: 12px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--paper);
+  overflow: hidden;
+}
+
+.statStrip > div {
+  flex: 1;
+  text-align: center;
+  padding: 11px 6px 9px;
+}
+
+.statStrip > div + div {
+  border-left: 1px solid var(--paper-line);
+}
+
+.statStrip b {
+  display: block;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.statStrip span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 이름 칸 아래 잔글씨 계정ID(열 통합) — idCell과 같은 판독 규격 */
+.nameCellId {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 400;
+  word-break: break-all;
+}
+
+/* 시트 끝맺음 한 줄 */
+.sheetFooter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 14px 2px 2px;
+  border-top: 1px dashed var(--paper-line);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 /* 닉네임 빈 기록의 이름 자리 폴백 — ID 승격(모노)과 자리표시 문구 */
 .nameFallbackId {
   font-family: var(--font-mono);

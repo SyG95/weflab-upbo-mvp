@@ -1323,11 +1323,29 @@ function FanView({
           />
           <button type="submit">찾기</button>
         </form>
-        <p className={styles.summaryLine}>
-          시청자 {allViewerCount}명 · 자동 기록 {allEntries.length}건 · 기준{" "}
-          {state.settings?.thresholdPercent ?? "—"}% · 마지막 반영 {fmtKst(lastApplied)}
-          {deliveryMode !== "off" ? " · 배송 반영 중" : ""}
-        </p>
+        {/* P1 기본값 라운드(2026-08-26): 잔글씨 상태줄 → 시간 도장 + 숫자 띠.
+            멜론 차트 문법 — 기준 시각이 이 장부의 제목급 신뢰 신호(원정 27). 전부 실데이터. */}
+        <div className={styles.stampTimeRow}>
+          <span className={styles.stampTimeValue}>
+            {lastApplied ? `${fmtKst(lastApplied)} 기준` : "아직 첫 반영 전"}
+          </span>
+          {lastApplied ? <span className={styles.stampTimeLabel}>마지막 자동 반영</span> : null}
+          {deliveryMode !== "off" ? <span className={styles.stampTimeLabel}>배송 반영 중</span> : null}
+        </div>
+        <div className={styles.statStrip}>
+          <div>
+            <b>{allEntries.length}</b>
+            <span>자동 기록</span>
+          </div>
+          <div>
+            <b>{allViewerCount}</b>
+            <span>시청자</span>
+          </div>
+          <div>
+            <b>{state.settings?.thresholdPercent ?? "—"}%</b>
+            <span>기록 기준</span>
+          </div>
+        </div>
       </section>
 
       <div className={styles.perforation} aria-hidden="true" />
@@ -1419,6 +1437,11 @@ function FanView({
         ) : (
           <HistoryTable rows={history} searchQuery={searchQuery} hideIds={state.fanIdHidden === true} />
         )}
+        {/* P1 기본값 라운드: 페이지가 "-"나 표에서 뚝 끊기지 않게 끝맺음 한 줄(전부 실데이터·실설명). */}
+        <div className={styles.sheetFooter}>
+          <span>위플랩 룰렛 기록에서 자동으로 반영되는 공개 장부예요.</span>
+          {lastApplied ? <span>마지막 반영 {fmtKst(lastApplied)}</span> : null}
+        </div>
       </section>
     </>
   );
@@ -1429,9 +1452,18 @@ function FanView({
 // ID를 어떤 자리에도 노출하지 않고 자리표시 문구만 보여준다(8/10 프라이버시 결정 유지).
 function FanNameLabel({ nickname, fanId, hideIds }: { nickname: string; fanId: string; hideIds?: boolean }) {
   const name = (nickname ?? "").trim();
-  if (name) return <>{name}</>;
-  if (!hideIds && fanId) return <span className={styles.nameFallbackId}>{fanId}</span>;
-  return <span className={styles.nameFallbackNone}>닉네임 미등록</span>;
+  if (!name) {
+    if (!hideIds && fanId) return <span className={styles.nameFallbackId}>{fanId}</span>;
+    return <span className={styles.nameFallbackNone}>닉네임 미등록</span>;
+  }
+  // P1 기본값 라운드(2026-08-26): 계정ID 열을 없애고 이름 아래 잔글씨로 통합 —
+  // 모바일에서 표 최소 폭이 줄어 건수까지 한 화면에 들어온다. 숨김 시트는 이름만.
+  return (
+    <>
+      {name}
+      {!hideIds && fanId ? <span className={styles.nameCellId}>{fanId}</span> : null}
+    </>
+  );
 }
 
 function LedgerTable({
@@ -1468,7 +1500,6 @@ function LedgerTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            {hideIds ? null : <th>계정ID</th>}
             <th>업보</th>
             <th className={styles.countCol}>건수</th>
           </tr>
@@ -1480,7 +1511,6 @@ function LedgerTable({
               <td className={styles.nameCell}>
                 <FanNameLabel nickname={v.fanNickname} fanId={v.fanId} hideIds={hideIds} />
               </td>
-              {hideIds ? null : <td className={styles.idCell}>{v.fanId}</td>}
               <td>
                 <div className={styles.upboCell}>
                   {v.items.map((it) => {
@@ -1575,7 +1605,6 @@ function HistoryTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            {hideIds ? null : <th>계정ID</th>}
             <th>상품</th>
             {showSet ? <th className={styles.probCol}>룰렛 세트</th> : null}
             <th className={styles.donateCol} title="위플랩 표시시간 원문">
@@ -1589,7 +1618,6 @@ function HistoryTable({
               <td className={styles.nameCell}>
                 <FanNameLabel nickname={e.fanNickname} fanId={e.fanId} hideIds={hideIds} />
               </td>
-              {hideIds ? null : <td className={styles.idCell}>{e.fanId}</td>}
               <td>
                 {/* 확률 열은 표기하지 않는다(sy 확정 2026-07-07). 정가는 배지+이름(접두어 제거)으로 표기. */}
                 {e.sourceKey.startsWith("fixed:") ? (

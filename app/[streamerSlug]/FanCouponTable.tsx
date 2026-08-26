@@ -55,7 +55,6 @@ export default function FanCouponTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            {hideIds ? null : <th>계정ID</th>}
             <th>{label}</th>
             <th className={styles.countCol}>합계</th>
           </tr>
@@ -65,17 +64,20 @@ export default function FanCouponTable({
           {viewers.map((v, i) => (
             <tr key={hideIds ? `r${i}` : v.key}>
               {/* 닉네임 빈 기록 표시 규칙(sy 2026-08-12, page.tsx FanNameLabel과 동일):
-                  계정ID 승격, 단 숨김 시트에선 ID 미노출 자리표시만. */}
+                  계정ID 승격, 단 숨김 시트에선 ID 미노출 자리표시만.
+                  P1 라운드(2026-08-26): ID 열 제거 — 이름 아래 잔글씨 통합. */}
               <td className={styles.nameCell}>
                 {v.nickname.trim() ? (
-                  v.nickname
+                  <>
+                    {v.nickname}
+                    {!hideIds && v.accountId ? <span className={styles.nameCellId}>{v.accountId}</span> : null}
+                  </>
                 ) : !hideIds && v.accountId ? (
                   <span className={styles.nameFallbackId}>{v.accountId}</span>
                 ) : (
                   <span className={styles.nameFallbackNone}>닉네임 미등록</span>
                 )}
               </td>
-              {hideIds ? null : <td className={styles.idCell}>{v.accountId}</td>}
               <td>
                 <div className={styles.upboCell}>
                   {v.coupons.map((c) => (
