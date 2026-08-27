@@ -99,6 +99,8 @@ type PageProps = {
     // 정가 탭 하위 유형(팬 표시 방식 subtabs 일 때): sig | event | server
     sfk?: string;
     w?: string;
+    // P1 시안 비교 스위치(2026-08-26): "b"=방송국 옆방 레이아웃(무커스텀·팬 화면 한정)
+    layout?: string;
   }>;
 };
 
@@ -307,7 +309,7 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
-  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w } = await searchParams;
+  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w, layout } = await searchParams;
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
   // 옛 옷장 탭 주소(?tab=wardrobe[&w=컷id]) → 독립 화면으로 이동(8/12 탭 제거).
@@ -408,6 +410,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       (showcase.bannerUrl || showcase.posterUrls?.some(Boolean) || showcase.noticeText?.trim()),
   );
   const showcaseOn = !isAdminMode && (showcaseContent || hasProbRail);
+  // P1 시안 B("방송국 옆방") 비교 스위치 — 무커스텀(쇼케이스 없음) 팬 화면에서만 켠다.
+  const layoutB = layout === "b" && !isAdminMode && !showcaseOn;
   const posterItems = showcaseOn
     ? (showcase?.posterUrls ?? []).map((url, i) => ({ url, i })).filter((p) => Boolean(p.url))
     : [];
@@ -482,19 +486,21 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             )}
           </section>
         ) : null}
-        <header className={styles.cover}>
-          <div className={styles.coverTop}>
-            <div>
-              <h1 className={styles.coverName}>{sheetTitle}</h1>
+        {layoutB ? null : (
+          <header className={styles.cover}>
+            <div className={styles.coverTop}>
+              <div>
+                <h1 className={styles.coverName}>{sheetTitle}</h1>
+              </div>
+              <a
+                className={styles.adminTab}
+                href={isAdminMode ? `/${streamerSlug}` : `/${streamerSlug}?admin=1`}
+              >
+                {isAdminMode ? "팬 화면으로" : "관리자"}
+              </a>
             </div>
-            <a
-              className={styles.adminTab}
-              href={isAdminMode ? `/${streamerSlug}` : `/${streamerSlug}?admin=1`}
-            >
-              {isAdminMode ? "팬 화면으로" : "관리자"}
-            </a>
-          </div>
-        </header>
+          </header>
+        )}
 
         {isAdminMode && sheetAdminLocked ? (
           <SheetAdminGate
@@ -558,6 +564,10 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             coupons={fanCoupons}
             showCouponTab={showCouponTab}
             wardrobeItems={wardrobeVisibleItems}
+            layoutB={layoutB}
+            sheetTitle={sheetTitle}
+            streamerName={streamerName}
+            stationLink={showcase?.bannerLink ?? null}
           />
         )}
       </div>
@@ -1226,6 +1236,10 @@ function FanView({
   coupons,
   showCouponTab,
   wardrobeItems,
+  layoutB,
+  sheetTitle,
+  streamerName,
+  stationLink,
 }: {
   state: StreamerState;
   slug: string;
@@ -1239,6 +1253,12 @@ function FanView({
   showCouponTab: boolean;
   // 옷장 공개 컷(버튼 노출 판단 + 건수 표시용) — 옷장 화면 자체는 /slug/wardrobe 독립 페이지.
   wardrobeItems: WardrobeState["items"];
+  // P1 시안 B 비교 스위치(?layout=b, 무커스텀 팬 화면 한정) — 신원 카드+룰렛 레일 레이아웃.
+  layoutB?: boolean;
+  sheetTitle?: string;
+  streamerName?: string;
+  // 방송국 링크 = 배너 링크 실데이터 재사용(showcase.bannerLink). 없으면 버튼 자체를 안 그린다(가짜 버튼 금지).
+  stationLink?: string | null;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
   const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
@@ -1294,7 +1314,43 @@ function FanView({
           : `${allEntries.length}건`;
 
   return (
-    <>
+    <div className={styles.fanLayout} data-layout-b={layoutB ? "" : undefined}>
+      {layoutB ? (
+        <aside className={styles.idRail}>
+          <div className={styles.idCard}>
+            <div className={styles.idAvatar} aria-hidden="true">
+              {(streamerName || slug).trim().charAt(0)}
+            </div>
+            <div className={styles.idText}>
+              <h1 className={styles.idName}>{sheetTitle || `${streamerName || slug} 업보시트`}</h1>
+            </div>
+            {stationLink ? (
+              <a className={styles.stationBtn} href={stationLink} target="_blank" rel="noopener noreferrer">
+                방송국 가기 ↗
+              </a>
+            ) : null}
+            <a className={styles.idAdminLink} href={`/${slug}?admin=1`}>
+              관리자
+            </a>
+          </div>
+          {showRouletteTabs && rouletteGroups.length > 0 ? (
+            <div className={styles.railRoulette}>
+              <h2>룰렛별 기록</h2>
+              {rouletteGroups.map((g) => (
+                <a
+                  key={g.key}
+                  className={styles.railRouletteItem}
+                  href={`/${slug}?layout=b&rtab=${encodeURIComponent(g.key)}`}
+                >
+                  <span>{g.label}</span>
+                  <span className={styles.railRouletteCount}>{g.viewers.length}명</span>
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+      <div className={styles.fanMain}>
       <section className={styles.finder} aria-labelledby="finder-title">
         <div className={styles.finderTitleRow}>
           <h2 id="finder-title">내 업보 확인</h2>
@@ -1443,7 +1499,8 @@ function FanView({
           {lastApplied ? <span>마지막 반영 {fmtKst(lastApplied)}</span> : null}
         </div>
       </section>
-    </>
+      </div>
+    </div>
   );
 }
 
