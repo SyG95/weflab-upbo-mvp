@@ -1994,6 +1994,7 @@ function AdminPanel({
                 catalogItems={catalogItems}
                 rouletteByGroupIndex={rouletteByGroupIndex}
                 catalogVersion={activeCatalog?.version ?? state.currentCatalogVersion ?? null}
+                deliveryProgress={state.deliveryProgress ?? []}
               />
             ) : (
               <p className={styles.fieldHint}>아직 관리할 업보 항목이 없어요.</p>

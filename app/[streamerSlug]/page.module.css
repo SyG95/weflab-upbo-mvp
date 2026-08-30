@@ -3054,6 +3054,26 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
+}
+
+/* 배송 전량완료 접기 토글 — 배송 장부 기준 다 보낸 시청자를 기본으로 숨기고 여기서 펼친다. */
+.ieDoneToggle {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px dashed var(--paper-line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--paper);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ieDoneToggle:hover {
+  color: var(--stamp);
+  border-color: var(--stamp);
 }
 
 .ieCard {
