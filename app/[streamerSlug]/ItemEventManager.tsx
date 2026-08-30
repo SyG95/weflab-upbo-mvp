@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { computeHoldings, mergeHoldingItemsByName, normalizeAccountId } from "../../lib/api";
-import type { HoldingItem, ItemEvent, MergedHolding, UpboEntry, ViewerHolding } from "../../lib/api";
+import type { DeliveryProgressItem, HoldingItem, ItemEvent, MergedHolding, UpboEntry, ViewerHolding } from "../../lib/api";
 
 type CatalogChoice = {
   itemName: string;
@@ -144,6 +144,7 @@ export default function ItemEventManager({
   catalogItems,
   rouletteByGroupIndex,
   catalogVersion,
+  deliveryProgress,
 }: {
   slug: string;
   entries: UpboEntry[];
@@ -153,6 +154,9 @@ export default function ItemEventManager({
   rouletteByGroupIndex: Record<number, string>;
   // 현재 사용 중인 룰렛표 버전. 교환으로 받은 상품 기록에 저장한다.
   catalogVersion: number | null;
+  // 배송관리 처리수량 장부(읽기 전용). 전량 배송완료 시청자를 기본으로 접는 데만 쓴다 —
+  // 장부는 여기서 절대 쓰지 않고, 수량 계산(computeHoldings)에도 섞지 않는다.
+  deliveryProgress: DeliveryProgressItem[];
 }) {
   const router = useRouter();
   // events 가 단일 진실원본. POST 응답의 itemEvents(해당 entryId 전체)로 부분 교체한다.
@@ -288,6 +292,52 @@ export default function ItemEventManager({
     () => holdings.reduce((s, v) => s + v.total, 0),
     [holdings],
   );
+
+  // ── 배송 전량완료 접기 ──────────────────────────────────────────────
+  // 배송관리와 같은 매칭 규칙(fanId=보유자 key, itemKey=상품명@@확률@@라벨)으로
+  // 처리수량을 읽어, "보유 전량이 배송 처리된" 시청자를 기본으로 접는다.
+  // 표시 계산 전용 — 보유 수량(computeHoldings)에는 영향이 없다.
+  const processedByOwner = useMemo(() => {
+    const map = new Map<string, Map<string, number>>();
+    for (const row of deliveryProgress) {
+      if (!row.fanId || !row.itemKey) continue;
+      const m = map.get(row.fanId) ?? new Map<string, number>();
+      m.set(row.itemKey, Math.max(0, Math.floor(Number(row.processedCount || 0))));
+      map.set(row.fanId, m);
+    }
+    return map;
+  }, [deliveryProgress]);
+
+  // 보유자별 처리 현황(done/total). 같은 itemKey 조각은 보유량을 먼저 합쳐 중복 계산을 막고,
+  // 처리수량은 보유량을 상한으로 잘라 센다(취소 등으로 보유가 줄어도 안전).
+  const deliveryDoneByOwner = useMemo(() => {
+    const out = new Map<string, { done: number; total: number }>();
+    for (const g of holdings) {
+      const m = processedByOwner.get(g.key);
+      const qtyByKey = new Map<string, number>();
+      for (const it of g.items) {
+        const k = `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
+        qtyByKey.set(k, (qtyByKey.get(k) ?? 0) + it.quantity);
+      }
+      let done = 0;
+      for (const [k, qty] of qtyByKey) done += Math.min(m?.get(k) ?? 0, qty);
+      out.set(g.key, { done, total: g.total });
+    }
+    return out;
+  }, [holdings, processedByOwner]);
+
+  const allDoneKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const [key, d] of deliveryDoneByOwner) {
+      if (d.total > 0 && d.done >= d.total) set.add(key);
+    }
+    return set;
+  }, [deliveryDoneByOwner]);
+
+  // 검색 중에는 접지 않는다 — 사람을 찾는데 배송완료라고 안 보이면 더 헷갈린다.
+  const activeView = useMemo(() => view.filter((g) => !allDoneKeys.has(g.key)), [view, allDoneKeys]);
+  const doneView = useMemo(() => view.filter((g) => allDoneKeys.has(g.key)), [view, allDoneKeys]);
+  const [showDone, setShowDone] = useState(false);
 
   // 한 보유자에 묶인 entryId 전체의 이벤트(이력 타임라인용). 최근순.
   const eventsForOwner = useCallback(
@@ -751,7 +801,8 @@ export default function ItemEventManager({
       <p className={styles.ieBanner}>
         <strong>시청자 단위</strong>로 양도·교환·취소를 진행해요. 버튼을 누르면 그 시청자가 가진 모든 상품이
         한 창에 뜨고, 상품별 개수를 골라 한 번에 처리할 수 있어요. 원본 당첨 기록은 절대 바뀌지 않고,{" "}
-        <strong>처리(지급) 수량</strong>은 «배송 관리» 탭에서 관리해요.
+        <strong>처리(지급) 수량</strong>은 «배송 관리» 탭에서 관리해요. 배송이 전량 끝난 시청자는
+        목록에서 기본으로 접혀요(검색하면 항상 보여요).
       </p>
 
       {message ? (
@@ -775,6 +826,17 @@ export default function ItemEventManager({
         <span className={styles.tag}>현재 보유자 {holdings.length}명</span>
         <span className={styles.tagMuted}>보유 수량 합계 {totalQuantity}개</span>
         {q.trim() ? <span className={styles.tagMuted}>검색 결과 {view.length}명</span> : null}
+        {!q.trim() && doneView.length > 0 ? (
+          <button
+            type="button"
+            className={styles.ieDoneToggle}
+            onClick={() => setShowDone((v) => !v)}
+            aria-pressed={showDone}
+            title="배송관리 기준 보유 전량이 처리 완료된 시청자예요. 기록은 그대로 있고 화면에서만 접혀요."
+          >
+            {showDone ? `배송완료 ${doneView.length}명 접기 ▲` : `배송완료 ${doneView.length}명 보기 ▼`}
+          </button>
+        ) : null}
       </div>
 
       {view.length === 0 ? (
@@ -782,11 +844,21 @@ export default function ItemEventManager({
           {q.trim() ? "조건에 맞는 보유자가 없어요." : "아직 보유 중인 업보가 없어요."}
         </p>
       ) : (
+        <>
+          {!q.trim() && !showDone && activeView.length === 0 ? (
+            <p className={styles.fieldHint}>
+              남은(미배송) 업보가 없어요 — 배송 전량완료 {doneView.length}명은 위 «배송완료 보기» 버튼으로 볼 수 있어요.
+            </p>
+          ) : null}
         <ul className={styles.ieList}>
-          {view.map((group) => {
+          {(q.trim() || showDone ? view : activeView).map((group) => {
             const key = group.key;
             const open = openHistory[key] ?? false;
             const ledgerEvents = open ? eventsForOwner(group) : [];
+            // 배송 장부 기준 처리 현황 배지. 전량완료는 기본 목록에서 접힌다(검색·펼침 시 표시).
+            const dd = deliveryDoneByOwner.get(key);
+            const allDone = allDoneKeys.has(key);
+            const partialDone = !allDone && (dd?.done ?? 0) > 0;
             return (
               <li key={key} className={styles.ieCard}>
                 <div className={styles.ieCardHead}>
@@ -794,6 +866,15 @@ export default function ItemEventManager({
                     <span className={styles.ieName}>{group.ownerName || "(이름 없음)"}</span>
                     {group.ownerId ? <span className={styles.ieId}>{group.ownerId}</span> : null}
                     <span className={styles.ieTotal}>{group.total}개</span>
+                    {allDone ? (
+                      <span className={styles.tagActive} title="배송관리 기준 보유 전량 처리 완료">
+                        배송완료
+                      </span>
+                    ) : partialDone ? (
+                      <span className={styles.tagMuted} title="배송관리 기준 처리 수량 / 보유 수량">
+                        배송 {dd?.done}/{dd?.total}
+                      </span>
+                    ) : null}
                   </div>
                   <div className={styles.ieActions}>
                     {(["transfer", "exchange", "cancel"] as ActionType[]).map((t) => {
@@ -884,6 +965,7 @@ export default function ItemEventManager({
             );
           })}
         </ul>
+        </>
       )}
 
       {action && meta ? (
