@@ -35,9 +35,9 @@ assertJson(
   "설정 없으면 빈 오버라이드(회귀 없음)",
 );
 
-// 3) 핵심 버그 수정: 새 버전(설정 없음)이 직전 버전에서 자동 승계.
+// 3) 핵심 버그 수정: 새 버전(저장본 없음 = 키 자체가 없음)이 직전 버전에서 자동 승계.
 assertJson(
-  computeEffectiveOverrides(2, v2, { 1: { g1: false }, 2: {} }, { 1: v1, 2: v2 }),
+  computeEffectiveOverrides(2, v2, { 1: { g1: false } }, { 1: v1, 2: v2 }),
   { g0: false },
   "새 버전은 직전 버전 off를 내용 기준으로 자동 승계",
 );
@@ -67,4 +67,31 @@ assertJson(
   "같은 금액대라도 상품 지문으로 정확히 매칭",
 );
 
-console.log("catalog-usage carryover: 6개 통과");
+// 7) 저장 후 새로고침 풀림 버그 수정: 그 버전에 저장본이 있으면(빈 것 포함) 저장본이 전부다.
+//    저장은 전체 교체 방식이라, 승계를 다시 밑에 깔면 "위플랩 원본값으로 되돌린 키"가
+//    옛 버전 꺼짐으로 매번 되살아난다(사용 토글이 저장 후 새로고침마다 꺼지던 실사고).
+assertJson(
+  computeEffectiveOverrides(2, v2, { 1: { g1: false }, 2: {} }, { 1: v1, 2: v2 }),
+  {},
+  "저장본이 있으면(빈 저장 포함) 승계를 다시 적용하지 않음",
+);
+
+// 8) 승계 오매핑 수정(나월 v7→v8 실사고): "같은 상품·다른 확률" 표가 여럿이라 지문이 동점이면
+//    같은 금액대 라벨을 최우선 매칭하고, 라벨 일치가 없는 동점은 승계하지 않는다.
+const SAME = ["A", "B", "C", "D", "E", "F"];
+const n7 = [g(8, "50~51", SAME), g(9, "500~510", SAME), g(10, "100", SAME)];
+const n8 = [g(1, "33", SAME), g(2, "50~51", SAME), g(3, "500~510", SAME), g(4, "300~310", SAME)];
+assertJson(
+  carryOverridesByContent(n7, { g8: false, g9: false, g10: false }, n8),
+  { g2: false, g3: false },
+  "동점 지문은 같은 라벨로 매칭(50~51→50~51, 500~510→500~510), 라벨 없는 100은 승계 생략",
+);
+
+// 9) 7+8 통합(나월 증상 재현): v8에 저장본이 있으면 g4(300~310)가 다시 꺼지지 않는다.
+assertJson(
+  computeEffectiveOverrides(8, n8, { 7: { g8: false, g9: false, g10: false }, 8: { g2: false } }, { 7: n7, 8: n8 }),
+  { g2: false },
+  "저장본(g4 없음=켜짐)이 최종 — 승계 꺼짐이 300~310을 되살려 끄지 않음",
+);
+
+console.log("catalog-usage carryover: 9개 통과");
