@@ -50,6 +50,26 @@ function fmtKst(iso?: string): string {
   return `${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
+// 배송관리 처리수량 장부와 같은 상품 키(상품명@@확률@@금액대 라벨) — 시청자/상품 접기 공용.
+const deliveryItemKey = (it: { itemName: string; probability: number; amountRangeLabel?: string }) =>
+  `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
+
+// 조각 묶음의 배송 처리수량 합(보유량 상한). 같은 키 조각은 보유량을 먼저 합쳐 중복 계산을 막는다.
+function deliveredForSources(
+  sources: { itemName: string; probability: number; amountRangeLabel?: string; quantity: number }[],
+  proc: Map<string, number> | undefined,
+): number {
+  if (!proc) return 0;
+  const qtyByKey = new Map<string, number>();
+  for (const src of sources) {
+    const k = deliveryItemKey(src);
+    qtyByKey.set(k, (qtyByKey.get(k) ?? 0) + src.quantity);
+  }
+  let done = 0;
+  for (const [k, qty] of qtyByKey) done += Math.min(proc.get(k) ?? 0, qty);
+  return done;
+}
+
 const EVENT_LABEL: Record<string, string> = {
   created_from_source: "생성",
   transfer: "양도",
@@ -308,20 +328,11 @@ export default function ItemEventManager({
     return map;
   }, [deliveryProgress]);
 
-  // 보유자별 처리 현황(done/total). 같은 itemKey 조각은 보유량을 먼저 합쳐 중복 계산을 막고,
-  // 처리수량은 보유량을 상한으로 잘라 센다(취소 등으로 보유가 줄어도 안전).
+  // 보유자별 처리 현황(done/total). 처리수량은 보유량을 상한으로 잘라 센다(취소 등으로 보유가 줄어도 안전).
   const deliveryDoneByOwner = useMemo(() => {
     const out = new Map<string, { done: number; total: number }>();
     for (const g of holdings) {
-      const m = processedByOwner.get(g.key);
-      const qtyByKey = new Map<string, number>();
-      for (const it of g.items) {
-        const k = `${it.itemName}@@${it.probability}@@${it.amountRangeLabel ?? ""}`;
-        qtyByKey.set(k, (qtyByKey.get(k) ?? 0) + it.quantity);
-      }
-      let done = 0;
-      for (const [k, qty] of qtyByKey) done += Math.min(m?.get(k) ?? 0, qty);
-      out.set(g.key, { done, total: g.total });
+      out.set(g.key, { done: deliveredForSources(g.items, processedByOwner.get(g.key)), total: g.total });
     }
     return out;
   }, [holdings, processedByOwner]);
@@ -338,6 +349,20 @@ export default function ItemEventManager({
   const activeView = useMemo(() => view.filter((g) => !allDoneKeys.has(g.key)), [view, allDoneKeys]);
   const doneView = useMemo(() => view.filter((g) => allDoneKeys.has(g.key)), [view, allDoneKeys]);
   const [showDone, setShowDone] = useState(false);
+
+  // 액션 모달 안 상품 줄별 배송 처리수량(merged.key → done). 전량완료 줄은 기본 접힘.
+  const [showDoneItems, setShowDoneItems] = useState(false);
+  const modalDeliveredByItem = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!action) return map;
+    const proc = processedByOwner.get(action.group.key);
+    for (const m of action.merged) map.set(m.key, deliveredForSources(m.sources, proc));
+    return map;
+  }, [action, processedByOwner]);
+  const modalItemDone = (m: MergedHolding) =>
+    m.quantity > 0 && (modalDeliveredByItem.get(m.key) ?? 0) >= m.quantity;
+  const modalActiveItems = action ? action.merged.filter((m) => !modalItemDone(m)) : [];
+  const modalDoneItems = action ? action.merged.filter((m) => modalItemDone(m)) : [];
 
   // 한 보유자에 묶인 entryId 전체의 이벤트(이력 타임라인용). 최근순.
   const eventsForOwner = useCallback(
@@ -372,6 +397,7 @@ export default function ItemEventManager({
     setActionType(type);
     // 상품이 1종뿐이면 1개를 미리 선택해 클릭 수를 줄인다.
     setSel(merged.length === 1 ? { [merged[0].key]: 1 } : {});
+    setShowDoneItems(false);
     setOwnerName("");
     setOwnerId("");
     setIdListOpen(false);
@@ -469,7 +495,9 @@ export default function ItemEventManager({
 
   const selectAll = () => {
     if (!action) return;
-    setSel(Object.fromEntries(action.merged.map((m) => [m.key, m.quantity])));
+    // 배송 전량완료(접힌) 줄은 전체 선택에서 제외 — 모르고 배송된 상품을 양도/취소하는 실수 방지.
+    // 접힌 줄을 펼쳐서 스테퍼로 직접 고르는 건 그대로 가능하다.
+    setSel(Object.fromEntries(action.merged.filter((m) => !modalItemDone(m)).map((m) => [m.key, m.quantity])));
   };
   const clearAll = () => setSel({});
 
@@ -796,6 +824,52 @@ export default function ItemEventManager({
       ? "(받을 상품을 추가해 주세요)"
       : receives.map((r) => `${r.itemName} ${r.qty}개`).join(" + ");
 
+  // 액션 모달의 상품 한 줄(스테퍼). 활성/배송완료(접힘) 두 목록이 공유한다.
+  const renderModalItemRow = (m: MergedHolding) => {
+    const n = Math.min(sel[m.key] ?? 0, m.quantity);
+    const badge = mergedBadge(m);
+    const done = modalDeliveredByItem.get(m.key) ?? 0;
+    return (
+      <div key={m.key} className={styles.dmItemRow}>
+        <span className={styles.dmItemName}>
+          {m.itemName}
+          <span className={styles.dmItemProb}>{m.probability}%</span>
+          {badge ? <span className={badge.cls}>{badge.label}</span> : null}
+          {m.quantity > 0 && done >= m.quantity ? (
+            <span className={styles.tagActive} title="배송관리 기준 보유 전량 처리 완료">
+              배송완료
+            </span>
+          ) : done > 0 ? (
+            <span className={styles.tagMuted} title="배송관리 기준 처리 수량 / 보유 수량">
+              배송 {done}/{m.quantity}
+            </span>
+          ) : null}
+        </span>
+        <div className={styles.dmStepper}>
+          <button
+            type="button"
+            onClick={() => setSelQty(m.key, n - 1, m.quantity)}
+            disabled={n <= 0}
+            aria-label={`${m.itemName} 수량 감소`}
+          >
+            −
+          </button>
+          <span className={n > 0 ? styles.dmCountDone : styles.dmCount}>
+            {n}/{m.quantity}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelQty(m.key, n + 1, m.quantity)}
+            disabled={n >= m.quantity}
+            aria-label={`${m.itemName} 수량 증가`}
+          >
+            +
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={styles.ieWrap}>
       <p className={styles.ieBanner}>
@@ -1024,40 +1098,21 @@ export default function ItemEventManager({
                   </button>
                 </div>
                 <div className={styles.modalBody}>
-                  {action.merged.map((m) => {
-                    const n = Math.min(sel[m.key] ?? 0, m.quantity);
-                    const badge = mergedBadge(m);
-                    return (
-                      <div key={m.key} className={styles.dmItemRow}>
-                        <span className={styles.dmItemName}>
-                          {m.itemName}
-                          <span className={styles.dmItemProb}>{m.probability}%</span>
-                          {badge ? <span className={badge.cls}>{badge.label}</span> : null}
-                        </span>
-                        <div className={styles.dmStepper}>
-                          <button
-                            type="button"
-                            onClick={() => setSelQty(m.key, n - 1, m.quantity)}
-                            disabled={n <= 0}
-                            aria-label={`${m.itemName} 수량 감소`}
-                          >
-                            −
-                          </button>
-                          <span className={n > 0 ? styles.dmCountDone : styles.dmCount}>
-                            {n}/{m.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setSelQty(m.key, n + 1, m.quantity)}
-                            disabled={n >= m.quantity}
-                            aria-label={`${m.itemName} 수량 증가`}
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {modalActiveItems.map((m) => renderModalItemRow(m))}
+                  {modalDoneItems.length > 0 ? (
+                    <button
+                      type="button"
+                      className={styles.ieDoneToggle}
+                      onClick={() => setShowDoneItems((v) => !v)}
+                      aria-expanded={showDoneItems}
+                      title="배송관리 기준 보유 전량이 처리 완료된 상품이에요. 기록은 그대로 있고 화면에서만 접혀요."
+                    >
+                      {showDoneItems
+                        ? `배송완료 ${modalDoneItems.length}종 접기 ▲`
+                        : `배송완료 ${modalDoneItems.length}종 보기 ▼`}
+                    </button>
+                  ) : null}
+                  {showDoneItems ? modalDoneItems.map((m) => renderModalItemRow(m)) : null}
                 </div>
               </div>
 
