@@ -1985,18 +1985,22 @@ export function carryOverridesByContent(
     const srcGroup = srcByIndex.get(Number(m[1]));
     if (!srcGroup) continue;
     if (m[2] === undefined) {
-      // 그룹(룰렛) 단위: 상품 지문 유사매칭(같은 금액대가 여러 개여도 지문으로 구분).
+      // 그룹(룰렛) 단위: 상품 지문(자카드 ≥ 0.5) 후보 중 "같은 금액대 라벨"을 최우선으로 고른다.
+      // "같은 상품·다른 확률" 표가 여럿이면 지문이 전부 동점이라, 라벨 없이 고르면
+      // 엉뚱한 표(마지막 인덱스)에 꺼짐이 몰리는 오매핑이 난다(나월 v7→v8 실사고).
+      // 라벨 일치가 없으면 지문 단독 1등만 승계하고, 동점이 남으면 승계하지 않는다(오매핑 방지).
       const srcNames = cuGroupItemNames(srcGroup);
-      let best = -1;
-      let bestScore = 0.5;
-      targetGroups.forEach((tg) => {
-        const s = jaccardStrings(srcNames, cuGroupItemNames(tg));
-        if (s >= bestScore) {
-          bestScore = s;
-          best = tg.groupIndex;
-        }
-      });
-      if (best >= 0) out[`g${best}`] = value;
+      const scored = targetGroups
+        .map((tg) => ({ tg, score: jaccardStrings(srcNames, cuGroupItemNames(tg)) }))
+        .filter((x) => x.score >= 0.5)
+        .sort((a, b) => b.score - a.score);
+      const sameLabel = scored.filter((x) => cuGroupLabel(x.tg) === cuGroupLabel(srcGroup));
+      const pick =
+        sameLabel[0] ??
+        (scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)
+          ? scored[0]
+          : undefined);
+      if (pick) out[`g${pick.tg.groupIndex}`] = value;
       continue;
     }
     // 상품 단위: sortOrder(없으면 인덱스)로 source 상품을 찾고 (라벨::이름)으로 target 키를 찾는다.
@@ -2010,27 +2014,29 @@ export function carryOverridesByContent(
   return out;
 }
 
-// target 버전의 유효 오버라이드 = (직전 최신 버전에서 내용 기준 승계) 위에 (그 버전 직접 저장분) 덮어쓰기.
-// 승계 대상이 없거나 설정 자체가 없으면 빈 객체 → 기존 판정과 동일(회귀 없음).
+// target 버전의 유효 오버라이드.
+//  - 그 버전에 저장본이 있으면(빈 저장 포함) 그 저장본이 전부다 — 저장은 "전체 교체" 방식이고
+//    관리 화면은 승계분까지 통째로 담아 저장하므로, 밑에 승계를 다시 깔면 "위플랩 원본값으로
+//    되돌린 키"(저장본에서 빠진 키)가 옛 버전 꺼짐으로 새로고침마다 되살아난다(사용 토글 풀림 버그).
+//  - 저장본이 아직 없으면 직전 최신 버전에서 내용 기준 승계. 그것도 없으면 빈 객체(기존 판정과 동일).
 export function computeEffectiveOverrides(
   targetVersion: number,
   targetGroups: CatalogGroup[],
   usageByVersion: Record<number, CatalogUsageOverrides>,
   groupsByVersion: Record<number, CatalogGroup[]>,
 ): CatalogUsageOverrides {
-  const own = usageByVersion[targetVersion] ?? {};
+  const own = usageByVersion[targetVersion];
+  if (own !== undefined) return own;
   const priorVersions = Object.keys(usageByVersion)
     .map(Number)
     .filter((v) => Number.isFinite(v) && v < targetVersion && Object.keys(usageByVersion[v] ?? {}).length > 0)
     .sort((a, b) => b - a);
-  let inherited: CatalogUsageOverrides = {};
   for (const pv of priorVersions) {
     const sourceGroups = groupsByVersion[pv];
     if (!sourceGroups) continue;
-    inherited = carryOverridesByContent(sourceGroups, usageByVersion[pv], targetGroups);
-    break; // 가장 최신 직전 버전 1개에서만 승계.
+    return carryOverridesByContent(sourceGroups, usageByVersion[pv], targetGroups); // 가장 최신 직전 버전 1개에서만 승계.
   }
-  return { ...inherited, ...own };
+  return {};
 }
 
 // 판정용: 특정 카탈로그의 유효 오버라이드를 DB에서 조합한다(내용 기준 승계 포함).
