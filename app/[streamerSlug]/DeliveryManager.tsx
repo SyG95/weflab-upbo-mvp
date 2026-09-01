@@ -339,6 +339,8 @@ export default function DeliveryManager({
   const [sheetSort, setSheetSort] = useState<"date" | "name" | "amount" | "qty" | "item" | "state">("date");
   const [sheetDir, setSheetDir] = useState<"asc" | "desc">("asc");
   const [sheetLimit, setSheetLimit] = useState(300);
+  // 시트 보기 배송완료 접기 — 교환·양도 탭(ItemEventManager)의 committed 기준 접기와 동일 문법.
+  const [showDoneSheetRows, setShowDoneSheetRows] = useState(false);
   // 배송 중 / 배송완료 탭. 배송완료 탭 = 처리 완료 + 보관되지 않은 시청자만.
   const [tab, setTab] = useState<"active" | "done">("active");
   // 이번 세션에서 방금 보관한 fanId — 즉시 목록에서 숨긴다.
@@ -917,6 +919,7 @@ export default function DeliveryManager({
               }
             : { type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." },
       );
+      router.refresh();
     } catch {
       setMessage({ type: "err", text: "처리 수량 저장 실패. 잠시 후 다시 저장해 주세요." });
     } finally {
@@ -1119,6 +1122,42 @@ export default function DeliveryManager({
     }
     return { total: sheetRows.length, done, part, pending: sheetRows.length - done - part };
   }, [sheetRows]);
+
+  // ── 시트 보기 배송완료 접기: 서버 저장본(committed/savedAssignments) 기준으로만 판단한다 ──
+  // draft(미저장 변경)로 방금 완료 토글한 줄까지 접으면, 저장 전인데 줄이 사라져 조작감이 나쁘다
+  // (교환·양도 탭 접기와 동일 기준: 2f98a6e/76061ac 참고).
+  const committedDoneAKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const v of nonArchivedViewers) {
+      for (const it of v.items) {
+        const k = itemKey(it);
+        const refs = it.refs ?? [];
+        if (refs.length === 0) continue;
+        const n = Math.min(committed[v.key]?.[k] ?? 0, it.count);
+        const assignForLine: Record<string, { doneCount: number; doneAt: string }> = {};
+        for (const ref of refs) {
+          const a = savedAssignments[assignKey(v.key, k, ref.entryId)];
+          if (a) assignForLine[ref.entryId] = { doneCount: a.doneCount, doneAt: a.doneAt };
+        }
+        const allocs = allocateDeliveryToRefs(refs, n, assignForLine);
+        refs.forEach((ref, i) => {
+          if (allocs[i].state === "done") set.add(assignKey(v.key, k, ref.entryId));
+        });
+      }
+    }
+    return set;
+  }, [nonArchivedViewers, committed, savedAssignments]);
+
+  // 검색 중에는 접지 않는다(교환·양도 탭과 동일 규칙) — 찾는 사람이 배송완료라 안 보이면 더 헷갈린다.
+  const visibleSheetRows = useMemo(() => {
+    if (q.trim() || showDoneSheetRows) return sheetRows;
+    return sheetRows.filter((r) => !committedDoneAKeys.has(r.aKey));
+  }, [sheetRows, q, showDoneSheetRows, committedDoneAKeys]);
+
+  const doneSheetRowsCount = useMemo(
+    () => sheetRows.filter((r) => committedDoneAKeys.has(r.aKey)).length,
+    [sheetRows, committedDoneAKeys],
+  );
 
   // 시트 줄 완료 토글: 줄의 조각 수량만큼 묶음 처리수량을 늘리고/줄이고, 배정 메모를 남긴다/지운다.
   // 부분(part) 줄은 여기서 못 만진다 — A안 스테퍼(수량 입력)로 조정(이진 드롭다운으로 뭉개지 않기).
@@ -1578,6 +1617,19 @@ export default function DeliveryManager({
               <span className={styles.tagWarn}>일부 {sheetSummary.part}건</span>
             ) : null}
             <span className={styles.tagMuted}>배송 중 {sheetSummary.pending}건</span>
+            {!q.trim() && doneSheetRowsCount > 0 ? (
+              <button
+                type="button"
+                className={styles.ieDoneToggle}
+                onClick={() => setShowDoneSheetRows((v) => !v)}
+                aria-pressed={showDoneSheetRows}
+                title="저장된 기준으로 배송이 전량 완료된 줄이에요. 기록은 그대로 있고 화면에서만 접혀요."
+              >
+                {showDoneSheetRows
+                  ? `배송완료 ${doneSheetRowsCount}건 접기 ▲`
+                  : `배송완료 ${doneSheetRowsCount}건 보기 ▼`}
+              </button>
+            ) : null}
           </div>
           {(entryCount ?? 0) >= 5000 ? (
             <p className={styles.fieldErr}>
@@ -1587,6 +1639,13 @@ export default function DeliveryManager({
           ) : null}
           {sheetRows.length > 0 ? (
             <>
+              {!q.trim() && !showDoneSheetRows && visibleSheetRows.length === 0 ? (
+                <p className={styles.fieldHint}>
+                  배송 중인 기록이 없어요 — 배송완료 {doneSheetRowsCount}건은 위 «배송완료 보기» 버튼으로
+                  볼 수 있어요.
+                </p>
+              ) : (
+              <>
               <div className={styles.tableWrap}>
                 <table className={styles.table}>
                   <thead>
@@ -1600,7 +1659,7 @@ export default function DeliveryManager({
                     </tr>
                   </thead>
                   <tbody>
-                    {sheetRows.slice(0, sheetLimit).map((row) => {
+                    {visibleSheetRows.slice(0, sheetLimit).map((row) => {
                       const ms = row.ref.recordedAtMs;
                       const kindBadge = row.ref.recordedKind ? KIND_BADGE[row.ref.recordedKind] : undefined;
                       const days = ms !== null && ms !== undefined ? ageDaysFrom(ms, nowMs) : null;
@@ -1691,15 +1750,17 @@ export default function DeliveryManager({
                   </tbody>
                 </table>
               </div>
-              {sheetRows.length > sheetLimit ? (
+              {visibleSheetRows.length > sheetLimit ? (
                 <button
                   type="button"
                   className={styles.cmEditBtn}
                   onClick={() => setSheetLimit((n) => n + 300)}
                 >
-                  더 보기 ({Math.min(sheetLimit, sheetRows.length)}/{sheetRows.length}건 표시 중)
+                  더 보기 ({Math.min(sheetLimit, visibleSheetRows.length)}/{visibleSheetRows.length}건 표시 중)
                 </button>
               ) : null}
+              </>
+              )}
             </>
           ) : (
             <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>
