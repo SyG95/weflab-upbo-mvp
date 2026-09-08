@@ -2,6 +2,8 @@ import {
   couponBackfillEntryToDecision,
   filterCouponEntriesByPeriod,
   computeCouponAccruals,
+  cancelledQuantityByEntry,
+  applyCancelledQuantity,
 } from "../lib/upboSupabase";
 import type { CouponSourceMap, CouponItemDef, CouponBackfillEntry } from "../lib/upboSupabase";
 import { aggregateCouponEventsBySource } from "../lib/couponAggregate";
@@ -14,7 +16,8 @@ function assertEq(actual: unknown, expected: unknown, label: string) {
 
 function entry(opts: Partial<CouponBackfillEntry> & { sourceKey: string }): CouponBackfillEntry {
   return {
-    status: "record",
+    // 실제 DB status 값(pending/completed/cancelled/hidden). "record" 는 존재하지 않는 값이었다(9/8 수리).
+    status: "pending",
     itemName: opts.itemName ?? "황금 열쇠",
     fanId: opts.fanId ?? "",
     fanNickname: opts.fanNickname ?? "",
@@ -114,6 +117,37 @@ const timed: CouponBackfillEntry[] = [
   assertEq({ m: goldA.manual, a: goldA.auto }, { m: 2, a: 2 }, "aaa/gold: 수동 3-1=2, 자동 2");
   assertEq({ m: silverB.manual, a: silverB.auto }, { m: 0, a: 5 }, "bbb/silver: 수동 0, 자동 5");
   assertEq(agg.length, 2, "빈 viewerKey 이벤트는 집계에서 무시");
+}
+
+// ── 취소된 당첨은 소급에서 빠진다(9/8 status=record 0건 버그 수리와 함께 추가) ──
+{
+  const cancelled = cancelledQuantityByEntry([
+    { id: "c1", upboEntryId: "e1", eventType: "cancel", quantityDelta: null }, // 옛 취소(수량 없음)=전량
+    { id: "c2", upboEntryId: "e2", eventType: "cancel", quantityDelta: 1 }, // 부분 취소
+    { id: "c3", upboEntryId: "e3", eventType: "cancel", quantityDelta: 1 },
+    { id: "r3", upboEntryId: "e3", eventType: "admin_adjustment", revertOfEventId: "c3" }, // 되돌려짐
+    { id: "m4", upboEntryId: "e4", eventType: "memo" }, // 무관
+    { id: "v5", upboEntryId: "e5", eventType: "void", quantityDelta: 2 },
+  ]);
+  assertEq(
+    { e1: cancelled.get("e1"), e2: cancelled.get("e2"), e3: cancelled.has("e3"), e4: cancelled.has("e4"), e5: cancelled.get("e5") },
+    { e1: null, e2: 1, e3: false, e4: false, e5: 2 },
+    "취소 수량 집계: 전량(null)·부분(1)·되돌려진 취소 제외·무관 이벤트 무시",
+  );
+  const base = [
+    { entryId: "e1", effectiveCount: 1, sourceKey: "s1" },
+    { entryId: "e2", effectiveCount: 3, sourceKey: "s2" },
+    { entryId: "e3", effectiveCount: 1, sourceKey: "s3" },
+    { entryId: "e5", effectiveCount: 2, sourceKey: "s5" },
+    { entryId: "e9", effectiveCount: 1, sourceKey: "s9" },
+  ];
+  const kept = applyCancelledQuantity(base, cancelled);
+  assertEq(
+    kept.map((e) => `${e.sourceKey}:${e.effectiveCount}`),
+    ["s2:2", "s3:1", "s9:1"],
+    "전량 취소 e1·e5 제외, 부분 취소 e2 는 3→2, 되돌려진 e3·무관 e9 유지",
+  );
+  assertEq(applyCancelledQuantity(base, new Map()) === base, true, "취소 없음 → 원본 배열 그대로");
 }
 
 console.log("coupon backfill: 전부 통과");
