@@ -365,14 +365,22 @@ export default function ItemEventManager({
   const modalDoneItems = action ? action.merged.filter((m) => modalItemDone(m)) : [];
 
   // 한 보유자에 묶인 entryId 전체의 이벤트(이력 타임라인용). 최근순.
+  // ★ "지금 보유 중인 조각"(group.items)만 보면 전량 취소·전량 양도된 조각이 빠져서 그 취소/양도
+  //   기록이 이력에서 사라지고 되돌리기 버튼도 같이 사라진다(9/8 마리별 기록 삭제 실사고).
+  //   그래서 "원래 이 시청자가 받은 원본 조각"의 이벤트도 함께 모은다. 원본 소유자 키는
+  //   computeHoldings 의 보유자 키 규칙(계정ID 우선, 없으면 닉네임)과 동일하게 만든다.
   const eventsForOwner = useCallback(
     (group: ViewerHolding): ItemEvent[] => {
       const entryIds = new Set(group.items.map((h) => h.entryId));
+      for (const e of entries) {
+        const originKey = normalizeAccountId(e.fanId) || (e.fanNickname ?? "");
+        if (originKey && originKey === group.key) entryIds.add(e.id);
+      }
       return events
         .filter((ev) => entryIds.has(ev.upboEntryId))
         .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
     },
-    [events],
+    [entries, events],
   );
 
   const toggleHistory = (key: string) =>
