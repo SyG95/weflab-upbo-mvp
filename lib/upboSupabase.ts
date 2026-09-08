@@ -4929,15 +4929,96 @@ export function filterCouponEntriesByPeriod<T extends { donateTimeText: string }
   return { included, parseFailedCount, fromIso, toIso };
 }
 
-// 소급 대상 record 당첨을 읽는다(status=record 만, 최신순). getStreamerState 와 동일한 upbo_entries
-// 읽기 + mapEntry 매핑을 쓰되 소급에 필요한 필드만 추린다(슬러그는 불필요하므로 "" 전달).
+// 취소 이벤트 → entry 별 "아직 살아 있는 취소 수량"(순수). 되돌려진 취소(admin_adjustment 의
+// revertOfEventId)는 빼고, quantity_delta 가 없는 옛 취소는 전량 취소(null)로 본다.
+// 소급 적립이 "기록 삭제"로 지운 당첨을 쿠폰으로 되살리지 않게 쓴다.
+export type CouponBackfillCancelEvent = {
+  id: string;
+  upboEntryId: string;
+  eventType: string;
+  quantityDelta?: number | null;
+  revertOfEventId?: string | null;
+};
+
+export function cancelledQuantityByEntry(events: CouponBackfillCancelEvent[]): Map<string, number | null> {
+  const reverted = new Set<string>();
+  for (const ev of events) {
+    if (ev.eventType === "admin_adjustment" && ev.revertOfEventId) reverted.add(ev.revertOfEventId);
+  }
+  const out = new Map<string, number | null>();
+  for (const ev of events) {
+    if (ev.eventType !== "cancel" && ev.eventType !== "void") continue;
+    if (reverted.has(ev.id)) continue;
+    const cur = out.get(ev.upboEntryId);
+    if (cur === null) continue; // 이미 전량 취소로 확정
+    const q = Number(ev.quantityDelta);
+    if (ev.quantityDelta === null || ev.quantityDelta === undefined || !Number.isFinite(q)) {
+      out.set(ev.upboEntryId, null);
+    } else {
+      out.set(ev.upboEntryId, (cur ?? 0) + Math.max(0, q));
+    }
+  }
+  return out;
+}
+
+// 소급 후보에 취소 수량을 반영(순수): 전량 취소면 제외, 부분 취소면 남은 수량만 센다.
+// cancelled 가 비면 원본 배열 그대로(회귀 0).
+export function applyCancelledQuantity<T extends { entryId: string; effectiveCount?: number | null }>(
+  entries: T[],
+  cancelled: Map<string, number | null>,
+): T[] {
+  if (cancelled.size === 0) return entries;
+  const out: T[] = [];
+  for (const e of entries) {
+    const c = cancelled.get(e.entryId);
+    if (c === undefined) {
+      out.push(e);
+      continue;
+    }
+    if (c === null) continue;
+    const raw = Number(e.effectiveCount ?? 1);
+    const remain = (Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1) - c;
+    if (remain <= 0) continue;
+    out.push({ ...e, effectiveCount: remain });
+  }
+  return out;
+}
+
+// 소급 대상 당첨을 읽는다(최신순). getStreamerState 와 동일한 upbo_entries 읽기 + mapEntry 매핑을
+// 쓰되 소급에 필요한 필드만 추린다(슬러그는 불필요하므로 "" 전달).
+// ★status 는 DB CHECK 제약상 pending/completed/cancelled/hidden 뿐이고 "record" 라는 값은 존재하지
+//   않는다 — 옛 조회(status=eq.record)는 항상 0건이라 소급이 한 번도 동작한 적이 없었다(9/8 리요 문의).
+// ★취소는 status 컬럼이 아니라 upbo_item_events(cancel/void)로만 남는다. 그래서 이벤트를 따로 읽어
+//   전량 취소는 제외하고 부분 취소는 남은 수량만 센다(되돌려진 취소는 복원된 것으로 본다).
 async function recordEntriesForCouponBackfill(streamerId: string): Promise<CouponBackfillEntry[]> {
-  const rows = await supabaseFetch<UpboEntryRow[]>(
-    `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=eq.record&select=*&order=created_at.desc&limit=5000`,
+  const [rows, eventRows] = await Promise.all([
+    supabaseFetch<UpboEntryRow[]>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=in.(pending,completed)&select=*&order=created_at.desc&limit=5000`,
+    ),
+    supabaseFetch<
+      Array<{ id: string; upbo_entry_id: string; event_type: string; quantity_delta?: number | null; after_json?: unknown }>
+    >(
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&event_type=in.(cancel,void,admin_adjustment)&select=id,upbo_entry_id,event_type,quantity_delta,after_json&limit=5000`,
+    ),
+  ]);
+  const cancelled = cancelledQuantityByEntry(
+    eventRows.map((ev) => {
+      const after =
+        ev.after_json && typeof ev.after_json === "object" ? (ev.after_json as Record<string, unknown>) : null;
+      const rid = after?.revertOfEventId;
+      return {
+        id: ev.id,
+        upboEntryId: ev.upbo_entry_id,
+        eventType: ev.event_type,
+        quantityDelta: ev.quantity_delta ?? null,
+        revertOfEventId: typeof rid === "string" ? rid : null,
+      };
+    }),
   );
-  return rows.map((row) => {
+  const candidates = rows.map((row) => {
     const e = mapEntry(row, "");
     return {
+      entryId: row.id,
       sourceKey: e.sourceKey,
       status: e.status,
       itemName: e.itemName,
@@ -4947,6 +5028,15 @@ async function recordEntriesForCouponBackfill(streamerId: string): Promise<Coupo
       donateTimeText: e.donateTimeText,
     };
   });
+  return applyCancelledQuantity(candidates, cancelled).map((c) => ({
+    sourceKey: c.sourceKey,
+    status: c.status,
+    itemName: c.itemName,
+    fanId: c.fanId,
+    fanNickname: c.fanNickname,
+    effectiveCount: c.effectiveCount,
+    donateTimeText: c.donateTimeText,
+  }));
 }
 
 // 소급 계산 공통부(미리보기·반영이 같은 계산을 쓰도록 1곳으로). 저장은 하지 않는다.
