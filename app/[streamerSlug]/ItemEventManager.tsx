@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
-import { computeHoldings, mergeHoldingItemsByName, normalizeAccountId } from "../../lib/api";
+import { buildRevertOf, computeHoldings, mergeHoldingItemsByName, normalizeAccountId } from "../../lib/api";
 import type { DeliveryProgressItem, HoldingItem, ItemEvent, MergedHolding, UpboEntry, ViewerHolding } from "../../lib/api";
 
 type CatalogChoice = {
@@ -784,28 +784,8 @@ export default function ItemEventManager({
       }
 
       // 단건 되돌리기: 역연산 재료(revertOf)를 함께 보내 보유 수량까지 실제로 복구한다.
-      const revertOf =
-        ev.eventType === "cancel"
-          ? { eventId: ev.id, kind: "restore", quantity: ev.quantityDelta ?? undefined }
-          : ev.eventType === "transfer"
-            ? {
-                eventId: ev.id,
-                kind: "transfer_back",
-                quantity: ev.quantityDelta ?? undefined,
-                toOwnerId:
-                  typeof ev.afterJson?.currentOwnerId === "string" ? ev.afterJson.currentOwnerId : "",
-                toOwnerName:
-                  typeof ev.afterJson?.currentOwnerName === "string" ? ev.afterJson.currentOwnerName : "",
-              }
-            : ev.eventType === "exchange"
-              ? {
-                  eventId: ev.id,
-                  kind: "exchange_back",
-                  quantity: ev.quantityDelta ?? undefined,
-                  newItemName:
-                    typeof ev.afterJson?.currentItemName === "string" ? ev.afterJson.currentItemName : "",
-                }
-              : undefined;
+      // 재료 규칙은 양도·교환 이력 탭과 공유(lib/api.buildRevertOf).
+      const revertOf = buildRevertOf(ev);
       const fresh = await postOne(ev.upboEntryId, {
         eventType: "admin_adjustment",
         reason: `${EVENT_LABEL[ev.eventType] ?? ev.eventType} 되돌리기`,

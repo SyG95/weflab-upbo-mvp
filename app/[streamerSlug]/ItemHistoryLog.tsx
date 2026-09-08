@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
-import { normalizeAccountId, type ItemEvent, type UpboEntry } from "../../lib/api";
+import { buildRevertOf, normalizeAccountId, type ItemEvent, type UpboEntry } from "../../lib/api";
 
 // 시스템 시각(UTC ISO)을 Asia/Seoul "MM-DD HH:mm"로.
 function fmtKst(iso?: string): string {
@@ -41,6 +41,9 @@ type LogRow = {
   newItem?: string;
   qty: number | null;
   reason: string | null;
+  // 되돌리기 재료: 원 이벤트(단건) 또는 번들 교환 묶음 id. 되돌리기 행·이미 되돌려진 행은 없음.
+  revert?: { ev: ItemEvent; bundleGroupId?: string };
+  reverted?: boolean;
 };
 
 const KIND_LABEL: Record<LogKind, string> = {
@@ -64,6 +67,7 @@ export default function ItemHistoryLog({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [idDraft, setIdDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reverting, setReverting] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   async function saveOwnerId(eventId: string) {
@@ -93,9 +97,86 @@ export default function ItemHistoryLog({
     }
   }
 
+  // 되돌리기 — 교환·양도 카드의 이력과 같은 엔진(번들 교환=묶음 DELETE, 그 외=admin_adjustment+revertOf).
+  // 카드 이력은 보유 조각이 전부 취소돼 카드 자체가 사라진 시청자를 못 보여주므로, 여기가 마지막 진입점이다.
+  async function revert(row: LogRow) {
+    const r = row.revert;
+    if (!r || busy) return;
+    setBusy(true);
+    setReverting(row.id);
+    setMsg(null);
+    try {
+      if (r.bundleGroupId) {
+        const res = await fetch(
+          `/api/s/${encodeURIComponent(slug)}/exchange?groupId=${encodeURIComponent(r.bundleGroupId)}`,
+          { method: "DELETE" },
+        );
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          error?: string;
+          coupon?: { totalDelta?: number; error?: string } | null;
+        };
+        if (!res.ok || data.ok === false) throw new Error(data.error || "되돌리기에 실패했어요. 잠시 후 다시 시도해 주세요.");
+        if (data.coupon?.error) {
+          setMsg({
+            type: "err",
+            text: "교환 묶음은 되돌렸지만, 자동 적립됐던 쿠폰 회수에 실패했어요. 쿠폰 탭에서 수동으로 빼 주세요.",
+          });
+        } else {
+          const revokedText =
+            (data.coupon?.totalDelta ?? 0) > 0 ? `, 쿠폰 ${data.coupon!.totalDelta}개 회수` : "";
+          setMsg({ type: "ok", text: `교환 묶음을 되돌렸어요. (준 수량 복구, 받은 기록 삭제${revokedText})` });
+        }
+      } else {
+        const revertOf = buildRevertOf(r.ev);
+        const res = await fetch(`/api/s/${encodeURIComponent(slug)}/item-events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            upboEntryId: r.ev.upboEntryId,
+            actorType: "operator",
+            eventType: "admin_adjustment",
+            reason: `${KIND_LABEL[row.kind]} 되돌리기`,
+            ...(revertOf ? { revertOf } : {}),
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.error || "처리에 실패했어요. 이미 되돌린 기록인지 확인해 주세요.");
+        }
+        setMsg({ type: "ok", text: "되돌렸어요. (보유 수량 복구 반영)" });
+      }
+      // 서버 데이터 재조회 — 이 행은 「되돌려짐」으로 바뀌고, 새 되돌리기 행이 맨 위에 생긴다.
+      router.refresh();
+    } catch (e) {
+      setMsg({ type: "err", text: e instanceof Error ? e.message : "되돌리기에 실패했어요." });
+    } finally {
+      setBusy(false);
+      setReverting(null);
+    }
+  }
+
+  // 이미 되돌려진 이벤트/교환 묶음 — 버튼 대신 「되돌려짐」을 보여 이중 복구를 막는다(서버에도 같은 가드 있음).
+  const revertedIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const ev of events) {
+      if (ev.eventType !== "admin_adjustment") continue;
+      const id = ev.afterJson?.revertOfEventId;
+      if (typeof id === "string" && id) s.add(id);
+      const gid = ev.afterJson?.revertOfGroupId;
+      if (typeof gid === "string" && gid) s.add(`group:${gid}`);
+    }
+    return s;
+  }, [events]);
+
   const rows = useMemo<LogRow[]>(() => {
     const entryMap = new Map(entries.map((e) => [e.id, e]));
     const out: LogRow[] = [];
+    // 되돌리기 가능 여부: 번들 교환은 묶음 id, 그 외는 이벤트 id 로 이미 되돌려졌는지 본다.
+    const revertFields = (ev: ItemEvent, bundleGroupId?: string): Pick<LogRow, "revert" | "reverted"> => {
+      const reverted = bundleGroupId ? revertedIds.has(`group:${bundleGroupId}`) : revertedIds.has(ev.id);
+      return reverted ? { reverted: true } : { revert: { ev, bundleGroupId } };
+    };
     // N:M 번들 교환은 조각(entry)마다 이벤트가 생기지만 이력엔 그룹당 1건만 보여준다.
     const seenBundles = new Set<string>();
     // after_json 의 gave/received 요약([{itemName, quantity}])을 "A 2개 + B 1개"로.
@@ -127,6 +208,7 @@ export default function ItemHistoryLog({
           item: itemName,
           qty,
           reason: ev.reason ?? null,
+          ...revertFields(ev),
         });
       } else if (ev.eventType === "exchange") {
         if (ev.afterJson?.exchangeOut === true) {
@@ -143,6 +225,7 @@ export default function ItemHistoryLog({
             newItem: fmtBundle(ev.afterJson?.received) || "(상품)",
             qty: null,
             reason: ev.reason ?? null,
+            ...revertFields(ev, gid),
           });
         } else {
           out.push({
@@ -154,6 +237,7 @@ export default function ItemHistoryLog({
             newItem: readStr(ev.afterJson, "currentItemName") || "(상품)",
             qty,
             reason: ev.reason ?? null,
+            ...revertFields(ev),
           });
         }
       } else if (ev.eventType === "cancel" || ev.eventType === "void") {
@@ -165,6 +249,8 @@ export default function ItemHistoryLog({
           item: itemName,
           qty,
           reason: ev.reason ?? null,
+          // void(무효)는 카드 이력과 마찬가지로 되돌리기 대상이 아니다.
+          ...(ev.eventType === "cancel" ? revertFields(ev) : {}),
         });
       } else if (ev.eventType === "admin_adjustment") {
         const revertGid = readStr(ev.afterJson, "revertOfGroupId");
@@ -198,7 +284,7 @@ export default function ItemHistoryLog({
     }
     out.sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
     return out;
-  }, [entries, events]);
+  }, [entries, events, revertedIds]);
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -242,6 +328,7 @@ export default function ItemHistoryLog({
                 <th>내용</th>
                 <th className={styles.countCol}>개수</th>
                 <th>사유</th>
+                <th className={styles.ieHistRevertCol}>되돌리기</th>
               </tr>
             </thead>
             <tbody>
@@ -312,6 +399,20 @@ export default function ItemHistoryLog({
                   </td>
                   <td className={styles.countCell}>{r.qty != null ? `${r.qty}개` : "—"}</td>
                   <td className={styles.idCell}>{r.reason ?? "—"}</td>
+                  <td className={styles.ieHistRevertCol}>
+                    {r.revert ? (
+                      <button
+                        type="button"
+                        className={styles.ieRevertBtn}
+                        onClick={() => void revert(r)}
+                        disabled={busy}
+                      >
+                        {reverting === r.id ? "처리 중…" : r.revert.bundleGroupId ? "묶음 되돌리기" : "되돌리기"}
+                      </button>
+                    ) : r.reverted ? (
+                      <span className={styles.tagMuted}>되돌려짐</span>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
