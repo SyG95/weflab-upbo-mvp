@@ -994,6 +994,13 @@
   text-align: center;
 }
 
+/* 양도·교환 이력 탭 되돌리기 컬럼 — 버튼 글자가 세로로 쪼개지지 않게 한 줄 고정 */
+.ieHistRevertCol {
+  width: 112px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* 상품별 목록 숫자 컬럼 — 제목이 줄바꿈 없이 한 줄에 나오도록 폭을 넉넉히 */
 .pmCountCol {
   width: 92px;

@@ -61,6 +61,41 @@ export type ItemEvent = {
   createdAt?: string;
 };
 
+// 되돌리기(admin_adjustment) 역연산 재료 — 서버가 이걸 after_json.revertOf 로 저장하고,
+// foldEntryHoldings 가 읽어 수량을 실제로 복구한다. 교환·양도 카드 이력과 양도·교환 이력 탭이
+// 같은 규칙을 쓰도록 한 곳에 둔다. 되돌릴 수 없는 종류(memo 등)는 undefined.
+export type RevertOfInput = {
+  eventId: string;
+  kind: "restore" | "transfer_back" | "exchange_back";
+  quantity?: number;
+  toOwnerId?: string;
+  toOwnerName?: string;
+  newItemName?: string;
+};
+
+export function buildRevertOf(ev: ItemEvent): RevertOfInput | undefined {
+  const quantity = ev.quantityDelta ?? undefined;
+  if (ev.eventType === "cancel") return { eventId: ev.id, kind: "restore", quantity };
+  if (ev.eventType === "transfer") {
+    return {
+      eventId: ev.id,
+      kind: "transfer_back",
+      quantity,
+      toOwnerId: typeof ev.afterJson?.currentOwnerId === "string" ? ev.afterJson.currentOwnerId : "",
+      toOwnerName: typeof ev.afterJson?.currentOwnerName === "string" ? ev.afterJson.currentOwnerName : "",
+    };
+  }
+  if (ev.eventType === "exchange") {
+    return {
+      eventId: ev.id,
+      kind: "exchange_back",
+      quantity,
+      newItemName: typeof ev.afterJson?.currentItemName === "string" ? ev.afterJson.currentItemName : "",
+    };
+  }
+  return undefined;
+}
+
 export type CatalogItem = {
   itemName: string;
   probability: number;

@@ -2003,6 +2003,7 @@ function AdminPanel({
             <>
               <p className={styles.fieldHint}>
                 누가 누구에게 어떤 상품을 양도/교환/취소했는지 최근순으로 모아서 보여줘요. 원본 당첨 기록은 그대로예요.
+                실수한 처리는 오른쪽 「되돌리기」로 되살릴 수 있어요(카드가 사라진 시청자도 여기서).
               </p>
               <ItemHistoryLog slug={state.slug} entries={entries} events={events} />
             </>
