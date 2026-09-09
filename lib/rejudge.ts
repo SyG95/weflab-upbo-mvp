@@ -41,7 +41,7 @@ export type RejudgeSummary = {
   wouldRecord: number; // 새로 기록될 건수
   alreadyRecorded: number; // 이미 기록돼 있어 건너뛴 건수
   stillNeedsReview: number; // 새 표로도 매칭 안 되는 건수
-  ignored: number; // 매칭됐지만 기준 확률 초과 등으로 제외되는 건수
+  ignored: number; // 기준 확률 초과, 미션 정산 뭉치(계정 없음) 등으로 제외되는 건수(정산은 매칭 여부와 무관)
 };
 
 export type RejudgeCandidate = {

@@ -1,3 +1,5 @@
+import { isMissionSettlementType } from "./upboCore";
+
 // 후원집계(donation counter) 전용 레인.
 //
 // 설계 원칙 (sy 승인, 2026-07-07):
@@ -290,11 +292,12 @@ export function isSubscription(type: string | null): boolean {
 // 숲 대결/도전미션 "성공 정산" 뭉치 행 판정. 실물 표기(2026-07-07 sy 캡처):
 // "대결미션 별풍선 성공" / "도전미션 별풍선 성공" — 미션+성공이 같이 있으면 정산 뭉치.
 // 시청자가 미션에 넣은 개인 기록(타입에 "성공" 없음)은 그대로 집계에 남는다.
-// 뭉치는 개인 기록의 재기록인 데다 "가장 먼저 넣은 계정"에 붙어 총합 이중 카운트+순위 왜곡을
-// 만들기 때문에 집계에서 제외한다(저장은 그대로 = 원본 증거 보존).
+// 뭉치는 개인 기록의 재기록이라 총합이 이중 카운트되므로 집계에서 제외한다(저장은 그대로 = 원본 증거 보존).
+// ※ 실측 정정(2026-09-09): 정산 행은 계정ID 없이 닉네임 칸=미션명으로 온다(운영 정산 165행 전부 계정 없음).
+//   예전 주석의 "가장 먼저 넣은 계정에 붙는다"는 데이터로 확인되지 않아 걷어냈다. 규칙(미션+성공)은 그대로.
 export function isMissionSuccess(type: string | null): boolean {
-  const t = type || "";
-  return t.includes("미션") && t.includes("성공");
+  // 규칙의 단일 소스는 upboCore.isMissionSettlementType(룰렛 판정·정가와 공유).
+  return isMissionSettlementType(type);
 }
 
 // 미션 개인 후원(시청자가 미션에 넣은 후원). 성공 정산 뭉치와 구분 — 이건 룰렛이 돌아
@@ -452,7 +455,7 @@ export async function donationSummaryForStreamer(
   const rouletteAmounts = [...rouletteByAmount.values()].sort((a, b) => b.amount - a.amount);
 
   // 별풍선(구독·미션정산 제외)과 구독(개월 단위)을 분리한다. 단위가 다르거나(구독)
-  // 개인 기록의 재기록이라(미션 성공 정산 뭉치 — 첫 후원 계정에 합산돼 이중 카운트+순위 왜곡)
+  // 개인 기록의 재기록이라(미션 성공 정산 뭉치 — 계정 없음·닉네임 칸=미션명, 총합 이중 카운트)
   // 한 통에 더하면 집계가 오염됨.
   const missionEvents = events.filter((event) => isMissionSuccess(event.donation_type));
   const starEvents = events.filter(

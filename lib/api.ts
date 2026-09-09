@@ -136,6 +136,11 @@ export type ImportBatchSummary = {
   needsReviewCount: number;
   modifierCount?: number;
   multiplierAppliedCount?: number;
+  // 미션 성공 정산 뭉치라 무시한 결과 수(ignoreCount 에 포함). 규칙 도입(2026-09) 이후 배치만 있음.
+  missionSettlementCount?: number;
+  // 판정에 쓴 스냅샷(검증실 재현용). 없으면 도입 전 배치.
+  thresholdOverrides?: Record<string, number>;
+  judgeRules?: { missionSettlementIgnore?: boolean };
 };
 
 export type ImportBatch = {

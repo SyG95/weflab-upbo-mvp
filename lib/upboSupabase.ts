@@ -21,6 +21,8 @@ import {
   type ViewerHolding,
 } from "./api";
 import {
+  isMissionSettlementType,
+  buildBatchSummary,
   applyThresholdOverrides,
   buildSpecialItemRuleCandidates,
   buildUpboEntry,
@@ -41,6 +43,7 @@ import {
   type ResultCapture,
   type SpecialItemRule,
 } from "./upboCore";
+import type { JudgeRules } from "./upboCore";
 import { collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
 import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAlias";
 import { isThemeId } from "./themes";
@@ -3463,8 +3466,7 @@ export function buildFixedPriceCandidates(
     // 갯수가 우연히 일치하면 미션명이 시청자로 둔갑한 유령 정가가 생긴다(포로미 실사고 2026-08-24).
     // 개인이 미션에 넣은 후원(타입에 "성공" 없음)은 기록을 유지한다 — 한 사람이 정가 갯수를 통째로
     // 쏘는 정당한 구매가 있어서(스트리머가 배송관리 "미션" 배지를 보고 판단·삭제).
-    const missionType = row.donationType || "";
-    if (missionType.includes("미션") && missionType.includes("성공")) continue;
+    if (isMissionSettlementType(row.donationType)) continue;
     // 기간 한정(이벤트·서버) 정가: 위플랩에 찍힌 후원 시각이 기간 밖이면 제외(sy 확정 2026-08-09).
     // 시각 해석 실패도 제외(쿠폰 소급 선례) — 구제는 수동기록 "정가 시그니처" 옵션.
     if (judgeFixedPeriod(judgeEntry, row.donateTimeText) !== "in") continue;
@@ -3754,6 +3756,8 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
   );
   const currentModifierState = await latestModifierState(streamer.id);
   const knownSourceKeys = await existingSourceKeys(streamer.id);
+  // 판정에 쓰는 규칙과 배치에 남기는 스냅샷은 같은 값 하나에서 나온다(둘이 어긋나면 검증실이 거짓 재현을 한다).
+  const judgeRules: JudgeRules = { missionSettlementIgnore: true };
   const preview = reconcileResults({
     catalogItems,
     results: normalized.results,
@@ -3761,6 +3765,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
     existingSourceKeys: knownSourceKeys,
     specialItemRules: await specialRulesForCatalog(streamer.id, catalogItems),
     modifierState: currentModifierState,
+    missionSettlementIgnore: judgeRules.missionSettlementIgnore,
   });
   // 정가(시그니처) 패스: 룰렛 판정과 별개로, 시그니처 갯수와 일치하는 후원을 기록한다.
   // 시그니처 미설정이면 후보가 0개라 아무것도 하지 않는다(기존 동작과 동일).
@@ -3803,10 +3808,9 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
       captured_at: normalized.capturedAt,
       // 판정에 쓴 룰렛표별 기준확률 예외를 배치에 스냅샷으로 남긴다(검증실 재현·추적용).
       // 예외가 없으면 기존과 완전히 같은 summary 만 저장된다.
-      summary:
-        Object.keys(thresholdOverrides).length > 0
-          ? { ...preview.summary, thresholdOverrides }
-          : preview.summary,
+      // judgeRules: 위에서 실제 판정에 쓴 규칙을 그대로 스냅샷으로 남긴다. 검증실은 이 값이 없는 옛 배치를
+      // 규칙 없이 재현해 저장 summary 와 맞춘다(기준확률 예외 스냅샷과 같은 원리, buildBatchSummary 순수 함수).
+      summary: buildBatchSummary(preview.summary, thresholdOverrides, judgeRules),
       entry_count: recordDecisions.length,
     }),
   });
@@ -4853,7 +4857,16 @@ export type CouponBackfillEntry = {
   fanNickname: string;
   effectiveCount: number;
   donateTimeText: string;
+  // 원본 후원 유형(미션 정산 뭉치 제외 판별용). 옛 픽스처 호환을 위해 선택 필드.
+  donationType?: string;
 };
+
+// 소급 적립 대상 여부(순수). 미션 성공 정산 뭉치로 기록된 옛 유령 업보(계정 없음·닉네임=미션명)는 적립 키가
+// 닉네임으로 떨어져 미션명 앞으로 쿠폰이 쌓이므로 제외한다 — 판정 규칙(reconcileResults)이 앞으로의 유입은 막지만
+// 이미 upbo_entries 에 있는 건은 여기서 걸러야 한다(리뷰 지적 2026-09-09).
+export function isCouponBackfillEligible(entry: Pick<CouponBackfillEntry, "donationType">): boolean {
+  return !isMissionSettlementType(entry.donationType);
+}
 
 export type CouponBackfillPeriod = { from?: string; to?: string };
 
@@ -5026,6 +5039,7 @@ async function recordEntriesForCouponBackfill(streamerId: string): Promise<Coupo
       fanNickname: e.fanNickname,
       effectiveCount: e.effectiveCount,
       donateTimeText: e.donateTimeText,
+      donationType: e.donationType,
     };
   });
   return applyCancelledQuantity(candidates, cancelled).map((c) => ({
@@ -5036,6 +5050,7 @@ async function recordEntriesForCouponBackfill(streamerId: string): Promise<Coupo
     fanNickname: c.fanNickname,
     effectiveCount: c.effectiveCount,
     donateTimeText: c.donateTimeText,
+    donationType: c.donationType,
   }));
 }
 
@@ -5045,7 +5060,8 @@ async function computeCouponBackfill(
   period: CouponBackfillPeriod,
 ): Promise<{ accruals: CouponAccrual[]; preview: CouponBackfillPreview }> {
   const [entries, sourceMap, couponItems, alreadyAccrued] = await Promise.all([
-    recordEntriesForCouponBackfill(streamer.id),
+    // 미션 정산 뭉치 유령 기록은 소급 대상에서 제외(isCouponBackfillEligible).
+    recordEntriesForCouponBackfill(streamer.id).then((rows) => rows.filter(isCouponBackfillEligible)),
     couponSourceMapForStreamer(streamer.id),
     couponItemsForStreamer(streamer.id),
     autoAccruedSourceKeys(streamer.id),

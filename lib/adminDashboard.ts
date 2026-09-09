@@ -19,6 +19,7 @@ import {
 import {
   applyThresholdOverrides,
   cleanThresholdOverrides,
+  readJudgeRules,
   normalizeResultCapture,
   reconcileResults,
   type ModifierState,
@@ -244,6 +245,9 @@ function buildLiveDashboard(
       batchThresholdOverrides,
     );
     const normalized = normalizeResultCapture(raw);
+    // 판정 당시 미션 정산 뭉치 제외 규칙이 켜져 있었는지(summary.judgeRules 스냅샷, readJudgeRules 순수 판독).
+    // 스냅샷 없는 옛 배치는 규칙 없이 재현해야 저장된 공식 summary 와 일치한다.
+    const judgeRules = readJudgeRules(batch.summary);
     const recon = reconcileResults({
       catalogItems,
       results: normalized.results,
@@ -251,6 +255,7 @@ function buildLiveDashboard(
       existingSourceKeys: seenSourceKeys,
       specialItemRules: source.specialItemRules,
       modifierState,
+      missionSettlementIgnore: judgeRules.missionSettlementIgnore,
     });
     modifierState = recon.modifierState;
     for (const d of recon.decisions) {

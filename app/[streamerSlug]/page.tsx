@@ -2307,13 +2307,16 @@ function AdminPanel({
                   <Stat label="자동 기록" value={latest.summary.recordCount} accent />
                   <Stat label="최종 카운트" value={latest.summary.effectiveRecordCount ?? latest.summary.recordCount} />
                   <Stat label="두배권 감지" value={latest.summary.modifierCount ?? 0} />
-                  <Stat label="제외(기준 초과)" value={latest.summary.ignoreCount} />
+                  <Stat label="제외" value={latest.summary.ignoreCount} />
                   <Stat label="중복" value={latest.summary.duplicateCount} />
                   <Stat label="확인 필요" value={latest.summary.needsReviewCount} />
                 </div>
                 <p className={styles.fieldHint}>
                   전체 결과 {latest.summary.totalResults.toLocaleString()}건 중 기준 이하{" "}
                   {latest.entryCount}건이 업보 후보로 기록됐어요.
+                  {(latest.summary.missionSettlementCount ?? 0) > 0
+                    ? ` 미션 정산 뭉치 ${latest.summary.missionSettlementCount}건은 계정이 없어 제외했어요.`
+                    : ""}
                 </p>
               </>
             ) : (
