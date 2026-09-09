@@ -11,6 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 // upboSupabase(서버 전용 모듈)가 아니라 클라이언트 안전 모듈에서 가져온다 — couponAggregate 선례.
 import {
   WARDROBE_MAX_ITEMS,
+  emptyWardrobe,
+  wardrobeSettings,
   WARDROBE_MONTH_PATTERN,
   WARDROBE_PARTS,
   WARDROBE_PART_LABEL,
@@ -21,9 +23,9 @@ import {
 } from "../../lib/wardrobeShared";
 
 // 파츠 <option> 목록(묶음 지정·일괄 변경·행 편집 3곳 공용) — 목록은 wardrobeShared 가 단일 출처.
-const partOptions = WARDROBE_PARTS.map((p) => (
+const partOptions = (["", ...WARDROBE_PARTS] as const).map((p) => (
   <option key={p} value={p}>
-    {WARDROBE_PART_LABEL[p]}
+    {WARDROBE_PART_LABEL[p] || "미지정"}
   </option>
 ));
 import { optimizeImage } from "./imageOptimize";
@@ -74,13 +76,13 @@ function trimEdge(value: string): string {
 }
 
 export default function WardrobeManager({ slug, initial }: { slug: string; initial: WardrobeState | null }) {
-  // 기본 테마 없음 — 첫 사용 시 스트리머가 테마부터 만든다(예시 미제공, sy 확정 8/4).
-  const [state, setState] = useState<WardrobeState>(initial ?? { themes: [], items: [] });
+  // 기존 표시 방식은 유지하고, 신규 옷장은 분류 미지정으로 시작한다.
+  const [state, setState] = useState<WardrobeState>(initial ?? emptyWardrobe());
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [preset, setPreset] = useState<{ themeId: string; part: WardrobePart; month: string }>({
-    themeId: initial?.themes[0]?.id ?? "",
-    part: "outfit",
-    month: currentMonthKst(),
+    themeId: wardrobeSettings(initial).layout === "legacy" ? initial?.themes[0]?.id ?? "" : "",
+    part: wardrobeSettings(initial).layout === "legacy" ? "outfit" : "",
+    month: wardrobeSettings(initial).layout === "legacy" ? currentMonthKst() : "",
   });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -104,12 +106,12 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 
   const totalCount = state.items.length + queue.filter((q) => q.status !== "done" && q.status !== "error").length;
   // 올리기 대상 테마: 고른 테마가 (삭제 등으로) 없어졌으면 첫 테마로, 테마가 하나도 없으면 빈 값.
-  const presetThemeId = state.themes.some((t) => t.id === preset.themeId)
+  const presetThemeId = !preset.themeId || state.themes.some((t) => t.id === preset.themeId)
     ? preset.themeId
-    : state.themes[0]?.id ?? "";
-  const noThemes = state.themes.length === 0;
-  // 업로드가 도는 동안 편집 액션을 잠근다 — 서버가 전체 스냅샷(last-write-wins)을 쓰는 구조라
-  // 업로드와 편집이 겹치면 늦게 저장된 쪽이 먼저 저장된 쪽을 되돌린다(항목·수정 유실).
+    : "";
+  const settings = wardrobeSettings(state);
+  // 업로드 큐와 편집이 불필요하게 저장 충돌을 일으키지 않도록 편집 액션을 잠근다.
+  // 다른 창의 동시 변경은 서버의 revision 검사로 보호한다.
   const uploading = queue.some((q) => q.status === "ready" || q.status === "uploading");
   const locked = busy || uploading;
 
@@ -119,10 +121,6 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
     (files: File[]) => {
       const images = files.filter((f) => f.type.startsWith("image/"));
       if (images.length === 0) return;
-      if (!presetThemeId) {
-        setMsg({ kind: "err", text: "먼저 아래 ③에서 테마를 만들어 주세요." });
-        return;
-      }
       const room = WARDROBE_MAX_ITEMS - totalCount;
       if (room <= 0) {
         setMsg({ kind: "err", text: `옷장은 숨김 포함 최대 ${WARDROBE_MAX_ITEMS}장까지예요.` });
@@ -167,6 +165,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         formData.set("file", optimized);
         if (thumb) formData.set("thumb", thumb);
         formData.set("name", next.name);
+        formData.set("requestId", next.key);
         formData.set("themeId", next.themeId);
         formData.set("part", next.part);
         formData.set("month", next.month);
@@ -232,7 +231,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         const res = await fetch(`/api/s/${encodeURIComponent(slug)}/wardrobe`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, revision: state.revision ?? null }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data?.ok === false || !data?.wardrobe) {
@@ -249,7 +248,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         setBusy(false);
       }
     },
-    [slug],
+    [slug, state.revision],
   );
 
   const patchItems = (ids: string[], set: Record<string, unknown>) => postAction({ action: "patch", ids, set });
@@ -334,7 +333,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 
   const grouped = useMemo(
     () =>
-      state.themes
+      [...state.themes, { id: "", name: "미분류" }]
         .map((t) => ({
           theme: t,
           items: state.items.filter((i) => i.themeId === t.id).sort((a, b) => a.order - b.order),
@@ -397,6 +396,15 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 
   return (
     <div className={styles.adminWrap}>
+      <details className={styles.classificationSettings}>
+        <summary>팬 화면 분류 설정</summary>
+        <p>이미지만 올려도 등록됩니다. 사용할 분류만 켜세요. 기존 이미지의 분류는 지워지지 않습니다.</p>
+        {(["month", "theme", "parts"] as const).map((key) => (
+          <label key={key} style={{ marginRight: 16 }}><input type="checkbox" checked={settings[key]} disabled={locked}
+            onChange={(e) => void postAction({ action: "settings", settings: { ...settings, [key]: e.target.checked } })} />
+            {{ month: "월별", theme: "테마별", parts: "파츠별" }[key]}</label>
+        ))}
+      </details>
       {/* ① 올리기: 묶음 성격을 먼저 정하고 떨어뜨린 파일 전부에 일괄 적용 */}
       <div className={styles.presetRow}>
         <span className={styles.sectionLabel}>① 올리기</span>
@@ -405,9 +413,9 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           <select
             value={presetThemeId}
             onChange={(e) => setPreset((p) => ({ ...p, themeId: e.target.value }))}
-            disabled={noThemes}
+            disabled={locked}
           >
-            {noThemes ? <option value="">테마를 먼저 만드세요</option> : null}
+            <option value="">미지정</option>
             {state.themes.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
@@ -429,7 +437,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           <input
             type="month"
             value={preset.month}
-            onChange={(e) => setPreset((p) => ({ ...p, month: e.target.value || currentMonthKst() }))}
+            onChange={(e) => setPreset((p) => ({ ...p, month: e.target.value }))}
           />
         </label>
       </div>
@@ -457,7 +465,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
         }}
       >
         <span>
-          {noThemes ? "먼저 아래 ③에서 테마를 만들어 주세요" : "여기에 여러 장 끌어다 놓기 · 클릭해서 파일 선택"}
+          여기에 여러 장 끌어다 놓기 · 클릭해서 파일 선택
         </span>
         <span className={styles.dropzoneHint}>
           Ctrl+V(⌘V) 붙여넣기도 돼요 · jpg/png/webp · 자동으로 용량을 줄여 올려요 · 아이폰 사진(HEIC)은
@@ -539,10 +547,10 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           disabled={selectedIds.length === 0 || locked}
           value=""
           onChange={(e) => {
-            if (e.target.value) void bulkPatch({ themeId: e.target.value });
+            if (e.target.value) void bulkPatch({ themeId: e.target.value === "__none" ? "" : e.target.value });
           }}
         >
-          <option value="">테마 변경…</option>
+          <option value="">테마 변경…</option><option value="__none">미분류로 이동</option>
           {state.themes.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
@@ -553,11 +561,11 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           disabled={selectedIds.length === 0 || locked}
           value=""
           onChange={(e) => {
-            if (e.target.value) void bulkPatch({ part: e.target.value });
+            if (e.target.value) void bulkPatch({ part: e.target.value === "__none" ? "" : e.target.value });
           }}
         >
-          <option value="">파츠 변경…</option>
-          {partOptions}
+          <option value="">파츠 변경…</option><option value="__none">파츠 미지정</option>
+          {partOptions.slice(1)}
         </select>
         <button
           type="button"
@@ -588,7 +596,7 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
           disabled={selectedIds.length === 0 || locked}
           onClick={() => {
             const v = bulkMonthRef.current?.value ?? "";
-            if (!WARDROBE_MONTH_PATTERN.test(v)) {
+            if (v && !WARDROBE_MONTH_PATTERN.test(v)) {
               setMsg({ kind: "err", text: "월은 2026-08 형식으로 골라 주세요." });
               return;
             }
@@ -859,7 +867,7 @@ function ItemRow({
           onBlur={(e) => {
             const v = e.target.value;
             if (v === item.month) return;
-            if (!WARDROBE_MONTH_PATTERN.test(v)) {
+            if (v && !WARDROBE_MONTH_PATTERN.test(v)) {
               e.target.value = item.month;
               return;
             }

@@ -1271,7 +1271,7 @@ export async function uploadMemoImage(
 export { WARDROBE_MAX_ITEMS, WARDROBE_PARTS } from "./wardrobeShared";
 export type { WardrobeItem, WardrobePart, WardrobeState, WardrobeTheme } from "./wardrobeShared";
 
-function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): WardrobeItem | null {
+function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined, flexible = false): WardrobeItem | null {
   if (!raw?.id || !raw.url) return null;
   return {
     id: String(raw.id),
@@ -1279,7 +1279,7 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     name: typeof raw.name === "string" ? raw.name : "",
     themeId: typeof raw.themeId === "string" ? raw.themeId : "",
     // 목록에 없는 값(손상·구버전)만 의상으로 폴백 — 새 파츠(눈색·악세서리)를 뭉개지 않는다.
-    part: raw.part && WARDROBE_PARTS.includes(raw.part) ? raw.part : "outfit",
+    part: raw.part && (WARDROBE_PARTS as readonly string[]).includes(raw.part) ? raw.part : flexible && raw.part === "" ? "" : "outfit",
     month: typeof raw.month === "string" ? raw.month : "",
     memo: typeof raw.memo === "string" ? raw.memo : "",
     hidden: raw.hidden === true,
@@ -1289,6 +1289,7 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
     variant: typeof raw.variant === "string" ? raw.variant : "",
     featured: raw.featured === true,
     thumbUrl: typeof raw.thumbUrl === "string" ? raw.thumbUrl : "",
+    ...(typeof raw.uploadRequestId === "string" ? { uploadRequestId: raw.uploadRequestId } : {}),
   };
 }
 
@@ -1297,8 +1298,8 @@ function normalizeWardrobeItem(raw: Partial<WardrobeItem> | undefined): Wardrobe
 export async function getWardrobeBySlug(slug: string): Promise<WardrobeState | null> {
   const streamer = await getStreamerRow(slug);
   if (!streamer) return null;
-  const rows = await supabaseFetch<Array<{ payload: { wardrobe?: WardrobeState } | null; created_at: string }>>(
-    `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.wardrobe_updated&select=payload,created_at&order=created_at.desc&limit=1`,
+  const rows = await supabaseFetch<Array<{ id: string; payload: { wardrobe?: WardrobeState } | null; created_at: string }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.wardrobe_updated&select=id,payload,created_at&order=created_at.desc&limit=1`,
   );
   const wardrobe = rows[0]?.payload?.wardrobe;
   if (!wardrobe) return null;
@@ -1306,23 +1307,27 @@ export async function getWardrobeBySlug(slug: string): Promise<WardrobeState | n
     .filter((t): t is WardrobeTheme => Boolean(t?.id && typeof t.name === "string"))
     .map((t) => ({ id: String(t.id), name: String(t.name) }));
   const items = (wardrobe.items ?? [])
-    .map(normalizeWardrobeItem)
+    .map((raw) => normalizeWardrobeItem(raw, wardrobe.schemaVersion === 2))
     .filter((i): i is WardrobeItem => i !== null);
-  return { themes, items };
+  return { themes, items, revision: rows[0]?.id ?? null,
+    ...(wardrobe.schemaVersion === 2 ? { schemaVersion: 2 as const } : {}),
+    ...(wardrobe.settings ? { settings: wardrobe.settings } : {}),
+  };
 }
 
 // 옷장 상태를 audit_logs 에 새 스냅샷으로 남긴다(append-only, 최신 1건이 현재 상태).
 export async function setWardrobe(streamer: StreamerRow, state: WardrobeState): Promise<WardrobeState> {
-  await supabaseFetch(`/${tableName("audit_logs")}`, {
+  const { revision, ...payload } = state;
+  const result = await supabaseFetch<{ conflict?: boolean; revision?: string }>(`/rpc/${tableName("save_wardrobe")}`, {
     method: "POST",
-    headers: { prefer: "return=minimal" },
-    body: JSON.stringify({
-      streamer_id: streamer.id,
-      action: "wardrobe_updated",
-      actor: "extension",
-      payload: { wardrobe: state },
-    }),
+    body: JSON.stringify({ p_streamer_id: streamer.id, p_expected_revision: revision ?? null, p_state: payload }),
   });
+  if (result.conflict) {
+    const error = new Error("다른 창에서 옷장이 변경됐어요. 새로고침 후 다시 시도해 주세요.");
+    (error as Error & { status: number }).status = 409;
+    throw error;
+  }
+  state.revision = result.revision ?? null;
   return state;
 }
 

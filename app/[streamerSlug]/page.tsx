@@ -2129,7 +2129,7 @@ function AdminPanel({
       ) : activeAdminTab === "wardrobe" ? (
         <CollapsibleCard sectionKey="wardrobe" title="옷장 (의상·헤어)">
           <p className={styles.fieldHint}>
-            의상·헤어 컷을 올리면 팬 화면에 옷장 탭이 생겨요(1장 이상일 때만). 테마를 먼저 만들어
+            의상·헤어 컷을 올리면 팬 화면에 옷장 탭이 생겨요(1장 이상일 때만). 분류 없이 이미지를 바로 등록할 수 있으며, 테마를 만들어
             고르고, 여러 장을 한꺼번에 끌어다 놓으면 돼요.
           </p>
           <WardrobeManager slug={state.slug} initial={wardrobe} />

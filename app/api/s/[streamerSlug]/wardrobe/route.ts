@@ -1,3 +1,4 @@
+import { emptyWardrobe, wardrobeSettings } from "@/lib/wardrobeShared";
 import {
   WARDROBE_MAX_ITEMS,
   WARDROBE_PARTS,
@@ -38,11 +39,12 @@ function badRequest(message: string): never {
 
 function cleanMonth(value: unknown): string {
   const s = typeof value === "string" ? value.trim() : "";
-  if (!MONTH_PATTERN.test(s)) badRequest("적용 월 형식이 잘못됐어요 (예: 2026-08)");
+  if (s && !MONTH_PATTERN.test(s)) badRequest("적용 월 형식이 잘못됐어요 (예: 2026-08)");
   return s;
 }
 
 function cleanPart(value: unknown): WardrobePart {
+  if (value === null || value === "" || value === undefined) return "";
   if (typeof value === "string" && (WARDROBE_PARTS as readonly string[]).includes(value)) {
     return value as WardrobePart;
   }
@@ -52,7 +54,7 @@ function cleanPart(value: unknown): WardrobePart {
 // 저장된 상태가 없으면 빈 옷장으로 시작한다 — 기본 테마 없음(테마는 스트리머가 직접 생성).
 async function loadState(slug: string): Promise<WardrobeState> {
   const state = await getWardrobeBySlug(slug);
-  return state ?? { themes: [], items: [] };
+  return state ?? emptyWardrobe();
 }
 
 // 멤버가 1장만 남은 색상 세트는 자동 해체 — 삭제·풀기·부분 재묶기 뒤 "혼자 남은 세트"가
@@ -66,6 +68,9 @@ function dissolveLonelySets(items: WardrobeItem[]): WardrobeItem[] {
 // 옷장(의상) 탭 편집. 관리자 로그인 세션(스트리머별 비밀번호)으로 인증한다.
 // multipart = 이미지 1장 등록(add), JSON = 항목 수정/순서/삭제/테마 관리.
 export async function POST(request: Request, context: RouteContext) {
+  const uploaded: string[] = [];
+  let committed = false;
+  let saveAttempted = false;
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
@@ -91,14 +96,21 @@ export async function POST(request: Request, context: RouteContext) {
           bytes: await file.arrayBuffer(),
           contentType: file.type,
         });
+        uploaded.push(url);
         const oldThumb = target.thumbUrl;
         const items = state.items.map((i) => (i.id === thumbFor ? { ...i, thumbUrl: url } : i));
-        const next: WardrobeState = { themes: state.themes, items };
+        const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+        saveAttempted = true;
         await setWardrobe(streamer, next);
+        committed = true;
         if (oldThumb) await deleteWardrobeImages([oldThumb]);
         return jsonOk({ ok: true, wardrobe: next });
       }
 
+      const requestId = formData.get("requestId");
+      if (typeof requestId === "string" && requestId.length > 100) badRequest("업로드 요청이 잘못됐어요");
+      const previous = typeof requestId === "string" && requestId ? state.items.find((i) => i.uploadRequestId === requestId) : undefined;
+      if (previous) return jsonOk({ ok: true, wardrobe: state, addedId: previous.id });
       // ── add: 이미지 1장 등록(클라이언트 업로드 큐가 한 장씩 보낸다 — 장별 실패 재시도용) ──
       if (state.items.length >= WARDROBE_MAX_ITEMS) {
         badRequest(`옷장은 숨김 포함 최대 ${WARDROBE_MAX_ITEMS}장까지 보관할 수 있어요`);
@@ -109,7 +121,7 @@ export async function POST(request: Request, context: RouteContext) {
       if (file.size > MAX_IMAGE_BYTES) badRequest("이미지는 8MB 이하만 올릴 수 있어요");
 
       const themeId = typeof formData.get("themeId") === "string" ? (formData.get("themeId") as string) : "";
-      if (!state.themes.some((t) => t.id === themeId)) badRequest("없는 테마예요 — 새로고침 후 다시 시도해 주세요");
+      if (themeId && !state.themes.some((t) => t.id === themeId)) badRequest("없는 테마예요 — 새로고침 후 다시 시도해 주세요");
       const part = cleanPart(formData.get("part"));
       const month = cleanMonth(formData.get("month"));
       const nameRaw = formData.get("name");
@@ -130,12 +142,14 @@ export async function POST(request: Request, context: RouteContext) {
         bytes: await file.arrayBuffer(),
         contentType: file.type,
       });
+      uploaded.push(url);
       if (thumbFile instanceof File && thumbFile.size > 0) {
         thumbUrl = await uploadWardrobeImage(streamerSlug, {
           bytes: await thumbFile.arrayBuffer(),
           contentType: thumbFile.type,
         });
       }
+      if (thumbUrl) uploaded.push(thumbUrl);
       const maxOrder = state.items
         .filter((i) => i.themeId === themeId)
         .reduce((max, i) => Math.max(max, i.order), 0);
@@ -154,9 +168,12 @@ export async function POST(request: Request, context: RouteContext) {
         variant,
         featured: false,
         thumbUrl,
+        ...(typeof requestId === "string" && requestId ? { uploadRequestId: requestId } : {}),
       };
-      const next: WardrobeState = { themes: state.themes, items: [...state.items, item] };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items: [...state.items, item] };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next, addedId: item.id });
     }
 
@@ -170,19 +187,35 @@ export async function POST(request: Request, context: RouteContext) {
       themes?: Array<{ id?: string; name?: string }>;
       name?: string;
       variants?: Record<string, string>;
+      revision?: string | null;
+      settings?: { month?: boolean; theme?: boolean; parts?: boolean };
     }>(request);
+    if (body.revision !== undefined && body.revision !== (state.revision ?? null)) {
+      const error = new Error("다른 창에서 옷장이 변경됐어요. 새로고침 후 다시 시도해 주세요.");
+      (error as Error & { status: number }).status = 409;
+      throw error;
+    }
     const action = body.action ?? "";
+    if (action === "settings") {
+      const raw = body.settings;
+      if (!raw || [raw.month, raw.theme, raw.parts].some((v) => typeof v !== "boolean")) badRequest("분류 설정이 잘못됐어요");
+      const next: WardrobeState = { ...state, schemaVersion: 2, settings: { ...wardrobeSettings(state), month: raw.month!, theme: raw.theme!, parts: raw.parts!, layout: "flexible" } };
+      saveAttempted = true;
+      await setWardrobe(streamer, next);
+      committed = true;
+      return jsonOk({ ok: true, wardrobe: next });
+    }
 
     if (action === "patch") {
       const ids = new Set((body.ids ?? []).filter((id) => typeof id === "string"));
       if (ids.size === 0) badRequest("수정할 항목이 없어요");
       const set = body.set ?? {};
-      if (set.themeId !== undefined && !state.themes.some((t) => t.id === set.themeId)) {
+      if (set.themeId !== undefined && set.themeId !== "" && !state.themes.some((t) => t.id === set.themeId)) {
         badRequest("없는 테마예요 — 새로고침 후 다시 시도해 주세요");
       }
       // 세트에 묶인 컷의 테마 이동은 세트 전체가 함께일 때만 — 부분 이동은 "세트=같은 테마"
       // 불변식을 깨므로 명시적으로 막는다(조용한 자동 해체보다 안내가 낫다).
-      if (set.themeId !== undefined) {
+      if (set.themeId !== undefined || set.part !== undefined) {
         const bySet = new Map<string, { total: number; moving: number }>();
         for (const item of state.items) {
           if (!item.setId) continue;
@@ -193,7 +226,7 @@ export async function POST(request: Request, context: RouteContext) {
         }
         for (const c of bySet.values()) {
           if (c.moving > 0 && c.moving < c.total) {
-            badRequest("색상 세트로 묶인 컷은 세트 전체를 함께 옮기거나, 먼저 세트를 풀어 주세요");
+            badRequest("색상 세트로 묶인 컷은 세트 전체의 분류를 함께 바꾸거나, 먼저 세트를 풀어 주세요");
           }
         }
       }
@@ -230,22 +263,26 @@ export async function POST(request: Request, context: RouteContext) {
         }
         return next;
       });
-      const next: WardrobeState = { themes: state.themes, items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next });
     }
 
     if (action === "reorder") {
       const themeId = typeof body.themeId === "string" ? body.themeId : "";
-      if (!state.themes.some((t) => t.id === themeId)) badRequest("없는 테마예요");
+      if (themeId && !state.themes.some((t) => t.id === themeId)) badRequest("없는 테마예요");
       // 중복 id 는 첫 등장만 인정(중복이 마지막 인덱스로 덮어쓰는 것 방지).
       const orderedIds = [...new Set((body.orderedIds ?? []).filter((id) => typeof id === "string"))];
       const orderOf = new Map(orderedIds.map((id, i) => [id, i + 1] as const));
       const items = state.items.map((item) =>
         item.themeId === themeId && orderOf.has(item.id) ? { ...item, order: orderOf.get(item.id)! } : item,
       );
-      const next: WardrobeState = { themes: state.themes, items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next });
     }
 
@@ -276,8 +313,10 @@ export async function POST(request: Request, context: RouteContext) {
       });
       // 두 세트에서 일부씩 꺼내 새로 묶으면 원래 세트에 1장씩 남을 수 있다 — 자동 해체.
       items = dissolveLonelySets(items);
-      const next: WardrobeState = { themes: state.themes, items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next });
     }
 
@@ -287,8 +326,10 @@ export async function POST(request: Request, context: RouteContext) {
       const items = dissolveLonelySets(
         state.items.map((i) => (ids.has(i.id) ? { ...i, setId: "" } : i)),
       );
-      const next: WardrobeState = { themes: state.themes, items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next });
     }
 
@@ -297,8 +338,10 @@ export async function POST(request: Request, context: RouteContext) {
       if (ids.size === 0) badRequest("삭제할 항목이 없어요");
       const removed = state.items.filter((i) => ids.has(i.id));
       const items = dissolveLonelySets(state.items.filter((i) => !ids.has(i.id)));
-      const next: WardrobeState = { themes: state.themes, items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes: state.themes, items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       // 저장 성공 후 파일 정리(모범 노력 — 실패해도 삭제는 이미 반영됨). 썸네일도 함께.
       await deleteWardrobeImages(removed.flatMap((i) => [i.url, i.thumbUrl].filter(Boolean)));
       return jsonOk({ ok: true, wardrobe: next });
@@ -306,7 +349,6 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (action === "themes") {
       const raw = body.themes ?? [];
-      if (raw.length === 0) badRequest("테마는 최소 1개 필요해요");
       if (raw.length > MAX_THEMES) badRequest(`테마는 최대 ${MAX_THEMES}개까지예요`);
       const themes: WardrobeTheme[] = raw.map((t) => {
         const name = (typeof t.name === "string" ? t.name : "").trim().slice(0, MAX_THEME_NAME_LENGTH);
@@ -321,13 +363,19 @@ export async function POST(request: Request, context: RouteContext) {
       const prevIds = new Set(state.themes.map((t) => t.id));
       const orphan = state.items.find((i) => prevIds.has(i.themeId) && !keptIds.has(i.themeId));
       if (orphan) badRequest("항목이 남아있는 테마는 삭제할 수 없어요 — 항목을 먼저 옮기거나 지워 주세요");
-      const next: WardrobeState = { themes, items: state.items };
+      const next: WardrobeState = { ...state, schemaVersion: 2, themes, items: state.items };
+      saveAttempted = true;
       await setWardrobe(streamer, next);
+      committed = true;
       return jsonOk({ ok: true, wardrobe: next });
     }
 
     badRequest("알 수 없는 요청이에요");
   } catch (error) {
+    // A transport failure can happen after the database committed. Never delete
+    // those files: retrying the same request ID will recover the saved item.
+    const knownNotSaved = !saveAttempted || (error as Error & { status?: number }).status === 409;
+    if (!committed && knownNotSaved && uploaded.length) await deleteWardrobeImages(uploaded).catch(() => 0);
     return jsonError(error);
   }
 }

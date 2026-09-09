@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import WardrobeFanView from "../WardrobeFanView";
-import type { WardrobeItem, WardrobeTheme } from "../../../lib/wardrobeShared";
+import type { WardrobeItem, WardrobeTheme, WardrobeSettings } from "../../../lib/wardrobeShared";
 import styles from "./wardrobePage.module.css";
 
 export default function WardrobeStandaloneView({
@@ -13,11 +13,13 @@ export default function WardrobeStandaloneView({
   themes,
   items,
   initialItemId,
+  settings,
 }: {
   slug: string;
   themes: WardrobeTheme[];
   items: WardrobeItem[]; // 공개(hidden=false) 컷만 서버에서 걸러 넘어온다
   initialItemId: string | null;
+  settings?: WardrobeSettings;
 }) {
   const [query, setQuery] = useState("");
   return (
@@ -37,6 +39,7 @@ export default function WardrobeStandaloneView({
         items={items}
         searchQuery={query}
         initialItemId={initialItemId}
+        settings={settings}
         wide
       />
     </>

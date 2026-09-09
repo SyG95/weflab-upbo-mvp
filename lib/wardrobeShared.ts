@@ -6,8 +6,9 @@
 // 파츠 목록·이름표의 단일 출처 — 관리 화면 select, 팬 필터 칩, 서버 검증이 전부 이걸 쓴다.
 // 새 파츠는 여기에만 추가하면 된다(눈색·악세서리=8/11 sy 지시로 추가).
 export const WARDROBE_PARTS = ["outfit", "hair", "eyes", "accessory"] as const;
-export type WardrobePart = (typeof WARDROBE_PARTS)[number];
+export type WardrobePart = (typeof WARDROBE_PARTS)[number] | "";
 export const WARDROBE_PART_LABEL: Record<WardrobePart, string> = {
+  "": "",
   outfit: "의상",
   hair: "헤어",
   eyes: "눈색",
@@ -20,7 +21,7 @@ export type WardrobeItem = {
   name: string;
   themeId: string;
   part: WardrobePart;
-  month: string; // "YYYY-MM" — 팬에게 보여줄 기준 월(1개, 여러 달 재노출 없음)
+  month: string; // "YYYY-MM" 또는 ""(미지정). 업로드 날짜로 재계산하지 않는다.
   memo: string;
   hidden: boolean;
   // NEW 배지 기준: 처음 공개된 시각(+2주). 숨김 해제 시 최초 1회만 채워지고 이후 유지 —
@@ -39,8 +40,24 @@ export type WardrobeItem = {
   // 목록·메인·관리 표는 이걸, 피팅룸(크게보기)만 원본(url)을 내려받는다 — 전송량 ~1/10.
   // "" = 썸네일 없음(구버전 컷) → 화면은 원본으로 폴백(깨짐 없음, 마이그레이션으로 채움).
   thumbUrl: string;
+  uploadRequestId?: string; // 동일 업로드 재시도에만 사용. 기존 항목은 불변.
 };
-export type WardrobeState = { themes: WardrobeTheme[]; items: WardrobeItem[] };
+export type WardrobeSettings = { month: boolean; theme: boolean; parts: boolean; layout: "legacy" | "flexible" };
+export const LEGACY_WARDROBE_SETTINGS: WardrobeSettings = { month: true, theme: true, parts: true, layout: "legacy" };
+export const SIMPLE_WARDROBE_SETTINGS: WardrobeSettings = { month: false, theme: false, parts: false, layout: "flexible" };
+export type WardrobeState = {
+  themes: WardrobeTheme[];
+  items: WardrobeItem[];
+  schemaVersion?: 2;
+  settings?: WardrobeSettings;
+  revision?: string | null;
+};
+export function wardrobeSettings(state: Pick<WardrobeState, "settings"> | null): WardrobeSettings {
+  return state?.settings ?? (state ? LEGACY_WARDROBE_SETTINGS : SIMPLE_WARDROBE_SETTINGS);
+}
+export function emptyWardrobe(): WardrobeState {
+  return { themes: [], items: [], schemaVersion: 2, settings: { ...SIMPLE_WARDROBE_SETTINGS }, revision: null };
+}
 
 // 숨김 포함 총 보관 상한. 100→500 상향(8/14 sy 확정 — 꾸야 이틀 만에 100 도달 실측).
 // 500장 실측 추정 ~350MB/스트리머(1200px webp 평균 722KB). 다음 대비=목록용 썸네일 분리(전송량 1/10).

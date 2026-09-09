@@ -782,3 +782,11 @@
   composes: statusMsg;
   color: var(--destructive);
 }
+
+.classificationSettings {
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e3d6cc);
+  border-radius: 10px;
+}
+.classificationSettings summary { cursor: pointer; font-weight: 600; }
+.classificationSettings p { margin: 10px 0; font-size: 13px; }

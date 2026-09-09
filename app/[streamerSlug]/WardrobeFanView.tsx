@@ -21,6 +21,8 @@ function useIsClient(): boolean {
 }
 import {
   WARDROBE_PARTS,
+  LEGACY_WARDROBE_SETTINGS,
+  type WardrobeSettings,
   WARDROBE_PART_LABEL as PART_LABEL,
   currentMonthKst,
   type WardrobeItem,
@@ -32,7 +34,7 @@ import styles from "./wardrobe.module.css";
 const NEW_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // NEW 배지: 공개 시작 + 2주
 
 type PartFilter = "all" | WardrobePart;
-type ViewMode = "main" | "month" | "theme";
+type ViewMode = "main" | "month" | "theme" | "all";
 
 // 표시 단위: 색상 세트(공개 멤버 2장 이상)는 카드 1장으로 접히고 칩으로 색을 고른다.
 // firstId = 현재 필터·정렬에서 먼저 걸린 컷 — 칩 기본 선택("화이트" 검색 → 화이트가 먼저 보이게).
@@ -45,6 +47,7 @@ function isNew(item: WardrobeItem, now: number): boolean {
 }
 
 function monthLabel(month: string): string {
+  if (month === "__none") return "월 미지정";
   const [y, m] = month.split("-");
   return y && m ? `${y}. ${m}` : month;
 }
@@ -66,12 +69,14 @@ export default function WardrobeFanView({
   searchQuery,
   initialItemId,
   wide = false,
+  settings = LEGACY_WARDROBE_SETTINGS,
 }: {
   slug: string;
   themes: WardrobeTheme[];
   items: WardrobeItem[]; // 공개(hidden=false) 컷만 서버에서 걸러 넘어온다
   searchQuery: string;
   initialItemId: string | null; // ?w=<id> 딥링크 — 해당 컷의 크게보기를 바로 연다
+  settings?: WardrobeSettings;
   wide?: boolean; // 독립 화면(넓은 판): 카드 최소 폭을 키워 컷을 크게 보여준다
 }) {
   // 렌더 중 Date.now() 호출은 lint(purity) 위반 — 마운트 시각으로 고정(NEW 2주 판정엔 충분).
@@ -154,13 +159,15 @@ export default function WardrobeFanView({
 
   // 월 목록(항목 있는 달만, 최신 달부터). 기본 선택=이번 달, 없으면 가장 최근 달.
   const months = useMemo(() => {
-    const set = new Set(filtered.map((i) => i.month).filter(Boolean));
+    const set = new Set(filtered.map((i) => i.month || "__none"));
     return [...set].sort((a, b) => b.localeCompare(a));
   }, [filtered]);
   const [currentMonth] = useState(() => currentMonthKst());
   // 메인 고정 컷이 있으면 첫 진입 = 메인 탭(sy 확정 8/12). 0장이면 탭 자체가 없고 월별이 기본.
   const hasFeatured = useMemo(() => items.some((i) => i.featured), [items]);
-  const [view, setView] = useState<ViewMode>(() => (items.some((i) => i.featured) ? "main" : "month"));
+  const hasUnclassified = items.some((i) => !i.themeId || !i.month || !i.part);
+  const showAll = settings.layout === "flexible" || hasUnclassified;
+  const [view, setView] = useState<ViewMode>(() => items.some((i) => i.featured) ? "main" : settings.layout === "legacy" && settings.month ? "month" : "all");
   const [month, setMonth] = useState<string | null>(null);
   const selectedMonth = month && months.includes(month) ? month : months.includes(currentMonth) ? currentMonth : months[0] ?? null;
   const monthIdx = selectedMonth ? months.indexOf(selectedMonth) : -1;
@@ -168,7 +175,7 @@ export default function WardrobeFanView({
   const monthItems = useMemo(
     () =>
       selectedMonth
-        ? filtered.filter((i) => i.month === selectedMonth).sort(byUploadOrder)
+        ? filtered.filter((i) => (i.month || "__none") === selectedMonth).sort(byUploadOrder)
         : // month 값이 빈(손상) 항목만 있는 경우 — 말없이 빈 격자를 보여주지 않고 전체를 등록순으로.
           [...filtered].sort(byUploadOrder),
     [filtered, selectedMonth],
@@ -183,7 +190,7 @@ export default function WardrobeFanView({
   // 세트는 같은 테마 안에서만 성립(서버 검증)하므로 섹션마다 온전한 세트로 접힌다.
   const themeSections = useMemo(
     () =>
-      themes
+      [...themes, ...(filtered.some((i) => !i.themeId) ? [{ id: "", name: "미분류" }] : [])]
         .map((t) => ({
           theme: t,
           units: toUnits(filtered.filter((i) => i.themeId === t.id).sort((a, b) => a.order - b.order)),
@@ -202,10 +209,11 @@ export default function WardrobeFanView({
   // 테마별 보기는 지금 열린 색인(테마) 안에서만 넘긴다.
   // 딥링크 컷이 현재 필터에 없으면 그 컷(세트면 세트 통째)만 단독으로 연다.
   const displayUnits = useMemo(() => {
+    if (view === "all") return toUnits([...filtered].sort(byUploadOrder));
     if (view === "main") return mainUnits;
     if (view === "month") return monthUnits;
     return activeThemeSection?.units ?? [];
-  }, [view, mainUnits, monthUnits, activeThemeSection]);
+  }, [view, mainUnits, monthUnits, activeThemeSection, filtered, toUnits]);
   // 딥링크(?w=)는 초기 상태로 바로 연다(effect 내 setState 는 lint 위반 + 불필요한 재렌더).
   const [openId, setOpenId] = useState<string | null>(() =>
     initialItemId && items.some((i) => i.id === initialItemId) ? initialItemId : null,
@@ -269,7 +277,7 @@ export default function WardrobeFanView({
           </span>
           <span className={styles.cardName}>{chosen.name}</span>
           <span className={styles.cardMeta}>
-            {themeName.get(chosen.themeId) ?? "테마 없음"} · {PART_LABEL[chosen.part]}
+            {[themeName.get(chosen.themeId), PART_LABEL[chosen.part]].filter(Boolean).join(" · ")}
           </span>
         </button>
         {unit.members.length > 1 ? (
@@ -293,7 +301,7 @@ export default function WardrobeFanView({
   return (
     <div className={wide ? `${styles.fanWrap} ${styles.fanWrapWide}` : styles.fanWrap}>
       <div className={styles.controls}>
-        {view === "main" ? (
+        {view === "all" ? (<span className={styles.themeViewLabel}>전체 보기</span>) : view === "main" ? (
           <span className={styles.themeViewLabel}>메인 고정 컷</span>
         ) : view === "month" ? (
           <div className={styles.monthNav} aria-label="월 이동">
@@ -324,13 +332,14 @@ export default function WardrobeFanView({
               메인
             </button>
           ) : null}
-          <button type="button" className={view === "month" ? styles.chipOn : styles.chip} onClick={() => setView("month")}>
+          {showAll ? <button type="button" className={view === "all" ? styles.chipOn : styles.chip} onClick={() => setView("all")}>전체 보기</button> : null}
+          {settings.month ? <button type="button" className={view === "month" ? styles.chipOn : styles.chip} onClick={() => setView("month")}>
             월별
-          </button>
-          <button type="button" className={view === "theme" ? styles.chipOn : styles.chip} onClick={() => setView("theme")}>
+          </button> : null}
+          {settings.theme ? <button type="button" className={view === "theme" ? styles.chipOn : styles.chip} onClick={() => setView("theme")}>
             테마별
-          </button>
-          {presentParts.length > 1 ? (
+          </button> : null}
+          {settings.parts && (presentParts.length > 1 || ((settings.layout === "flexible" || items.some((i) => !i.part)) && presentParts.length > 0)) ? (
             <>
               <span className={styles.chipDivider} aria-hidden="true" />
               {(["all", ...presentParts] as PartFilter[]).map((p) => (
@@ -347,6 +356,8 @@ export default function WardrobeFanView({
         <p className={styles.empty}>
           {searchQuery ? `'${searchQuery}'에 해당하는 컷이 없어요.` : "조건에 맞는 컷이 없어요."}
         </p>
+      ) : view === "all" ? (
+        <div className={styles.grid}>{displayUnits.map(card)}</div>
       ) : view === "main" ? (
         <div className={styles.grid}>{mainUnits.map(card)}</div>
       ) : view === "month" ? (
@@ -409,7 +420,7 @@ export default function WardrobeFanView({
                   <div className={styles.fitPanelHead}>
                     <strong className={styles.fitName}>{openItem.name}</strong>
                     <span className={styles.fitMeta}>
-                      {themeName.get(openItem.themeId) ?? "테마 없음"} · {PART_LABEL[openItem.part]}
+                      {[themeName.get(openItem.themeId), PART_LABEL[openItem.part]].filter(Boolean).join(" · ")}
                       {openItem.month ? ` · ${monthLabel(openItem.month)}` : ""}
                     </span>
                   </div>

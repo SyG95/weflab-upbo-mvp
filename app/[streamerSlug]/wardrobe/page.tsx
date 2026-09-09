@@ -64,6 +64,7 @@ export default async function WardrobePage({ params, searchParams }: PageProps) 
           <WardrobeStandaloneView
             slug={streamerSlug}
             themes={wardrobe?.themes ?? []}
+            settings={wardrobe?.settings}
             items={items}
             initialItemId={typeof w === "string" && w ? w : null}
           />
