@@ -1100,10 +1100,10 @@ export async function setStreamerTheme(streamer: StreamerRow, theme: string) {
 // DB 스키마를 새로 만들지 않고 modifier_state 와 같은 "최신 1건 조회" 패턴을 재사용한다.
 export type ShowcaseState = {
   bannerUrl: string | null;
-  posterUrls: [string | null, string | null, string | null];
+  posterUrls: [string | null, string | null, string | null, string | null, string | null];
   // 배너/포스터 클릭 시 이동할 링크(http/https 만). 없으면 null(클릭 안 됨).
   bannerLink: string | null;
-  posterLinks: [string | null, string | null, string | null];
+  posterLinks: [string | null, string | null, string | null, string | null, string | null];
   noticeText: string;
   // 공지 전용 폰트 키(빈값=기본). noticeFonts 화이트리스트로만 정규화됨.
   noticeFont: string;
@@ -1137,12 +1137,16 @@ export async function getShowcaseBySlug(slug: string): Promise<ShowcaseState | n
       showcase.posterUrls?.[0] ?? null,
       showcase.posterUrls?.[1] ?? null,
       showcase.posterUrls?.[2] ?? null,
+      showcase.posterUrls?.[3] ?? null,
+      showcase.posterUrls?.[4] ?? null,
     ],
     bannerLink: cleanShowcaseLink(showcase.bannerLink),
     posterLinks: [
       cleanShowcaseLink(showcase.posterLinks?.[0]),
       cleanShowcaseLink(showcase.posterLinks?.[1]),
       cleanShowcaseLink(showcase.posterLinks?.[2]),
+      cleanShowcaseLink(showcase.posterLinks?.[3]),
+      cleanShowcaseLink(showcase.posterLinks?.[4]),
     ],
     noticeText: showcase.noticeText ?? "",
     noticeFont: normalizeNoticeFont(showcase.noticeFont),
@@ -1211,7 +1215,7 @@ const SHOWCASE_IMAGE_EXTENSIONS: Record<string, string> = {
 // 쇼케이스 이미지(배너/포스터 2장)를 Supabase Storage 에 업로드하고 공개 URL을 반환한다.
 export async function uploadShowcaseImage(
   slug: string,
-  slot: "banner" | "poster0" | "poster1" | "poster2",
+  slot: "banner" | "poster0" | "poster1" | "poster2" | "poster3" | "poster4",
   file: { bytes: ArrayBuffer; contentType: string },
 ): Promise<string> {
   const ext = SHOWCASE_IMAGE_EXTENSIONS[file.contentType];

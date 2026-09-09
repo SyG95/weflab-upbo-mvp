@@ -10,6 +10,8 @@ import { useState, type CSSProperties, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   DEFAULT_FAN_LAYOUT,
+  normalizeFanLayout,
+  FAN_LAYOUT_BLOCKS,
   fanLayoutBlocksInSlot,
   type FanLayout,
   type FanLayoutBlock,
@@ -18,7 +20,12 @@ import {
 import styles from "./signatureCounts.module.css";
 
 const BLOCK_LABEL: Record<FanLayoutBlock, string> = {
-  posters: "🖼️ 포스터",
+  poster0: "🖼️ 포스터 1",
+  poster1: "🖼️ 포스터 2",
+  poster2: "🖼️ 포스터 3",
+  poster3: "🖼️ 포스터 4",
+  poster4: "🖼️ 포스터 5",
+
   reveal: "🎰 확률표",
   notice: "📢 공지사항",
 };
@@ -31,12 +38,7 @@ const SLOT_LABEL: Record<FanLayoutSlot, string> = {
 };
 
 function cloneLayout(l: FanLayout): FanLayout {
-  return {
-    posters: { ...l.posters },
-    reveal: { ...l.reveal },
-    notice: { ...l.notice },
-    railsAtHead: l.railsAtHead === true,
-  };
+  return normalizeFanLayout(l);
 }
 
 export default function FanLayoutEditor({
@@ -59,10 +61,8 @@ export default function FanLayoutEditor({
   function moveBlock(block: FanLayoutBlock, slot: FanLayoutSlot) {
     setLayout((prev) => {
       const next = cloneLayout(prev);
-      const maxOrder = fanLayoutBlocksInSlot(next, slot)
-        .filter((b) => b !== block)
-        .reduce((m, b) => Math.max(m, next[b].order), -1);
-      next[block] = { slot, order: maxOrder + 1 };
+      const siblings=fanLayoutBlocksInSlot(next,slot).filter(b=>b!==block);
+      [...siblings,block].forEach((b,i)=>{next[b]={slot,order:i};});
       return next;
     });
     setSelected(null);
@@ -76,9 +76,8 @@ export default function FanLayoutEditor({
       const idx = siblings.indexOf(block);
       const swapWith = siblings[idx + dir];
       if (!swapWith) return prev;
-      const tmp = next[block].order;
-      next[block].order = next[swapWith].order;
-      next[swapWith].order = tmp;
+      [siblings[idx],siblings[idx+dir]]=[siblings[idx+dir],siblings[idx]];
+      siblings.forEach((b,i)=>{next[b].order=i;});
       return next;
     });
   }
@@ -91,7 +90,7 @@ export default function FanLayoutEditor({
     e.preventDefault();
     setDragOver(null);
     const block = e.dataTransfer.getData("text/plain") as FanLayoutBlock;
-    if (block === "posters" || block === "reveal" || block === "notice") moveBlock(block, slot);
+    if (FAN_LAYOUT_BLOCKS.includes(block)) moveBlock(block, slot);
   }
 
   async function save() {
@@ -168,6 +167,7 @@ export default function FanLayoutEditor({
             <span style={{ fontWeight: 700, opacity: 0.7 }}> (비어있음)</span>
           ) : null}
         </span>
+        <select aria-label={`${BLOCK_LABEL[block]} 위치`} value={layout[block].slot} onClick={e=>e.stopPropagation()} onChange={e=>moveBlock(block,e.target.value as FanLayoutSlot)} style={{maxWidth:95,fontSize:11}}>{Object.entries(SLOT_LABEL).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select>
         {siblings.length > 1 ? (
           <span style={{ display: "inline-flex", gap: 2 }}>
             <button

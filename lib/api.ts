@@ -398,56 +398,34 @@ export function normalizeFanDeliveryReflect(raw: unknown): FanDeliveryReflect {
 // ── 팬 화면 블록 배치(스트리머별) ──────────────────────────────────────────
 // 포스터/확률표/공지 블록을 어느 자리(슬롯)에 둘지. 시트는 항상 중앙 고정, 배너는 맨 위 고정.
 // left/right = 시트 양옆 세로 레일, top/bottom = 시트 위/아래 가로 스트립.
-export type FanLayoutBlock = "posters" | "reveal" | "notice";
+export const POSTER_BLOCKS = ['poster0','poster1','poster2','poster3','poster4'] as const;
+export type FanLayoutBlock = typeof POSTER_BLOCKS[number] | "reveal" | "notice";
 export type FanLayoutSlot = "left" | "right" | "top" | "bottom";
 export type FanLayoutPos = { slot: FanLayoutSlot; order: number };
-export type FanLayout = {
-  posters: FanLayoutPos;
-  reveal: FanLayoutPos;
-  notice: FanLayoutPos;
-  // 양옆 레일 시작 위치: false(기본)=시트 옆(시트 위 블록 아래에서 시작), true=헤드(맨 위)부터.
-  railsAtHead?: boolean;
-};
-
-export const FAN_LAYOUT_BLOCKS: FanLayoutBlock[] = ["posters", "reveal", "notice"];
-
-// 기본 배치 = 기존 화면 그대로(포스터 왼쪽, 확률표→공지 오른쪽). 안 만진 스트리머는 무변화.
+export type FanLayout = Record<FanLayoutBlock,FanLayoutPos> & {railsAtHead?:boolean};
+export const FAN_LAYOUT_BLOCKS: FanLayoutBlock[] = [...POSTER_BLOCKS,'reveal','notice'];
 export const DEFAULT_FAN_LAYOUT: FanLayout = {
-  posters: { slot: "left", order: 0 },
-  reveal: { slot: "right", order: 0 },
-  notice: { slot: "right", order: 1 },
-  railsAtHead: false,
+ poster0:{slot:'left',order:0},poster1:{slot:'left',order:1},poster2:{slot:'left',order:2},poster3:{slot:'left',order:3},poster4:{slot:'left',order:4},
+ reveal:{slot:'right',order:0},notice:{slot:'right',order:10},railsAtHead:false
 };
-
-const FAN_LAYOUT_SLOTS: FanLayoutSlot[] = ["left", "right", "top", "bottom"];
-
-export function normalizeFanLayout(raw: unknown): FanLayout {
-  const out: FanLayout = {
-    posters: { ...DEFAULT_FAN_LAYOUT.posters },
-    reveal: { ...DEFAULT_FAN_LAYOUT.reveal },
-    notice: { ...DEFAULT_FAN_LAYOUT.notice },
-    railsAtHead: false,
-  };
-  if (!raw || typeof raw !== "object") return out;
-  for (const block of FAN_LAYOUT_BLOCKS) {
-    const v = (raw as Record<string, unknown>)[block];
-    if (!v || typeof v !== "object") continue;
-    const slot = (v as Record<string, unknown>).slot;
-    const order = Number((v as Record<string, unknown>).order);
-    if (typeof slot === "string" && FAN_LAYOUT_SLOTS.includes(slot as FanLayoutSlot)) {
-      out[block].slot = slot as FanLayoutSlot;
-    }
-    if (Number.isFinite(order)) out[block].order = Math.max(0, Math.min(9, Math.floor(order)));
-  }
-  out.railsAtHead = (raw as Record<string, unknown>).railsAtHead === true;
-  return out;
+const FAN_LAYOUT_SLOTS: FanLayoutSlot[] = ['left','right','top','bottom'];
+export function normalizeFanLayout(raw:unknown):FanLayout {
+ const out=structuredClone(DEFAULT_FAN_LAYOUT);
+ if(!raw||typeof raw!=='object')return out;
+ const source=raw as Record<string,unknown>;
+ const legacy=!!source.posters && !POSTER_BLOCKS.some(k=>source[k]);
+ for(const block of FAN_LAYOUT_BLOCKS){
+  const val=(source[block] ?? (block.startsWith('poster') ? source.posters : undefined)) as Partial<FanLayoutPos>|undefined;
+  if(!val||typeof val!=='object')continue;
+  if(FAN_LAYOUT_SLOTS.includes(val.slot as FanLayoutSlot))out[block].slot=val.slot as FanLayoutSlot;
+  if(Number.isFinite(Number(val.order)))out[block].order=Math.max(0,Math.min(99,Math.floor(Number(val.order))*(legacy?10:1)+(legacy&&block.startsWith('poster')?Number(block.slice(-1)):0)));
+ }
+ out.railsAtHead=source.railsAtHead===true;
+ return out;
 }
-
-// 슬롯에 배치된 블록들을 order 순으로 돌려준다(팬 렌더·편집기 공용).
-export function fanLayoutBlocksInSlot(layout: FanLayout, slot: FanLayoutSlot): FanLayoutBlock[] {
-  return FAN_LAYOUT_BLOCKS.filter((b) => layout[b].slot === slot).sort(
-    (a, b) => layout[a].order - layout[b].order,
-  );
+export function fanLayoutBlocksInSlot(layout:FanLayout,slot:FanLayoutSlot):FanLayoutBlock[]{
+ const clean=normalizeFanLayout(layout);
+ return FAN_LAYOUT_BLOCKS.filter(b=>clean[b].slot===slot).sort((a,b)=>clean[a].order-clean[b].order);
 }
 
 // 상품명 집합 두 개의 자카드 유사도(0~1). 룰렛 "같은 것" 판정에 쓰는 겹침 비율.

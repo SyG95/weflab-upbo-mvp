@@ -14,6 +14,7 @@ import SpecialRuleManager from "./SpecialRuleManager";
 import {
   computeHoldings,
   DEFAULT_FAN_LAYOUT,
+  normalizeFanLayout,
   fanLayoutBlocksInSlot,
   filterEntriesByCatalogUsage,
   matchFanTabLabel,
@@ -437,9 +438,14 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const noticeFontLink = noticeFontHref(noticeFont);
 
   // 블록 배치(스트리머별): 포스터/확률표/공지를 어느 슬롯에 둘지. 내용 없는 블록은 표시 안 함.
-  const fanLayout = (result.ok ? result.state.fanLayout : undefined) ?? DEFAULT_FAN_LAYOUT;
+  const fanLayout = normalizeFanLayout((result.ok ? result.state.fanLayout : undefined) ?? DEFAULT_FAN_LAYOUT);
   const blockPresent: Record<FanLayoutBlock, boolean> = {
-    posters: posterItems.length > 0,
+    poster0: posterItems.some(p=>p.i===0),
+    poster1: posterItems.some(p=>p.i===1),
+    poster2: posterItems.some(p=>p.i===2),
+    poster3: posterItems.some(p=>p.i===3),
+    poster4: posterItems.some(p=>p.i===4),
+
     reveal: revealTables.length > 0,
     notice: Boolean(showcaseOn && noticeText),
   };
@@ -452,11 +458,12 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
 
   // 블록 1개 렌더. horizontal=가로 슬롯(시트 위/아래) — 포스터는 가로 나열로 변형.
   const renderFanBlock = (block: FanLayoutBlock, horizontal: boolean) =>
-    block === "posters" ? (
+    block.startsWith("poster") ? (
       <ShowcasePosterRail
-        key="posters"
+        key={block}
+        gallery={posterItems.map(({url,i})=>({url:url as string,i,link:showcase?.posterLinks?.[i]??null}))}
         horizontal={horizontal}
-        posters={posterItems.map(({ url, i }) => ({
+        posters={posterItems.filter(p=>p.i===Number(block.slice(-1))).map(({ url, i }) => ({
           url: url as string,
           i,
           link: showcase?.posterLinks?.[i] ?? null,
@@ -2234,7 +2241,12 @@ function AdminPanel({
               slug={state.slug}
               initial={state.fanLayout}
               available={{
-                posters: Boolean(showcase?.posterUrls?.some(Boolean)),
+                poster0: Boolean(showcase?.posterUrls?.[0]),
+                poster1: Boolean(showcase?.posterUrls?.[1]),
+                poster2: Boolean(showcase?.posterUrls?.[2]),
+                poster3: Boolean(showcase?.posterUrls?.[3]),
+                poster4: Boolean(showcase?.posterUrls?.[4]),
+
                 reveal: Boolean(
                   state.fanRevealEnabled && (state.rouletteConfig ?? []).some((c) => c.revealed),
                 ),

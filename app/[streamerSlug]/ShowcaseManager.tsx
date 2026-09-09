@@ -11,13 +11,15 @@ import { NOTICE_FONTS, noticeFontCss, noticeFontsPreviewHref } from "../../lib/n
 import { optimizeImage } from "./imageOptimize";
 import styles from "./showcase.module.css";
 
-type SlotKey = "banner" | "poster0" | "poster1" | "poster2";
+type SlotKey = "banner" | "poster0" | "poster1" | "poster2" | "poster3" | "poster4";
 
 const SLOT_DEFS: { key: SlotKey; label: string }[] = [
   { key: "banner", label: "배너(가로형 권장)" },
   { key: "poster0", label: "포스터 1" },
   { key: "poster1", label: "포스터 2" },
   { key: "poster2", label: "포스터 3" },
+  { key: "poster3", label: "포스터 4" },
+  { key: "poster4", label: "포스터 5" },
 ];
 
 const MAX_NOTICE_LEN = 2000;
@@ -37,23 +39,23 @@ function currentUrlFor(initial: ShowcaseState | null, key: SlotKey): string | nu
   if (key === "banner") return initial.bannerUrl;
   if (key === "poster0") return initial.posterUrls[0];
   if (key === "poster1") return initial.posterUrls[1];
-  return initial.posterUrls[2] ?? null;
+  return initial.posterUrls[Number(key.slice(-1))] ?? null;
 }
 
-function removeFieldFor(key: SlotKey): "removeBanner" | "removePoster0" | "removePoster1" | "removePoster2" {
+function removeFieldFor(key: SlotKey): "removeBanner" | "removePoster0" | "removePoster1" | "removePoster2" | "removePoster3" | "removePoster4" {
   if (key === "banner") return "removeBanner";
   if (key === "poster0") return "removePoster0";
   if (key === "poster1") return "removePoster1";
-  return "removePoster2";
+  return `removePoster${key.slice(-1)}` as "removePoster2" | "removePoster3" | "removePoster4";
 }
 
 // 이미지 최적화(다운스케일+webp 압축)는 옷장과 공용인 ./imageOptimize 로 추출했다.
 
 export default function ShowcaseManager({ slug, initial }: { slug: string; initial: ShowcaseState | null }) {
   const [state, setState] = useState<ShowcaseState | null>(initial);
-  const [files, setFiles] = useState<Record<SlotKey, File | null>>({ banner: null, poster0: null, poster1: null, poster2: null });
-  const [previews, setPreviews] = useState<Record<SlotKey, string | null>>({ banner: null, poster0: null, poster1: null, poster2: null });
-  const [removed, setRemoved] = useState<Record<SlotKey, boolean>>({ banner: false, poster0: false, poster1: false, poster2: false });
+  const [files, setFiles] = useState<Record<SlotKey, File | null>>({ banner: null, poster0: null, poster1: null, poster2: null, poster3: null, poster4: null });
+  const [previews, setPreviews] = useState<Record<SlotKey, string | null>>({ banner: null, poster0: null, poster1: null, poster2: null, poster3: null, poster4: null });
+  const [removed, setRemoved] = useState<Record<SlotKey, boolean>>({ banner: false, poster0: false, poster1: false, poster2: false, poster3: false, poster4: false });
   const [notice, setNotice] = useState(initial?.noticeText ?? "");
   const [noticeFont, setNoticeFont] = useState(initial?.noticeFont ?? "");
   const noticeRef = useRef<HTMLTextAreaElement>(null);
@@ -62,6 +64,8 @@ export default function ShowcaseManager({ slug, initial }: { slug: string; initi
     poster0: initial?.posterLinks?.[0] ?? "",
     poster1: initial?.posterLinks?.[1] ?? "",
     poster2: initial?.posterLinks?.[2] ?? "",
+    poster3: initial?.posterLinks?.[3] ?? "",
+    poster4: initial?.posterLinks?.[4] ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState<string | null>(null);
@@ -167,14 +171,16 @@ export default function ShowcaseManager({ slug, initial }: { slug: string; initi
         poster0: nextState?.posterLinks?.[0] ?? "",
         poster1: nextState?.posterLinks?.[1] ?? "",
         poster2: nextState?.posterLinks?.[2] ?? "",
+        poster3: nextState?.posterLinks?.[3] ?? "",
+        poster4: nextState?.posterLinks?.[4] ?? "",
       });
-      setFiles({ banner: null, poster0: null, poster1: null, poster2: null });
-      setRemoved({ banner: false, poster0: false, poster1: false, poster2: false });
+      setFiles({ banner: null, poster0: null, poster1: null, poster2: null, poster3: null, poster4: null });
+      setRemoved({ banner: false, poster0: false, poster1: false, poster2: false, poster3: false, poster4: false });
       setPreviews((prev) => {
         for (const key of Object.keys(prev) as SlotKey[]) {
           if (prev[key]) URL.revokeObjectURL(prev[key] as string);
         }
-        return { banner: null, poster0: null, poster1: null, poster2: null };
+        return { banner: null, poster0: null, poster1: null, poster2: null, poster3: null, poster4: null };
       });
       setMsg({ kind: "ok", text: "적용됐어요! 팬 화면에 바로 반영됩니다." });
     } catch {
