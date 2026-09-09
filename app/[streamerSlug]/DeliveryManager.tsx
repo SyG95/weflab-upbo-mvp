@@ -1,5 +1,8 @@
 "use client";
 
+import FinalDeliveryView from "./FinalDeliveryView";
+import {editDeliveryRef} from "../../lib/deliveryRefEdit";
+import {useDeliveryEditorScope} from "./DeliveryEditorScope";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
@@ -16,6 +19,19 @@ import {
   type ViewerNote,
   type ViewerSummary,
 } from "../../lib/api";
+import {
+  BUCKET_CURRENT,
+  BUCKET_ETC,
+  DELIVERY_PERIOD_DEFAULT,
+  MAX_CUTOFF_NAME_LEN,
+  bucketLabel,
+  isValidCutoffDate,
+  orderBucketIds,
+  resolveBucketId,
+  sameDeliveryPeriodConfig,
+  sanitizeDeliveryPeriodConfig,
+  type DeliveryPeriodConfig,
+} from "../../lib/deliveryPeriod";
 
 // 정가기록(시그니처 후원) 1건 — 이 스트리머의 fixed: 프리픽스 entry 목록(page.tsx 에서 전달).
 type FixedEntry = {
@@ -303,6 +319,7 @@ export default function DeliveryManager({
   // 서버가 로드한 upbo_entries 총 건수 — 5,000건(조회 상한) 도달 시 시트 보기에 잘림 경고를 띄운다.
   entryCount?: number;
 }) {
+  const editorScope=useDeliveryEditorScope();
   const [committed, setCommitted] = useState<DeliveryState>({});
   const [draft, setDraft] = useState<DeliveryState>({});
   // 서버 저장 처리수량 원본(기준선 보정 전) — 숨긴 시청자 탭의 복구 미리보기 계산용.
@@ -313,7 +330,7 @@ export default function DeliveryManager({
   const [assignments, setAssignments] = useState<Record<string, DeliveryAssignment>>({});
   const [savedAssignments, setSavedAssignments] = useState<Record<string, DeliveryAssignment>>({});
   const [notes, setNotes] = useState<Record<string, ViewerNote>>({});
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(editorScope?.query ?? "");
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [onlyWithNotes, setOnlyWithNotes] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -334,7 +351,7 @@ export default function DeliveryManager({
   const [savingNote, setSavingNote] = useState(false);
 
   // 배송 관리 하위탭: 시청자별 목록(기존 화면) / 상품별 목록(상품 총량) / 시트 보기(엑셀형) / 숨긴 시청자(복구).
-  const [mode, setMode] = useState<"viewers" | "products" | "sheet" | "hidden">("viewers");
+  const [mode, setMode] = useState<"viewers" | "products" | "sheet" | "hidden">(editorScope && editorScope.month !== "all" ? "sheet" : "viewers");
   // 시트 보기 정렬(기준 select + 방향 토글 — 검증실 FilterableTable 문법)과 표시 상한(대량 기록 청크).
   const [sheetSort, setSheetSort] = useState<"date" | "name" | "amount" | "qty" | "item" | "state">("date");
   const [sheetDir, setSheetDir] = useState<"asc" | "desc">("asc");
@@ -343,6 +360,22 @@ export default function DeliveryManager({
   const [showDoneSheetRows, setShowDoneSheetRows] = useState(false);
   // 배송 중 / 배송완료 탭. 배송완료 탭 = 처리 완료 + 보관되지 않은 시청자만.
   const [tab, setTab] = useState<"active" | "done">("active");
+  // 묶음(기간) 보기 — 표시 전용 설정(lib/deliveryPeriod). saved=서버 저장본(칩·귀속 기준),
+  // draft=설정 편집 초안(저장 전 미리보기용). periodChip="all"=전체.
+  const [periodSaved, setPeriodSaved] = useState<DeliveryPeriodConfig>(DELIVERY_PERIOD_DEFAULT);
+  const [periodDraft, setPeriodDraft] = useState<DeliveryPeriodConfig>(DELIVERY_PERIOD_DEFAULT);
+  // ops-state 로드 성공 전에는 설정 편집을 잠근다 — 로드 실패 상태(saved=기본값)에서 저장하면
+  // 스트리머의 기존 마감선을 기본값으로 통째 덮는다(서버 getDeliveryPeriodConfig 주석과 같은 원칙).
+  const [periodLoaded, setPeriodLoaded] = useState(false);
+  const [periodChip, setPeriodChip] = useState<string>("all");
+  const [savingPeriod, setSavingPeriod] = useState(false);
+  const [periodMsg, setPeriodMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  const [cutoffDateDraft, setCutoffDateDraft] = useState("");
+  const [cutoffNameDraft, setCutoffNameDraft] = useState("");
+  // 직접 마감 모드의 기본 동작은 「오늘까지 마감 긋기」 원버튼 — 날짜·이름 직접 지정은 접어둔다.
+  const [cutoffEditorOpen, setCutoffEditorOpen] = useState(false);
+  // 경과일·"올해" 판정 기준 시각 — 렌더 순수성(react-hooks/purity) 때문에 마운트 시 1회 고정.
+  const [nowMs] = useState(() => Date.now());
   // 이번 세션에서 방금 보관한 fanId — 즉시 목록에서 숨긴다.
   // (서버에 이미 보관된 시청자는 page.tsx 가 "보관 시각 이후 새 당첨"만 남겨 보내므로 여기서 다시 거르지 않는다.
   //  그래야 재당첨자가 새 기록을 들고 배송 목록에 다시 뜬다.)
@@ -455,6 +488,11 @@ export default function DeliveryManager({
         }
         setAssignments(aMap);
         setSavedAssignments(aMap);
+        // 묶음(기간) 보기 설정 — 구버전 응답(필드 없음)은 sanitize 가 기본값(none)으로 정리.
+        const periodCfg = sanitizeDeliveryPeriodConfig(json.deliveryPeriod);
+        setPeriodSaved(periodCfg);
+        setPeriodDraft(periodCfg);
+        setPeriodLoaded(true);
       } catch {
         if (!cancelled) {
           setMessage({ type: "err", text: "운영 저장값을 불러오지 못했어요. 새로고침 후 다시 확인해 주세요." });
@@ -534,6 +572,8 @@ export default function DeliveryManager({
     return n;
   }, [assignments, savedAssignments]);
   const dirty = changes.length > 0 || assignChangedCount > 0;
+  const notifyDirty=editorScope?.onDirty;
+  useEffect(()=>{notifyDirty?.(dirty);},[dirty,notifyDirty]);
   const changedItemCount = changes.reduce((s, c) => s + c.items.length, 0);
 
   // 저장 안 된 변경이 있으면 페이지 이탈 시 경고
@@ -548,6 +588,58 @@ export default function DeliveryManager({
   }, [dirty]);
 
   const deliveredOf = (vKey: string, iKey: string) => draft[vKey]?.[iKey] ?? 0;
+
+  const periodActive = periodSaved.mode !== "none";
+
+
+  // ── A뷰(시청자별) 묶음 구분 배지 — 필터로 가리지 않고 배지로만 구분한다. ──
+  // A뷰의 스테퍼·전체처리는 팬×상품 "전체" 장부를 만지므로, 묶음 필터로 일부만 보이게 하면
+  // 화면 인지와 저장값이 어긋난다(설계 검증 확정). 대신 "이번 묶음 이전 잔여"가 있는 줄에만
+  // 묶음별 남은 수량 배지를 달아 지난달 것이 섞여 있음을 드러낸다. 배분은 시트뷰와 동일하게
+  // 전역(allocateDeliveryToRefs)으로 먼저 — 조각 부분집합 재배분 금지.
+  // 한 줄(팬×상품)의 묶음별 잔여 수량 — 시트뷰와 동일하게 그 줄 "전체" refs 로 전역 배분을 돌린 뒤
+  // 잔여만 묶음으로 합산한다(표시 전용, 조각 부분집합 재배분 금지). 렌더되는 줄·요약에서만 호출하는
+  // 지연 계산이라 메모가 필요 없다(메모 Map 이 렌더 함수로 새어 나가면 React Compiler 가 보존을
+  // 포기하는 것을 린트로 확인).
+  const lineBucketRemainsFor = (
+    v: ViewerSummary,
+    it: AggItem,
+  ): Array<{ id: string; remain: number }> => {
+    const refs = it.refs ?? [];
+    if (!periodActive || refs.length === 0) return [];
+    const k = itemKey(it);
+    const n = Math.min(deliveredOf(v.key, k), it.count);
+    const assignForLine: Record<string, { doneCount: number; doneAt: string }> = {};
+    for (const ref of refs) {
+      const a = assignments[assignKey(v.key, k, ref.entryId)];
+      if (a) assignForLine[ref.entryId] = { doneCount: a.doneCount, doneAt: a.doneAt };
+    }
+    const allocs = allocateDeliveryToRefs(refs, n, assignForLine);
+    const m = new Map<string, number>();
+    refs.forEach((ref, i) => {
+      const remain = ref.quantity - allocs[i].allocated;
+      if (remain <= 0) return;
+      const id = resolveBucketId(periodSaved, ref.recordedAtMs ?? null, ref.recordedKind ?? null);
+      m.set(id, (m.get(id) ?? 0) + remain);
+    });
+    return orderBucketIds(m.keys()).map((id) => ({ id, remain: m.get(id) ?? 0 }));
+  };
+
+  // "이번 묶음"(가장 새 묶음) id — 렌더 전용 파생값. 이전 묶음 잔여가 있는 줄에만 배지를 단다.
+  const newestPeriodBucketId = !periodActive
+    ? ""
+    : periodSaved.mode === "monthly"
+      ? resolveBucketId(periodSaved, nowMs, "donate")
+      : BUCKET_CURRENT;
+  const isOldBucketId = (id: string) => id !== BUCKET_ETC && id !== newestPeriodBucketId;
+  const oldRemainOfViewer = (v: ViewerSummary): number => {
+    if (!periodActive) return 0;
+    let sum = 0;
+    for (const it of v.items) {
+      for (const e of lineBucketRemainsFor(v, it)) if (isOldBucketId(e.id)) sum += e.remain;
+    }
+    return sum;
+  };
 
   const setDelivered = (vKey: string, iKey: string, n: number, max: number) =>
     setDraft((prev) => {
@@ -583,6 +675,9 @@ export default function DeliveryManager({
     const doneAtIso = savedDone ? committedAt[v.fanId]?.[k] : undefined;
     const doneAtMs = doneAtIso ? Date.parse(doneAtIso) : NaN;
     const showDoneAt = savedDone && Number.isFinite(doneAtMs) && doneAtMs >= TS_CUTOFF_MS;
+    // 묶음 보기 켜짐 + 지난 묶음 잔여가 있는 줄에만 붙는 구분 배지(표시 전용).
+    const lineRemains = periodActive ? lineBucketRemainsFor(v, it) : [];
+    const bucketBadges = lineRemains.some((b) => isOldBucketId(b.id)) ? lineRemains : null;
     return (
       <div key={k} className={styles.dmItemRow}>
         <span className={styles.dmItemName}>
@@ -616,6 +711,16 @@ export default function DeliveryManager({
           ) : null}
           {rec && ageDays !== null && !itemDone ? (
             <span className={ageDays >= AGE_OLD_DAYS ? styles.dmAgeOld : styles.dmAge}>{ageDays}일째</span>
+          ) : null}
+          {bucketBadges ? (
+            <span
+              className={styles.dmBucketBadges}
+              title="이 줄에 지난 묶음 것이 남아 있어요 — 묶음별 남은 수량(표시용 구분, 수량 버튼은 줄 전체 기준)"
+            >
+              {bucketBadges
+                .map((b) => `${bucketLabel(b.id, periodSaved, nowMs)} ${b.remain}`)
+                .join(" · ")}
+            </span>
           ) : null}
           {showDoneAt ? (
             <span className={styles.dmDoneAt} title="배송완료로 저장된 시각">
@@ -919,6 +1024,8 @@ export default function DeliveryManager({
               }
             : { type: "ok", text: "처리 수량이 서버 DB에 저장됐어요." },
       );
+      window.dispatchEvent(new Event("upbo-delivery-saved"));
+      const updates=new BroadcastChannel("upbo-local-updates");updates.postMessage({slug});updates.close();
       router.refresh();
     } catch {
       setMessage({ type: "err", text: "처리 수량 저장 실패. 잠시 후 다시 저장해 주세요." });
@@ -1054,8 +1161,6 @@ export default function DeliveryManager({
   };
 
   // ── 시트 보기(B뷰): 한 후원 조각 = 한 줄. 수량 장부가 진실, 배정은 힌트(allocateDeliveryToRefs) ──
-  // 경과일 기준 시각 — 렌더 순수성(react-hooks/purity) 때문에 마운트 시 1회 고정(일 단위라 충분).
-  const [nowMs] = useState(() => Date.now());
   type SheetRef = NonNullable<AggItem["refs"]>[number];
   type SheetRow = {
     v: ViewerSummary;
@@ -1113,15 +1218,68 @@ export default function DeliveryManager({
     return rows;
   }, [nonArchivedViewers, q, draft, assignments, sheetSort, sheetDir]);
 
+  // ── 묶음(기간) 보기: 저장된 설정으로 "배분이 끝난 행"을 묶는다(표시 전용). ──
+  // 반드시 이 순서여야 한다 — allocateDeliveryToRefs 는 줄 전체 refs 로 이미 위(sheetRows)에서
+  // 끝났고, 여기서는 결과 행을 거르기만 한다. 조각 부분집합으로 배분을 다시 돌리면
+  // 완료 표시가 엉뚱한 묶음으로 이동한다(설계 검증 확정 사항).
+  // 칩 목록: 실제 기록이 있는 묶음만, 오래된 순 → 진행 중 → 기타. 잔여=완료 아닌 조각 수(초안 기준).
+  const periodChips = useMemo(() => {
+    if (!periodActive) return [] as Array<{ id: string; total: number; remain: number }>;
+    const stats = new Map<string, { total: number; remain: number }>();
+    for (const r of sheetRows) {
+      const id = resolveBucketId(periodSaved, r.ref.recordedAtMs ?? null, r.ref.recordedKind ?? null);
+      const s = stats.get(id);
+      if (s) {
+        s.total += 1;
+        if (r.alloc.state !== "done") s.remain += 1;
+      } else {
+        stats.set(id, { total: 1, remain: r.alloc.state !== "done" ? 1 : 0 });
+      }
+    }
+    // 라벨은 렌더에서 bucketLabel 로 계산한다(칩 몇 개 수준이라 비용 무시 가능) — nowMs 를
+    // 메모 의존성에 넣으면 React Compiler 가 메모 보존을 포기한다(린트 확정).
+    return orderBucketIds(stats.keys()).map((id) => {
+      const s = stats.get(id);
+      return { id, total: s ? s.total : 0, remain: s ? s.remain : 0 };
+    });
+  }, [sheetRows, periodSaved, periodActive]);
+
+  // 선택된 칩의 묶음이 사라졌으면(설정 변경·기록 변화) "전체"로 취급 — 상태 리셋 대신 파생값.
+  const activePeriodChip =
+    periodChip !== "all" && periodChips.some((c) => c.id === periodChip) ? periodChip : "all";
+
+  const periodRows = useMemo(() => {
+    if(editorScope && editorScope.month!=="all")return sheetRows.filter(r=>resolveBucketId({mode:"monthly",cutoffs:[]},r.ref.recordedAtMs??null,r.ref.recordedKind??null)===(editorScope.month==="etc"?"etc":`m:${editorScope.month}`));
+    if (!periodActive || activePeriodChip === "all") return sheetRows;
+    return sheetRows.filter(
+      (r) =>
+        resolveBucketId(periodSaved, r.ref.recordedAtMs ?? null, r.ref.recordedKind ?? null) ===
+        activePeriodChip,
+    );
+  }, [sheetRows, periodActive, activePeriodChip, periodSaved, editorScope]);
+
+  // 설정 저장 전 미리보기: 초안으로 바꾸면 묶음이 달라지는 조각 수(검색 중엔 보이는 행 기준).
+  const periodDirty = !sameDeliveryPeriodConfig(periodDraft, periodSaved);
+  const periodChangeCount = useMemo(() => {
+    if (!periodDirty || periodDraft.mode === "none" || periodSaved.mode === "none") return 0;
+    let n = 0;
+    for (const r of sheetRows) {
+      const ms = r.ref.recordedAtMs ?? null;
+      const kind = r.ref.recordedKind ?? null;
+      if (resolveBucketId(periodSaved, ms, kind) !== resolveBucketId(periodDraft, ms, kind)) n += 1;
+    }
+    return n;
+  }, [sheetRows, periodDraft, periodSaved, periodDirty]);
+
   const sheetSummary = useMemo(() => {
     let done = 0;
     let part = 0;
-    for (const r of sheetRows) {
+    for (const r of periodRows) {
       if (r.alloc.state === "done") done += 1;
       else if (r.alloc.state === "part") part += 1;
     }
-    return { total: sheetRows.length, done, part, pending: sheetRows.length - done - part };
-  }, [sheetRows]);
+    return { total: periodRows.length, done, part, pending: periodRows.length - done - part };
+  }, [periodRows]);
 
   // ── 시트 보기 배송완료 접기: 서버 저장본(committed/savedAssignments) 기준으로만 판단한다 ──
   // draft(미저장 변경)로 방금 완료 토글한 줄까지 접으면, 저장 전인데 줄이 사라져 조작감이 나쁘다
@@ -1150,13 +1308,13 @@ export default function DeliveryManager({
 
   // 검색 중에는 접지 않는다(교환·양도 탭과 동일 규칙) — 찾는 사람이 배송완료라 안 보이면 더 헷갈린다.
   const visibleSheetRows = useMemo(() => {
-    if (q.trim() || showDoneSheetRows) return sheetRows;
-    return sheetRows.filter((r) => !committedDoneAKeys.has(r.aKey));
-  }, [sheetRows, q, showDoneSheetRows, committedDoneAKeys]);
+    if (q.trim() || showDoneSheetRows) return periodRows;
+    return periodRows.filter((r) => !committedDoneAKeys.has(r.aKey));
+  }, [periodRows, q, showDoneSheetRows, committedDoneAKeys]);
 
   const doneSheetRowsCount = useMemo(
-    () => sheetRows.filter((r) => committedDoneAKeys.has(r.aKey)).length,
-    [sheetRows, committedDoneAKeys],
+    () => periodRows.filter((r) => committedDoneAKeys.has(r.aKey)).length,
+    [periodRows, committedDoneAKeys],
   );
 
   // 시트 줄 완료 토글: 줄의 조각 수량만큼 묶음 처리수량을 늘리고/줄이고, 배정 메모를 남긴다/지운다.
@@ -1209,17 +1367,114 @@ export default function DeliveryManager({
     }
   };
 
+  // ── 묶음(기간) 보기 설정 편집 — 표시 전용, 장부와 무관. ──
+  const addCutoff = () => {
+    const date = cutoffDateDraft.trim();
+    if (!isValidCutoffDate(date)) {
+      setPeriodMsg({ type: "err", text: "마감일 날짜를 확인해 주세요." });
+      return;
+    }
+    if (periodDraft.cutoffs.some((c) => c.date === date)) {
+      setPeriodMsg({ type: "err", text: "이미 같은 날짜의 마감선이 있어요." });
+      return;
+    }
+    setPeriodMsg(null);
+    setPeriodDraft((prev) =>
+      sanitizeDeliveryPeriodConfig({
+        ...prev,
+        cutoffs: [...prev.cutoffs, { date, name: cutoffNameDraft.trim() }],
+      }),
+    );
+    setCutoffDateDraft("");
+    setCutoffNameDraft("");
+  };
+
+  const removeCutoff = (date: string) => {
+    setPeriodMsg(null);
+    setPeriodDraft((prev) => ({ ...prev, cutoffs: prev.cutoffs.filter((c) => c.date !== date) }));
+  };
+
+  // 「오늘까지 마감 긋기」 — 날짜 입력 없이 오늘(KST) 마감선을 바로 추가한다(저장은 별도).
+  const addTodayCutoff = () => {
+    const today = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
+    if (periodDraft.cutoffs.some((c) => c.date === today)) {
+      setPeriodMsg({ type: "err", text: "오늘 날짜 마감선이 이미 있어요." });
+      return;
+    }
+    setPeriodMsg(null);
+    setPeriodDraft((prev) =>
+      sanitizeDeliveryPeriodConfig({ ...prev, cutoffs: [...prev.cutoffs, { date: today }] }),
+    );
+  };
+
+  const savePeriodConfig = async () => {
+    setSavingPeriod(true);
+    setPeriodMsg(null);
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/delivery-period`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config: periodDraft }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setPeriodMsg({
+          type: "err",
+          text:
+            res.status === 401
+              ? "로그인이 풀렸어요. 관리자 비밀번호로 다시 들어와 주세요."
+              : "묶음 설정을 저장하지 못했어요 — 잠시 후 다시 시도해 주세요.",
+        });
+        return;
+      }
+      const saved = sanitizeDeliveryPeriodConfig(data?.deliveryPeriod);
+      setPeriodSaved(saved);
+      setPeriodDraft(saved);
+      setPeriodMsg({ type: "ok", text: "묶음 설정 저장됨!" });
+    } catch {
+      setPeriodMsg({ type: "err", text: "네트워크 문제로 저장하지 못했어요. 잠시 후 다시 시도해 주세요." });
+    } finally {
+      setSavingPeriod(false);
+    }
+  };
+
+  // 저장 전 미리보기 문구 — 묶음 표시가 어떻게 달라지는지 예고(장부는 변하지 않음).
+  const periodPreviewText = !periodDirty
+    ? ""
+    : periodSaved.mode === "none"
+      ? "저장하면 묶음 보기가 켜져요 — 기록은 그대로, 보이는 방식만 바뀌어요."
+      : periodDraft.mode === "none"
+        ? "저장하면 묶음 보기가 꺼지고 지금처럼 전체 목록으로 보여요."
+        : periodChangeCount > 0
+          ? `저장하면 ${periodChangeCount}건의 묶음 표시가 바뀌어요(기록·장부는 그대로).`
+          : "저장해도 지금 보이는 묶음 표시는 달라지지 않아요.";
+
+  const editFinalRow = (row: SheetRow, count: number) => {
+    const k=itemKey(row.it); const refs=row.it.refs??[];
+    const current=Math.min(deliveredOf(row.v.key,k),row.it.count);
+    const hints:Record<string,{doneCount:number;doneAt:string}>={};
+    for(const ref of refs){const h=assignments[assignKey(row.v.key,k,ref.entryId)];if(h)hints[ref.entryId]=h;}
+    const plan=editDeliveryRef(refs,current,hints,row.ref.entryId,count,new Date().toISOString());
+    setDelivered(row.v.key,k,plan.total,row.it.count);
+    setAssignments(prev=>{const next={...prev};for(const ref of refs){const key=assignKey(row.v.key,k,ref.entryId);delete next[key];const h=plan.hints[ref.entryId];if(h)next[key]={entryId:ref.entryId,ownerKey:row.v.key,itemKey:k,...h};}return next;});
+  };
+
   return (
     <div className={styles.cm}>
-      <p className={styles.cmBanner}>
+      {editorScope && !editorScope.final?<p className={styles.fieldHint}>{mode==="sheet" ? `발생 월: ${editorScope.month} · 이 월의 개별 기록을 처리합니다.` : "시청자별·상품별 처리는 전체 기간 수량 기준입니다. 선택 월의 개별 처리는 시트 보기를 이용하세요."}</p>:null}
+      {!editorScope?.final && <p className={styles.cmBanner}>
         자동 업보 총량은 원본 기록에서 계산하고, 스트리머가 처리한 수량과 메모는 별도 운영 DB에 저장돼요.
         새 업보가 추가되면 총량만 늘고 기존 처리값은 유지됩니다.
-      </p>
+      </p>}
       {message ? (
         <p className={message.type === "ok" ? styles.fieldOk : styles.fieldErr}>{message.text}</p>
       ) : null}
       {loadingOps ? <p className={styles.fieldHint}>운영 저장값 불러오는 중…</p> : null}
 
+      {editorScope?.final ? <FinalDeliveryView design={editorScope.design} rows={sheetRows} initialMonth={editorScope.month} disabled={loadingOps || !periodLoaded || savingProgress} onChange={editFinalRow} onNote={openNote}/> : null}
+      <details open={editorScope?.final ? undefined : true}>
+      {editorScope?.final ? <summary className={styles.fieldHint}>추가 배송 도구 · 상품별 합계 · 일괄 처리 · 숨김/복구 · 상세 메모</summary> : null}
+      <>
       {/* 하위탭: 시청자별 목록(처리 입력) / 상품별 목록(상품 총량 요약) */}
       <div className={styles.subTabs} role="tablist">
         <button
@@ -1383,6 +1638,17 @@ export default function DeliveryManager({
                   {isDone ? (savedDone ? "처리 완료" : "처리 완료 · 저장 전") : `처리 ${delivered}/${v.total}`}
                 </span>
                 {!isDone ? <span className={styles.tagMuted}>남음 {remaining}</span> : null}
+                {(() => {
+                  const oldRemain = oldRemainOfViewer(v);
+                  return oldRemain > 0 ? (
+                    <span
+                      className={styles.dmOldBucketTag}
+                      title="이번 묶음 이전 것 중 아직 배송 안 한 수량 — 펼치면 줄마다 묶음 배지가 보여요"
+                    >
+                      지난 묶음 남음 {oldRemain}
+                    </span>
+                  ) : null;
+                })()}
                 <button
                   type="button"
                   className={noteExists ? styles.dmNoteOnBtn : styles.dmNoteBtn}
@@ -1576,6 +1842,128 @@ export default function DeliveryManager({
             한 후원 기록이 한 줄이에요(엑셀 시트 문법). 상태를 바꾸면 아래 저장 버튼을 눌러야 서버에
             저장돼요. 처리 수량은 시청자별 목록과 같은 장부를 쓰니 어느 쪽에서 처리해도 숫자가 같아요.
           </p>
+          {!editorScope && <div className={styles.dmPeriodBar}>
+            {!periodLoaded ? (
+              <span className={styles.fieldHint}>
+                {loadingOps
+                  ? "묶음 설정 불러오는 중…"
+                  : "운영 저장값을 불러오지 못해 묶음 설정 편집을 잠갔어요 — 새로고침 후 다시 시도해 주세요."}
+              </span>
+            ) : (
+            <>
+            <label className={styles.dmCheckLabel}>
+              묶음 보기
+              <select
+                className={styles.sheetSortSel}
+                value={periodDraft.mode}
+                onChange={(e) => {
+                  setPeriodMsg(null);
+                  setPeriodDraft((prev) => ({
+                    ...prev,
+                    mode: e.target.value as DeliveryPeriodConfig["mode"],
+                  }));
+                }}
+                aria-label="묶음 보기 방식"
+              >
+                <option value="none">나누지 않기</option>
+                <option value="monthly">월별로 나누기</option>
+                <option value="custom">직접 마감 긋기</option>
+              </select>
+            </label>
+            {periodDraft.mode === "custom" ? (
+              <div className={styles.dmCutoffEditor}>
+                {periodDraft.cutoffs.map((c) => (
+                  <span key={c.date} className={styles.dmCutoffChip}>
+                    {c.name ? `${c.name} ` : ""}~{Number(c.date.slice(5, 7))}/{Number(c.date.slice(8, 10))}
+                    <button
+                      type="button"
+                      onClick={() => removeCutoff(c.date)}
+                      aria-label={`${c.date} 마감선 삭제`}
+                      title="이 마감선 삭제(저장해야 반영)"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <button type="button" className={styles.cmSaveBtn} onClick={addTodayCutoff}>
+                  오늘까지 마감 긋기
+                </button>
+                <button
+                  type="button"
+                  className={styles.cmEditBtn}
+                  onClick={() => setCutoffEditorOpen((prev) => !prev)}
+                  aria-expanded={cutoffEditorOpen}
+                >
+                  다른 날짜로 긋기 {cutoffEditorOpen ? "▴" : "▾"}
+                </button>
+                {periodDraft.cutoffs.length === 0 ? (
+                  <span className={styles.fieldHint}>
+                    버튼을 누르면 지금까지의 기록이 «~오늘분» 한 묶음으로 닫히고, 그 뒤는 «진행
+                    중»이에요.
+                  </span>
+                ) : null}
+                {cutoffEditorOpen ? (
+                  <>
+                    <input
+                      className={styles.dmCutoffDate}
+                      type="date"
+                      value={cutoffDateDraft}
+                      onChange={(e) => setCutoffDateDraft(e.target.value)}
+                      aria-label="마감일"
+                    />
+                    <input
+                      className={styles.dmCutoffName}
+                      type="text"
+                      value={cutoffNameDraft}
+                      onChange={(e) => setCutoffNameDraft(e.target.value)}
+                      placeholder="이름(선택)"
+                      maxLength={MAX_CUTOFF_NAME_LEN}
+                      aria-label="마감 이름(선택)"
+                    />
+                    <button
+                      type="button"
+                      className={styles.cmEditBtn}
+                      onClick={addCutoff}
+                      disabled={!cutoffDateDraft}
+                    >
+                      마감 추가
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+            {periodDirty ? (
+              <div className={styles.dmPeriodSaveRow}>
+                <span className={styles.dmPeriodPreview}>{periodPreviewText}</span>
+                <button
+                  type="button"
+                  className={styles.cmSaveBtn}
+                  onClick={savePeriodConfig}
+                  disabled={savingPeriod}
+                >
+                  {savingPeriod ? "저장 중…" : "묶음 설정 저장"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.cmEditBtn}
+                  onClick={() => {
+                    setPeriodDraft(periodSaved);
+                    setPeriodMsg(null);
+                  }}
+                  disabled={savingPeriod}
+                >
+                  되돌리기
+                </button>
+              </div>
+            ) : null}
+            {periodMsg ? (
+              <span className={periodMsg.type === "ok" ? styles.fieldOk : styles.fieldErr}>
+                {periodMsg.text}
+              </span>
+            ) : null}
+            </>
+            )}
+          </div>}
           <div className={styles.cmToolbar}>
             <input
               className={styles.cmSearch}
@@ -1610,6 +1998,44 @@ export default function DeliveryManager({
               {sheetDir === "asc" ? "오름차순 ↑" : "내림차순 ↓"}
             </button>
           </div>
+          {periodActive && !editorScope ? (
+            <>
+              <div className={styles.dmPeriodChips} role="tablist" aria-label="배송 묶음 선택">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activePeriodChip === "all"}
+                  className={activePeriodChip === "all" ? styles.dmPeriodChipActive : styles.dmPeriodChip}
+                  onClick={() => setPeriodChip("all")}
+                >
+                  전체
+                </button>
+                {periodChips.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activePeriodChip === c.id}
+                    className={activePeriodChip === c.id ? styles.dmPeriodChipActive : styles.dmPeriodChip}
+                    onClick={() => setPeriodChip(c.id)}
+                    title={
+                      c.id === BUCKET_ETC
+                        ? "교환·수동·시각 추정 기록 — 후원 원문 시각이 아니어서 기간 묶음에 넣지 않아요"
+                        : undefined
+                    }
+                  >
+                    {bucketLabel(c.id, periodSaved, nowMs)}
+                    {c.remain > 0 ? ` · 잔여 ${c.remain}` : " · 완료"}
+                  </button>
+                ))}
+              </div>
+              <p className={styles.fieldHint}>
+                묶음은 나눠서 보여주는 표시일 뿐, 처리 수량 장부는 하나예요. 수량을 조절하면 묶음
+                숫자가 다시 배분될 수 있어요.
+                {q.trim() ? " 검색 중에는 칩의 잔여 숫자도 검색 결과 기준이에요." : null}
+              </p>
+            </>
+          ) : null}
           <div className={styles.cmSummary}>
             <span className={styles.tag}>전체 {sheetSummary.total}건</span>
             <span className={styles.tagActive}>완료 {sheetSummary.done}건</span>
@@ -1635,6 +2061,7 @@ export default function DeliveryManager({
             <p className={styles.fieldErr}>
               기록이 5,000건에 도달했어요 — 가장 오래된 기록부터 화면에서 잘려 이 표가 전체 장부보다
               적게 보일 수 있어요.
+              {periodActive ? " 묶음별 숫자도 오래된 묶음부터 실제보다 적게 보일 수 있어요." : null}
             </p>
           ) : null}
           {sheetRows.length > 0 ? (
@@ -1778,18 +2205,20 @@ export default function DeliveryManager({
         />
       )}
 
+      </>
+      </details>
       {/* 저장 바: 변경이 있을 때만 노출, 스크롤해도 따라옴 */}
-      {dirty ? (
+      {dirty || editorScope?.final ? (
         <div className={styles.dmSaveBar}>
           <span className={styles.dmSaveInfo}>
-            저장 안 됨 · 변경 {changes.length}명 · {changedItemCount}건
-            {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}
+            {dirty ? `저장 안 됨 · 변경 ${changes.length}명 · ${changedItemCount}건` : "변경 사항 없음"}
+            {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}{editorScope?.design?.startsWith("ref-") && dirty ? " · 이 시트의 모든 월 변경을 함께 저장" : ""}
           </span>
           <div className={styles.dmSaveActions}>
-            <button type="button" className={styles.dmRevertBtn} onClick={revert} disabled={savingProgress}>
+            <button type="button" className={styles.dmRevertBtn} onClick={revert} disabled={savingProgress || !dirty}>
               되돌리기
             </button>
-            <button type="button" className={styles.dmSaveBtn} onClick={() => setConfirmOpen(true)} disabled={savingProgress}>
+            <button type="button" className={styles.dmSaveBtn} onClick={() => editorScope?.final ? commitSave() : setConfirmOpen(true)} disabled={savingProgress || !dirty}>
               저장
             </button>
           </div>
@@ -1876,7 +2305,7 @@ export default function DeliveryManager({
             </h3>
             <p className={styles.fieldHint}>
               변경 {changes.length}명 · {changedItemCount}건
-              {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}. 아래 내용으로
+              {assignChangedCount > 0 ? ` · 시트 완료표시 ${assignChangedCount}건` : ""}{editorScope?.design?.startsWith("ref-") && dirty ? " · 이 시트의 모든 월 변경을 함께 저장" : ""}. 아래 내용으로
               처리 상태를 서버 DB에 저장합니다.
             </p>
             {changes.length === 0 && assignChangedCount > 0 ? (

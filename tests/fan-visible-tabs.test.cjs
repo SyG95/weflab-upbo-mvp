@@ -1,0 +1,52 @@
+const fs = require('node:fs');
+const ts = require('typescript');
+const assert = require('node:assert/strict');
+require.extensions['.ts'] = (m, filename) => m._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, filename);
+const { monthlyViewers, allocateFanMonthly } = require('../lib/fanMonthly.ts');
+const { selectVisibleFanTabs } = require('../lib/fanVisibleTabs.ts');
+
+const ref = (entryId, month, quantity) => ({ entryId, itemName: '상품', probability: 1, amountRangeLabel: '33', quantity, recordedAtMs: Date.parse(`${month}-15T12:00:00+09:00`), recordedKind: 'donate' });
+const august = ref('august', '2026-08', 2);
+const september = ref('september', '2026-09', 3);
+const owner = { key: 'fan', ownerId: 'fan', ownerName: '시청자', items: [august, september], total: 5, maxProb: 1 };
+const allocation = allocateFanMonthly([owner], [{ fanId: 'fan', itemKey: '상품@@1@@33', itemName: '상품', processedCount: 2 }]);
+const group = (key, refs, month, mode = 'remaining', status = 'all') => ({ key, label: key, viewers: monthlyViewers([{ ...owner, items: refs }], allocation, month, mode, status) });
+const keys = result => result.visibleGroups.map(g => g.key);
+
+// Month filtering removes a historical tab and stale selection falls back.
+const augustOnly = group('old', [august], '2026-09');
+const septemberOnly = group('current', [september], '2026-09');
+const mixed = selectVisibleFanTabs([augustOnly, septemberOnly], 'old');
+assert.deepEqual(keys(mixed), ['current']);
+assert.equal(mixed.activeGroup, septemberOnly);
+
+// All completed under remaining mode, or an entirely empty month, has no tabs.
+assert.deepEqual(selectVisibleFanTabs([group('done', [august], '2026-08')], 'done'), { visibleGroups: [], activeGroup: undefined });
+assert.deepEqual(keys(selectVisibleFanTabs([group('empty', [august, september], '2026-07')])), []);
+assert.deepEqual(keys(selectVisibleFanTabs([{ key: 'invalid', viewers: [{ items: [] }] }])), []);
+
+// Mixed month keeps the partial tab with remaining rows, preserving identity/order.
+const mixedGroup = group('mixed', [august, september], 'all');
+assert.equal(selectVisibleFanTabs([mixedGroup], 'mixed').activeGroup, mixedGroup);
+assert.equal(mixedGroup.viewers[0].items[0].count, 3);
+const another = { ...septemberOnly, key: 'another' };
+assert.deepEqual(keys(selectVisibleFanTabs([septemberOnly, another], 'another')), ['current', 'another']);
+assert.equal(selectVisibleFanTabs([septemberOnly, another], 'another').activeGroup, another);
+
+// Delivery settings remain authoritative: off ignores completion/status; marked
+// completed rows and zero-remaining done indicators are displayable history.
+for (const mode of ['off', 'mark', 'remaining_done']) {
+  assert.deepEqual(keys(selectVisibleFanTabs([group(mode, [august], '2026-08', mode)])), [mode]);
+}
+assert.deepEqual(keys(selectVisibleFanTabs([group('off', [august], '2026-08', 'off', 'remaining')])), ['off']);
+assert.deepEqual(keys(selectVisibleFanTabs([group('marked', [august], '2026-08', 'mark', 'remaining')])), []);
+assert.deepEqual(keys(selectVisibleFanTabs([group('completed', [august], '2026-08', 'remaining', 'done')])), ['completed']);
+
+// Input is immutable and a subsequent nickname miss must not alter tab inventory.
+const before = JSON.stringify([augustOnly, septemberOnly]);
+selectVisibleFanTabs([augustOnly, septemberOnly], 'missing');
+assert.equal(JSON.stringify([augustOnly, septemberOnly]), before);
+const searchResult = mixed.activeGroup.viewers.filter(v => v.fanNickname.includes('없는닉네임'));
+assert.equal(searchResult.length, 0);
+assert.deepEqual(keys(mixed), ['current']);
+console.log('fan-visible-tabs: empty month, completion modes, fallback, and search independence passed');

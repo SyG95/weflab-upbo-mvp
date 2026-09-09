@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 import { WARDROBE_PARTS } from "./wardrobeShared";
 import type { WardrobeItem, WardrobeState, WardrobeTheme } from "./wardrobeShared";
+import { DELIVERY_PERIOD_DEFAULT, sanitizeDeliveryPeriodConfig } from "./deliveryPeriod";
+import type { DeliveryPeriodConfig } from "./deliveryPeriod";
 import { normalizeSheetFont } from "./sheetFonts";
 import {
   jaccardStrings,
@@ -1416,12 +1418,13 @@ async function deliveryProgressFromAuditLogs(streamerId: string) {
 
 export async function getOperatorState(slug: string) {
   const streamer = await requireStreamer(slug);
-  const [viewerNotes, deliveryProgress, deliveryAssignments] = await Promise.all([
+  const [viewerNotes, deliveryProgress, deliveryAssignments, deliveryPeriod] = await Promise.all([
     getViewerNotes(streamer.id),
     getDeliveryProgress(streamer.id),
     getDeliveryAssignments(streamer.id),
+    getDeliveryPeriodConfig(streamer.id),
   ]);
-  return { viewerNotes, deliveryProgress, deliveryAssignments };
+  return { viewerNotes, deliveryProgress, deliveryAssignments, deliveryPeriod };
 }
 
 // 시청자 메모 첨부 이미지(fanId별 최신 1건). 텍스트 메모(viewer_notes 테이블)와는 별도 오버레이.
@@ -1704,6 +1707,46 @@ export async function setDeliveryAssignments(
     }),
   });
   return { saved: clean.length };
+}
+
+// 배송관리 "묶음(기간) 보기" 설정 — 표시 전용 오버레이(장부·판정 불변).
+// delivery_assignment 관례를 그대로 따른다: 관리자 전용 읽기(ops-state)라 OVERLAY_LATEST_ACTIONS
+// 에는 절대 넣지 않고, 전용 limit=1 쿼리로 최신 1건=현재 설정을 읽는다.
+const DELIVERY_PERIOD_ACTION = "delivery_period_updated";
+
+async function getDeliveryPeriodConfig(streamerId: string): Promise<DeliveryPeriodConfig> {
+  // 일시 오류를 기본값으로 삼키면 안 된다 — 클라이언트가 "설정 없음" 기준으로 저장해 스트리머의
+  // 마감선을 통째로 덮을 수 있다. 테이블 없는 레인만 기본값, 나머지는 실패 전파(배정과 동일 원칙).
+  let rows: Array<{ payload: { config?: unknown } | null }>;
+  try {
+    rows = await supabaseFetch(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${DELIVERY_PERIOD_ACTION}&select=payload&order=created_at.desc&limit=1`,
+    );
+  } catch (error) {
+    if (isMissingTableError(error)) return { ...DELIVERY_PERIOD_DEFAULT };
+    throw error;
+  }
+  if (!rows[0]?.payload) return { ...DELIVERY_PERIOD_DEFAULT };
+  return sanitizeDeliveryPeriodConfig(rows[0].payload.config);
+}
+
+export async function setDeliveryPeriodConfig(
+  slug: string,
+  config: unknown,
+): Promise<DeliveryPeriodConfig> {
+  const streamer = await requireStreamer(slug);
+  const clean = sanitizeDeliveryPeriodConfig(config);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: DELIVERY_PERIOD_ACTION,
+      actor: "operator",
+      payload: { config: clean },
+    }),
+  });
+  return clean;
 }
 
 async function latestCatalog(streamerId: string): Promise<CatalogRow> {
@@ -5108,4 +5151,10 @@ export async function applyCouponBackfill(
       : { accrued: 0, totalDelta: 0 };
   const ledger = await couponLedgerForStreamer(streamer.id);
   return { preview, ...result, ...ledger };
+}
+
+// Server-rendered fan month view uses allocation hints without exposing them in the public state DTO.
+export async function getFanDeliveryAssignmentsBySlug(slug: string) {
+  const streamer = await requireStreamer(slug);
+  return getDeliveryAssignments(streamer.id);
 }

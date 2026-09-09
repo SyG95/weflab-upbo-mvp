@@ -233,6 +233,8 @@ export type OpsState = {
   // 시트 보기(B뷰)의 "어느 후원 건을 완료로 쳤는지" 배정 메모(관리자 전용 오버레이).
   // 수량 장부(deliveryProgress)가 항상 진실이고 이 배열은 힌트다 — 어긋나면 FIFO 로 보정 표시.
   deliveryAssignments?: DeliveryAssignment[];
+  // 배송관리 "묶음(기간) 보기" 설정(관리자 전용, 표시 전용) — lib/deliveryPeriod.ts 참조.
+  deliveryPeriod?: import("./deliveryPeriod").DeliveryPeriodConfig;
 };
 
 // 배정 메모 1건. entryId 만으로는 조각을 못 집는다(부분 양도·교환 시 같은 entryId 가 여러 줄) —
