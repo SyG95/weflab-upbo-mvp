@@ -74,6 +74,10 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
+    if (process.env.UPBO_WARDROBE_RECOVERY === "read-only") {
+      return Response.json({ error: "옷장 점검 중에는 저장할 수 없어요. 잠시 후 다시 시도해 주세요." },
+        { status: 503, headers: { "retry-after": "60" } });
+    }
     const streamer = await getStreamerRowBySlug(streamerSlug);
 
     const contentType = request.headers.get("content-type") ?? "";

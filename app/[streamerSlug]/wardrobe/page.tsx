@@ -9,6 +9,7 @@ import { sheetFontCss, sheetFontHref } from "@/lib/sheetFonts";
 import { resolveTheme } from "@/lib/themes";
 import ThemeLiveBackground from "../ThemeLiveBackground";
 import WardrobeStandaloneView from "./WardrobeStandaloneView";
+import WardrobeRecoveryView from "../WardrobeRecoveryView";
 import styles from "./wardrobePage.module.css";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +59,9 @@ export default async function WardrobePage({ params, searchParams }: PageProps) 
             업보시트로
           </a>
         </header>
-        {items.length === 0 ? (
+        {process.env.UPBO_WARDROBE_RECOVERY === "read-only" ? (
+          <WardrobeRecoveryView items={items} />
+        ) : items.length === 0 ? (
           <p className={styles.empty}>아직 공개된 컷이 없어요 — 곧 채워질 거예요.</p>
         ) : (
           <WardrobeStandaloneView

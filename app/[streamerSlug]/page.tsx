@@ -2132,7 +2132,9 @@ function AdminPanel({
             의상·헤어 컷을 올리면 팬 화면에 옷장 탭이 생겨요(1장 이상일 때만). 분류 없이 이미지를 바로 등록할 수 있으며, 테마를 만들어
             고르고, 여러 장을 한꺼번에 끌어다 놓으면 돼요.
           </p>
-          <WardrobeManager slug={state.slug} initial={wardrobe} />
+          {process.env.UPBO_WARDROBE_RECOVERY === "read-only" ? (
+            <p role="status">옷장을 점검하고 있어요. 이미지와 설정은 보존되며, 지금은 편집할 수 없어요.</p>
+          ) : <WardrobeManager slug={state.slug} initial={wardrobe} />}
         </CollapsibleCard>
       ) : (
         <SortableSections tabId="settings" slug={state.slug} allSectionOrder={uiPrefs.sectionOrder}>
