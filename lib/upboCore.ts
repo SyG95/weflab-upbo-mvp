@@ -111,6 +111,17 @@ export function normalizeName(value: unknown): string {
   return cleanText(value).toLowerCase().replace(/[\s_-]+/g, "");
 }
 
+// ---------- 미션 성공 정산 뭉치 판별(단일 소스) ----------
+// 숲 "대결미션 별풍선 성공" / "도전미션 별풍선 성공" 정산 행 = 계정 없는 모금 정산(닉네임 칸=미션명).
+// 정산 갯수가 룰렛표 금액과 맞으면 위플랩이 룰렛을 돌려 결과가 붙지만 귀속할 시청자가 없어
+// 어느 상황에도 개인 업보가 될 수 없다(sy 확정 2026-08-24, 정가 제외와 같은 규칙; 룰렛 유령 실측
+// 2026-09-09: 18건). 개인이 미션에 넣은 후원("성공" 없음)은 정당한 룰렛이라 그대로 판정한다.
+// 후원집계(donationEvents.isMissionSuccess)·정가(buildFixedPriceCandidates)·룰렛 판정이 모두 이 함수를 쓴다.
+export function isMissionSettlementType(type: unknown): boolean {
+  const t = cleanText(type);
+  return t.includes("미션") && t.includes("성공");
+}
+
 export function toNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -405,6 +416,31 @@ export function effectiveThresholdForLabel(
   return pct === undefined ? globalThreshold : pct;
 }
 
+// ---------- 배치 판정 규칙 스냅샷(judgeRules) — 순수 ----------
+export type JudgeRules = { missionSettlementIgnore: boolean };
+
+// 저장된 배치 summary 에서 판정 규칙 스냅샷을 읽는다. 스냅샷이 없거나 깨진 옛 배치는 "규칙 없음"(false)으로
+// 읽어 도입 전 판정을 그대로 재현한다(엄격 === true — 문자열 "true" 도 규칙 없음으로 본다 = 안전한 쪽으로 낙하).
+export function readJudgeRules(summary: unknown): JudgeRules {
+  const raw = summary && typeof summary === "object" ? (summary as { judgeRules?: unknown }).judgeRules : undefined;
+  const rules = raw && typeof raw === "object" ? (raw as { missionSettlementIgnore?: unknown }) : {};
+  return { missionSettlementIgnore: rules.missionSettlementIgnore === true };
+}
+
+// 배치에 저장할 summary 조립: 판정 summary + 실제로 판정에 쓴 예외/규칙 스냅샷. 기준확률 예외가 없으면 키를
+// 넣지 않아 옛 배치와 같은 모양을 유지하고, judgeRules 는 항상 넣는다(검증실이 이 값으로 재현 규칙을 정한다).
+export function buildBatchSummary<T extends object>(
+  summary: T,
+  thresholdOverrides: ThresholdOverrides,
+  judgeRules: JudgeRules,
+): T & { thresholdOverrides?: ThresholdOverrides; judgeRules: JudgeRules } {
+  return {
+    ...summary,
+    ...(Object.keys(thresholdOverrides).length > 0 ? { thresholdOverrides } : {}),
+    judgeRules,
+  };
+}
+
 export function reconcileResults({
   catalogItems = [],
   results = [],
@@ -412,6 +448,7 @@ export function reconcileResults({
   existingSourceKeys = new Set<string>(),
   specialItemRules = [],
   modifierState = {},
+  missionSettlementIgnore = true,
 }: {
   catalogItems: NormalizedCatalogItem[];
   results: NormalizedResult[];
@@ -419,6 +456,9 @@ export function reconcileResults({
   existingSourceKeys?: Set<string>;
   specialItemRules?: SpecialItemRule[];
   modifierState?: ModifierState;
+  // 미션 성공 정산 뭉치 결과를 무시하는 규칙(기본 켬). 검증실이 규칙 도입 전 배치를 저장 summary 와
+  // 같게 재현할 때만 끈다(배치 summary.judgeRules 스냅샷 기준).
+  missionSettlementIgnore?: boolean;
 }) {
   const processed = new Set<string>(modifierState.processedSourceKeys || []);
   const existing = new Set<string>(existingSourceKeys || []);
@@ -438,20 +478,33 @@ export function reconcileResults({
     needsReviewCount: 0,
     modifierCount: 0,
     multiplierAppliedCount: 0,
+    // 미션 정산 뭉치라서 무시한 결과 수(ignoreCount 에 포함). 미리보기·검증실 표시용.
+    missionSettlementCount: 0,
   };
+  const settlementKeys = new Set<string>();
   const decisions: ReconcileDecision[] = results.map((result) => {
     const sourceKey = result.sourceKey || createSourceKey(result);
     const catalogItem = findCatalogMatch(result, catalogItems);
     // 상품이 속한 룰렛표에 기준확률 예외가 얹혀 있으면 그 값으로, 없으면 전역 기준으로 판정.
     const itemThreshold = toNumber(catalogItem?.thresholdOverridePercent) ?? threshold;
     const ruleKey = catalogItem ? specialRuleKeyForItem(catalogItem) : "";
-    const modifierRule = ruleKey ? confirmedRuleMap.get(ruleKey) || null : null;
+    // 미션 성공 정산 뭉치의 룰렛 결과는 귀속할 시청자가 없다 — 기록·검토함·두배권 부여 없이 무시한다
+    // (isMissionSettlementType 주석 참고). 중복 검사 뒤에 두어 이미 기록된 옛 건은 duplicate 로 남는다
+    // (재판정·검증실 재현의 멱등성 유지).
+    const settlement = missionSettlementIgnore && isMissionSettlementType(result.donationType);
+    const modifierRule = !settlement && ruleKey ? confirmedRuleMap.get(ruleKey) || null : null;
     let decision: ReconcileDecision["decision"];
     let reason: string;
     if (existing.has(sourceKey)) {
       decision = "duplicate";
       reason = "source key already exists";
       summary.duplicateCount += 1;
+    } else if (settlement) {
+      decision = "ignore";
+      reason = "mission settlement bundle (no viewer account to attribute)";
+      summary.ignoreCount += 1;
+      summary.missionSettlementCount += 1;
+      settlementKeys.add(sourceKey);
     } else if (!catalogItem) {
       decision = "needs_review";
       reason = "no matching catalog item";
@@ -496,6 +549,9 @@ export function reconcileResults({
   const sorted = [...decisions].sort((a, b) => resultOrderKey(a.result).localeCompare(resultOrderKey(b.result)));
   for (const decision of sorted) {
     if (decision.decision === "duplicate") continue;
+    // 정산 뭉치 결과는 시청자의 룰렛이 아니다 — 대기 두배권을 소모하지 않고 processed 에도 넣지 않는다
+    // (재캡처마다 같은 규칙으로 다시 무시될 뿐이라 남길 상태가 없고, 오탐이면 규칙 수정 후 재판정으로 복구 가능).
+    if (settlementKeys.has(decision.sourceKey)) continue;
     processed.add(decision.sourceKey);
     const key = viewerKey(decision.result);
     if (!key) continue;
