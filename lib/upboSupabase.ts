@@ -1366,7 +1366,11 @@ export async function deleteWardrobeImages(urls: string[]): Promise<number> {
     const path = url.slice(prefix.length);
     if (!path.startsWith("wardrobe/")) continue;
     try {
-      const res = await storageFetch(`/object/${bucket}/${path}`, { method: "DELETE" });
+      const res = await storageFetch(`/object/${bucket}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prefixes: [path] }),
+      });
       if (res.ok) deleted += 1;
     } catch {
       // 파일 정리는 부가 작업 — 상태 저장을 막지 않는다.
