@@ -192,7 +192,7 @@ export async function POST(request: Request, context: RouteContext) {
       name?: string;
       variants?: Record<string, string>;
       revision?: string | null;
-      settings?: { month?: boolean; theme?: boolean; parts?: boolean };
+      settings?: { month?: boolean; theme?: boolean; parts?: boolean; title?: string; imageFit?: "contain" | "cover" };
     }>(request);
     if (body.revision !== undefined && body.revision !== (state.revision ?? null)) {
       const error = new Error("다른 창에서 옷장이 변경됐어요. 새로고침 후 다시 시도해 주세요.");
@@ -200,6 +200,16 @@ export async function POST(request: Request, context: RouteContext) {
       throw error;
     }
     const action = body.action ?? "";
+    if (action === "display") {
+      const raw = body.settings;
+      if (!raw || typeof raw.title !== "string" || raw.title.trim().length > 60 || /[\u0000-\u001f\u007f]/.test(raw.title) || (raw.imageFit !== "contain" && raw.imageFit !== "cover")) badRequest("옷장 이름과 이미지 표시 방식을 확인해 주세요");
+      const next: WardrobeState = { ...state, settings: { ...wardrobeSettings(state), title: raw.title!.trim(), imageFit: raw.imageFit! } };
+      saveAttempted = true;
+      await setWardrobe(streamer, next);
+      committed = true;
+      return jsonOk({ ok: true, wardrobe: next });
+    }
+
     if (action === "settings") {
       const raw = body.settings;
       if (!raw || [raw.month, raw.theme, raw.parts].some((v) => typeof v !== "boolean")) badRequest("분류 설정이 잘못됐어요");

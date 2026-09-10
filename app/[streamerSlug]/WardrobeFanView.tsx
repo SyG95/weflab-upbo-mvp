@@ -270,10 +270,15 @@ export default function WardrobeFanView({
           <span className={styles.thumb}>
             {/* 세트는 어느 색이든 새 컷이 있으면 NEW — 기본 선택이 옛 색이어도 신호가 죽지 않게 */}
             {unit.members.some((m) => isNew(m, now)) ? <span className={styles.newBadge}>NEW</span> : null}
-            {/* 목록은 썸네일(~320px) + lazy — 원본은 피팅룸에서만(전송량 ~1/10).
-                구버전 컷(썸네일 없음)은 원본 폴백. next/image 대신 img(쇼케이스와 동일 관례). */}
+            {/* 기존 옷장은 썸네일 유지. 표시 설정을 저장한 옷장은 원본을 지연 로딩해 확대 화질을 보존한다. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={chosen.thumbUrl || chosen.url} alt={chosen.name} loading="lazy" />
+            <img
+              key={chosen.id}
+              src={settings.imageFit ? chosen.url : chosen.thumbUrl || chosen.url}
+              style={settings.imageFit ? { objectFit: settings.imageFit } : undefined}
+              alt={chosen.name} loading="lazy" decoding="async"
+              onError={(e) => { const img = e.currentTarget; if (!img.dataset.fallback && img.getAttribute("src") !== chosen.url) { img.dataset.fallback = "1"; img.src = chosen.url; } }}
+            />
           </span>
           <span className={styles.cardName}>{chosen.name}</span>
           <span className={styles.cardMeta}>

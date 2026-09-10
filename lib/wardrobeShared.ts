@@ -42,7 +42,7 @@ export type WardrobeItem = {
   thumbUrl: string;
   uploadRequestId?: string; // 동일 업로드 재시도에만 사용. 기존 항목은 불변.
 };
-export type WardrobeSettings = { month: boolean; theme: boolean; parts: boolean; layout: "legacy" | "flexible" };
+export type WardrobeSettings = { month: boolean; theme: boolean; parts: boolean; layout: "legacy" | "flexible"; title?: string; imageFit?: "contain" | "cover" };
 export const LEGACY_WARDROBE_SETTINGS: WardrobeSettings = { month: true, theme: true, parts: true, layout: "legacy" };
 export const SIMPLE_WARDROBE_SETTINGS: WardrobeSettings = { month: false, theme: false, parts: false, layout: "flexible" };
 export type WardrobeState = {

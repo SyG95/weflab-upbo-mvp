@@ -53,7 +53,7 @@ export default async function WardrobePage({ params, searchParams }: PageProps) 
         <header className={styles.cover}>
           <div>
             <p className={styles.kicker}>옷장</p>
-            <h1 className={styles.title}>{streamerName} 옷장</h1>
+            <h1 className={styles.title}>{wardrobe?.settings?.title?.trim() || `${streamerName} 옷장`}</h1>
           </div>
           <a className={styles.backLink} href={`/${encodeURIComponent(streamerSlug)}`}>
             업보시트로

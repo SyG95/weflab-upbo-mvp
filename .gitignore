@@ -26,3 +26,7 @@ next-env.d.ts
 .omc/
 
 .claude/
+
+# Local wardrobe preview fixtures
+/local-preview/
+/public/local-wardrobe-preview/

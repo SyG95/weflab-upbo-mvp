@@ -78,6 +78,8 @@ function trimEdge(value: string): string {
 export default function WardrobeManager({ slug, initial }: { slug: string; initial: WardrobeState | null }) {
   // 기존 표시 방식은 유지하고, 신규 옷장은 분류 미지정으로 시작한다.
   const [state, setState] = useState<WardrobeState>(initial ?? emptyWardrobe());
+  const [displayTitle, setDisplayTitle] = useState(initial?.settings?.title ?? "");
+  const [displayFit, setDisplayFit] = useState<"contain" | "cover">(initial?.settings?.imageFit ?? "cover");
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const [preset, setPreset] = useState<{ themeId: string; part: WardrobePart; month: string }>({
     themeId: wardrobeSettings(initial).layout === "legacy" ? initial?.themes[0]?.id ?? "" : "",
@@ -396,6 +398,18 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
 
   return (
     <div className={styles.adminWrap}>
+      <details className={styles.classificationSettings}>
+        <summary>옷장 이름 · 이미지 표시</summary>
+        <div className={styles.displaySettings}>
+          <label>옷장 이름<input aria-label="옷장 이름" value={displayTitle} maxLength={60} placeholder="비워두면 기본 이름을 사용해요" disabled={locked} onChange={(e) => setDisplayTitle(e.target.value)} /></label>
+          <fieldset disabled={locked}><legend>이미지 표시</legend><div className={styles.displayOptions}>
+            <button type="button" aria-pressed={displayFit === "contain"} onClick={() => setDisplayFit("contain")}>전체 이미지 보기</button>
+            <button type="button" aria-pressed={displayFit === "cover"} onClick={() => setDisplayFit("cover")}>꽉 채우기</button>
+          </div></fieldset>
+          <p>{displayFit === "contain" ? "사진 전체가 보여요. 비율에 따라 여백이 생겨요." : "카드를 빈틈없이 채워요. 사진 가장자리가 잘릴 수 있어요."}</p>
+          <button type="button" disabled={locked} onClick={() => void postAction({ action: "display", settings: { title: displayTitle, imageFit: displayFit } })}>옷장 표시 저장</button>
+        </div>
+      </details>
       <details className={styles.classificationSettings}>
         <summary>팬 화면 분류 설정</summary>
         <p>이미지만 올려도 등록됩니다. 사용할 분류만 켜세요. 기존 이미지의 분류는 지워지지 않습니다.</p>

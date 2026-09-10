@@ -6,3 +6,6 @@ work
 local-mirror
 *.command
 tests
+local-preview
+public/local-wardrobe-preview
+app/wardrobe-display-preview
