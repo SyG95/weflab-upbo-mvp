@@ -35,7 +35,7 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
   const savedThemeId = streamerRow?.accent_color ?? undefined;
   // 제목은 콘솔에서 입력한 표시 이름(한글 가능) — 슬러그는 주소 전용.
   const streamerName = streamerRow?.display_name?.trim() || streamerSlug;
-  const theme = resolveTheme(themePreview || savedThemeId);
+  const theme = resolveTheme(themePreview || savedThemeId, themePreview ? null : streamerRow?.custom_theme);
   // 시트 글씨체도 팬 시트와 동일하게 따라간다(경량 조회, 미설정=현행 그대로).
   const sheetFontFamily = sheetFontCss(sheetFontKey);
   const sheetFontLink = sheetFontHref(sheetFontKey);

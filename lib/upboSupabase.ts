@@ -1,3 +1,4 @@
+import { parseCustomTheme, customThemeColors, type CustomTheme } from "./customTheme";
 import crypto from "node:crypto";
 
 import { WARDROBE_PARTS } from "./wardrobeShared";
@@ -68,6 +69,7 @@ type StreamerRow = {
   sheet_name?: string | null;
   poster_image_url?: string | null;
   accent_color?: string | null;
+  custom_theme?: CustomTheme | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -338,6 +340,7 @@ function mapStreamer(row: StreamerRow) {
       sheetName: row.sheet_name ?? undefined,
       posterImageUrl: row.poster_image_url ?? undefined,
       accentColor: row.accent_color ?? undefined,
+      customTheme: row.custom_theme ?? null,
     },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1086,15 +1089,17 @@ export async function setStreamerSettings(slug: string, settings: { thresholdPer
 
 // 스트리머 테마 프리셋 저장. 기존 extension 토큰으로 인증된 streamer 에 한해 호출된다.
 // accent_color 칸을 프리셋 id 저장용으로 재사용한다(스키마 변경 없음).
-export async function setStreamerTheme(streamer: StreamerRow, theme: string) {
+export async function setStreamerTheme(streamer: StreamerRow, theme: string, custom?: unknown) {
   const value = String(theme || "").trim();
   if (value && !isThemeId(value)) {
     throw new Error("unknown theme preset");
   }
+  const parsed = parseCustomTheme(custom);
+  if (parsed && customThemeColors(parsed).ratio < 4.5) throw new Error("Background and card need compatible brightness for readable text");
   const rows = await supabaseFetch<StreamerRow[]>(`/${tableName("streamers")}?id=eq.${streamer.id}`, {
     method: "PATCH",
     headers: { prefer: "return=representation" },
-    body: JSON.stringify({ accent_color: value || null, updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ ...(custom !== undefined ? {custom_theme:parsed} : {}), accent_color: value || null, updated_at: new Date().toISOString() }),
   });
   return mapStreamer(rows[0]).settings;
 }

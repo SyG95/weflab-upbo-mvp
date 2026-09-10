@@ -1,3 +1,4 @@
+import { applyCustomTheme } from "./customTheme";
 // 팬 업보시트(/[streamerSlug]) 테마 프리셋.
 //
 // 각 프리셋은 globals.css 의 CSS 변수 한 세트를 갈아끼운다(색/배경/포인트/글꼴 느낌만).
@@ -436,6 +437,12 @@ export const DEFAULT_THEME_ID = "paper";
 
 export const THEME_IDS: string[] = THEMES.map((t) => t.id);
 
+for (const [id,label,background,accent] of [['peachlight','피치 크림','#fff4eb','#ac4933'],['mintlight','민트 가든','#effcf5','#24674b'],['lilaclight','라일락 밀크','#f7f0ff','#754395']]) {
+ const theme=applyCustomTheme(THEMES[0],{version:1,background,surface:'#ffffff',accent,motion:false});
+ THEMES.push({...theme,id,label,emoji:'🌷',blurb:'밝고 부드러운 색상 · 정적 배경'});
+ THEME_IDS.push(id);
+}
+
 // v1(20개) → v2/v3 이행 매핑. DB accent_color 에 남아 있는 옛 id 를
 // 가장 가까운 새 테마로 이어준다. 스트리머가 고른 분위기가 초기화되지 않게 하는 안전망.
 const LEGACY_THEME_ALIASES: Record<string, string> = {
@@ -456,10 +463,10 @@ const LEGACY_THEME_ALIASES: Record<string, string> = {
   vintage: "sunset",
 };
 
-export function resolveTheme(id?: string | null): Theme {
+export function resolveTheme(id?: string | null, custom?: unknown): Theme {
   const wanted = id ? LEGACY_THEME_ALIASES[id] ?? id : undefined;
   const found = wanted ? THEMES.find((t) => t.id === wanted) : undefined;
-  return found ?? THEMES.find((t) => t.id === DEFAULT_THEME_ID) ?? THEMES[0];
+  return applyCustomTheme(found ?? THEMES.find((t) => t.id === DEFAULT_THEME_ID) ?? THEMES[0], custom);
 }
 
 export function isThemeId(id: string): boolean {

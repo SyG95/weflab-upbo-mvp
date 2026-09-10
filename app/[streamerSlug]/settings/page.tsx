@@ -3,7 +3,7 @@ import FontPicker from "./FontPicker";
 import SheetAdminGate from "../SheetAdminGate";
 import { DEFAULT_THEME_ID } from "../../../lib/themes";
 import { normalizeSheetFont } from "../../../lib/sheetFonts";
-import { getStreamerState } from "../../../lib/upboSupabase";
+import { getStreamerRowBySlug, getSheetFontKeyBySlug } from "../../../lib/upboSupabase";
 import { sheetAdminAccessState } from "../../../lib/sheetAdminAuth";
 
 export const runtime = "nodejs";
@@ -30,19 +30,19 @@ export default async function ThemeSettingsPage({ params }: PageProps) {
 
   let initialThemeId = DEFAULT_THEME_ID;
   let initialFontKey = "";
+  let initialCustom: unknown = null;
   try {
-    const state = (await getStreamerState(streamerSlug)) as {
-      settings?: { accentColor?: string };
-      sheetFontKey?: string;
-    };
-    if (state?.settings?.accentColor) initialThemeId = state.settings.accentColor;
-    initialFontKey = normalizeSheetFont(state?.sheetFontKey);
+    const state = await getStreamerRowBySlug(streamerSlug);
+    if(state?.accent_color) initialThemeId=state.accent_color;
+    initialCustom=state?.custom_theme ?? null;
+    initialFontKey=normalizeSheetFont(await getSheetFontKeyBySlug(streamerSlug));
+
   } catch {
     // Supabase 미설정/스트리머 없음 → 기본값으로 미리보기만 제공
   }
   return (
     <>
-      <ThemePicker slug={streamerSlug} initialThemeId={initialThemeId} />
+      <ThemePicker slug={streamerSlug} initialThemeId={initialThemeId} initialCustom={initialCustom} />
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 48px" }}>
         <FontPicker slug={streamerSlug} initialFontKey={initialFontKey} />
       </div>

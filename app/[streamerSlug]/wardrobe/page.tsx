@@ -32,7 +32,7 @@ export default async function WardrobePage({ params, searchParams }: PageProps) 
   const items = (wardrobe?.items ?? []).filter((i) => !i.hidden);
   // 제목은 콘솔에서 입력한 표시 이름(한글 가능) — 슬러그는 주소 전용.
   const streamerName = streamerRow?.display_name?.trim() || streamerSlug;
-  const theme = resolveTheme(themePreview || streamerRow?.accent_color || undefined);
+  const theme = resolveTheme(themePreview || streamerRow?.accent_color || undefined, themePreview ? null : streamerRow?.custom_theme);
   const sheetFontFamily = sheetFontCss(sheetFontKey);
   const sheetFontLink = sheetFontHref(sheetFontKey);
   const themeStyle = {

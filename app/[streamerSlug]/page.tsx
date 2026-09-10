@@ -369,7 +369,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const sheetTitle = (result.ok && result.state.sheetTitle?.trim()) || defaultSheetTitle;
   // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
   const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
-  const theme = resolveTheme(themePreview || savedThemeId);
+  const theme = resolveTheme(themePreview || savedThemeId, themePreview ? null : result.ok ? result.state.settings?.customTheme : null);
   // 시트 글씨체(스트리머 선택, sheetFonts 화이트리스트) — 고르면 제목·탭·상품 칩까지 통일,
   // 미설정·오염값은 현행 개구체 그대로(변수 미주입 = CSS 기본값). 테마 vars 뒤에 얹어 항상 우선.
   const sheetFontKey = result.ok ? normalizeSheetFont(result.state.sheetFontKey) : "";

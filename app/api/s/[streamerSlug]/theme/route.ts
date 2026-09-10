@@ -13,8 +13,8 @@ export async function POST(request: Request, context: RouteContext) {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
-    const body = await readJson<{ theme?: string }>(request);
-    const settings = await setStreamerTheme(streamer, body.theme ?? "");
+    const body = await readJson<{ theme?: string; custom?: unknown }>(request);
+    const settings = await setStreamerTheme(streamer, body.theme ?? "", body.custom);
     return jsonOk({ ok: true, settings });
   } catch (error) {
     return jsonError(error);

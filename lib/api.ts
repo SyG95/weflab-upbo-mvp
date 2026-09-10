@@ -323,6 +323,7 @@ export type StreamerState = {
     sheetName?: string;
     posterImageUrl?: string;
     accentColor?: string;
+    customTheme?: import("./customTheme").CustomTheme | null;
   };
   catalogs: Catalog[];
   currentCatalogVersion: number;
