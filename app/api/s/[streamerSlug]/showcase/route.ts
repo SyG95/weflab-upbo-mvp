@@ -59,17 +59,21 @@ export async function POST(request: Request, context: RouteContext) {
     const poster0File = await readImageField(formData, "poster0");
     const poster1File = await readImageField(formData, "poster1");
     const poster2File = await readImageField(formData, "poster2");
+    const poster3File = await readImageField(formData, "poster3");
+    const poster4File = await readImageField(formData, "poster4");
 
     const removeBanner = formData.get("removeBanner") === "1";
     const removePoster0 = formData.get("removePoster0") === "1";
     const removePoster1 = formData.get("removePoster1") === "1";
     const removePoster2 = formData.get("removePoster2") === "1";
+    const removePoster3 = formData.get("removePoster3") === "1";
+    const removePoster4 = formData.get("removePoster4") === "1";
 
     const current: ShowcaseState = (await getShowcaseBySlug(streamerSlug)) ?? {
       bannerUrl: null,
-      posterUrls: [null, null, null],
+      posterUrls: [null, null, null, null, null],
       bannerLink: null,
-      posterLinks: [null, null, null],
+      posterLinks: [null, null, null, null, null],
       noticeText: "",
       noticeFont: "",
     };
@@ -81,6 +85,8 @@ export async function POST(request: Request, context: RouteContext) {
     const poster0Link = linkOf("poster0Link", current.posterLinks[0]);
     const poster1Link = linkOf("poster1Link", current.posterLinks[1]);
     const poster2Link = linkOf("poster2Link", current.posterLinks[2]);
+    const poster3Link = linkOf("poster3Link", current.posterLinks[3]);
+    const poster4Link = linkOf("poster4Link", current.posterLinks[4]);
 
     const bannerUrl = bannerFile
       ? await uploadShowcaseImage(streamerSlug, "banner", bannerFile)
@@ -106,11 +112,23 @@ export async function POST(request: Request, context: RouteContext) {
         ? null
         : current.posterUrls[2];
 
+    const poster3Url = poster3File
+      ? await uploadShowcaseImage(streamerSlug, "poster3", poster3File)
+      : removePoster3
+        ? null
+        : current.posterUrls[3];
+
+    const poster4Url = poster4File
+      ? await uploadShowcaseImage(streamerSlug, "poster4", poster4File)
+      : removePoster4
+        ? null
+        : current.posterUrls[4];
+
     const nextState: ShowcaseState = {
       bannerUrl,
-      posterUrls: [poster0Url, poster1Url, poster2Url],
+      posterUrls: [poster0Url, poster1Url, poster2Url, poster3Url, poster4Url],
       bannerLink,
-      posterLinks: [poster0Link, poster1Link, poster2Link],
+      posterLinks: [poster0Link, poster1Link, poster2Link, poster3Link, poster4Link],
       noticeText: noticeText ?? current.noticeText,
       noticeFont: noticeFont ?? current.noticeFont ?? "",
     };

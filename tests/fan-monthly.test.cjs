@@ -1,0 +1,41 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const ts = require('typescript');
+const assert = require('node:assert/strict');
+require.extensions['.ts'] = (m, filename) => m._compile(ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,filename);
+const { allocateFanMonthly, monthlyViewers, summarizeMonth, monthOf, normalizeMonth } = require('../lib/fanMonthly.ts');
+const { computeHoldings, entryRecordedAt }=require('../lib/api.ts');
+const ref=(id,time,quantity=1,kind='donate',label='33')=>({entryId:id,itemName:'단컷',probability:1,amountRangeLabel:label,quantity,recordedAtMs:Date.parse(time),recordedKind:kind});
+const a=ref('aug','2026-08-31T23:59:59.999+09:00',3), b=ref('sep','2026-09-01T00:00:00+09:00',4), c=ref('manual','2026-09-02T00:00:00+09:00',2,'manual');
+const owners=[{key:'fan',ownerId:'fan',ownerName:'테스트',items:[a,b,c],total:9,maxProb:1}];
+const progress=[{fanId:'fan',fanNickname:'테스트',itemKey:'단컷@@1@@33',itemName:'단컷',processedCount:4}];
+const alloc=allocateFanMonthly(owners,progress);
+assert.equal(monthOf(a),'2026-08');assert.equal(monthOf(b),'2026-09');assert.equal(monthOf(c),'etc');
+assert.equal(alloc.get(a),3);assert.equal(alloc.get(b),1);
+assert.deepEqual(summarizeMonth(owners,alloc,'2026-09'),{quantity:4,delivered:1,remaining:3});
+assert.equal(monthlyViewers(owners,alloc,'2026-08','remaining','all').length,0);
+assert.equal(monthlyViewers(owners,alloc,'2026-08','remaining_done','all')[0].items[0].done,true);
+assert.equal(monthlyViewers(owners,alloc,'2026-08','mark','all')[0].items[0].delivered,3);
+assert.equal(monthlyViewers(owners,alloc,'2026-08','off','done')[0].items[0].count,3);
+assert.equal(monthlyViewers(owners,alloc,'2026-08','off','done')[0].items[0].delivered,undefined);
+assert.equal(monthlyViewers(owners,alloc,'2026-09','remaining','all')[0].items[0].count,3);
+assert.equal(monthlyViewers(owners,alloc,'all','mark','done').length,0);
+assert.equal(monthlyViewers(owners,alloc,'2026-08','mark','done')[0].items[0].count,3);
+assert.equal(monthlyViewers(owners,alloc,'all','mark','remaining')[0].items[0].delivered,4);
+assert.equal(allocateFanMonthly([{...owners[0],items:[b]}],progress,[],[{...owners[0],items:[a]}]).get(b),1);
+assert.equal(normalizeMonth('2026-13'),'all');assert.equal(normalizeMonth('etc'),'etc');
+const hinted=allocateFanMonthly(owners,progress,[{ownerKey:'fan',itemKey:'단컷@@1@@33',entryId:'sep',doneCount:4,doneAt:'2026-09-03T00:00:00Z'}]);
+assert.equal(hinted.get(b),4);assert.equal(hinted.get(a),0);
+assert.equal(entryRecordedAt({donateTimeText:'2026-08-31 23:59:59',createdAt:'2026-09-09T00:00:00Z'}).ms,a.recordedAtMs-999);
+const other=ref('other','2026-09-01T00:00:00+09:00',8,'donate','330');
+assert.equal(allocateFanMonthly([{...owners[0],items:[a,b,c,other]}],progress).get(other),0);
+const dataDir=process.env.UPBO_TEST_DATA_DIR;
+// Private integration snapshots are optional and never included in a release.
+for(const slug of (dataDir ? fs.readdirSync(dataDir) : []).filter(s=>fs.existsSync(path.join(dataDir,s,'state.json')))){
+ const state=JSON.parse(fs.readFileSync(path.join(dataDir,slug,'state.json')));const h=computeHoldings(state.upboEntries,state.itemEvents);const d=allocateFanMonthly(h,state.deliveryProgress);const months=[...new Set(h.flatMap(o=>o.items.map(monthOf)))];
+ const sum=months.map(m=>summarizeMonth(h,d,m)).reduce((a,b)=>({quantity:a.quantity+b.quantity,delivered:a.delivered+b.delivered,remaining:a.remaining+b.remaining}),{quantity:0,delivered:0,remaining:0});
+ assert.deepEqual(sum,summarizeMonth(h,d));assert.ok(sum.remaining>=0);
+ const snap=JSON.stringify([...d.values()]);for(const m of months)monthlyViewers(h,d,m,state.fanDeliveryReflect,'all');assert.equal(snap,JSON.stringify([...d.values()]));
+ console.log(`${slug}: month conservation OK (${months.length} buckets, ${sum.quantity} quantity)`);
+}
+console.log('fan-monthly: all assertions passed');

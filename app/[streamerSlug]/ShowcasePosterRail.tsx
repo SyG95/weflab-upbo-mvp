@@ -11,29 +11,32 @@ import styles from "./page.module.css";
 type Poster = { url: string; i: number; link?: string | null };
 
 function posterLabel(slotIndex: number): string {
-  return slotIndex === 0 ? "메인 포스터" : `포스터 ${slotIndex + 1}`;
+  return `포스터 ${slotIndex + 1}`;
 }
 
 export default function ShowcasePosterRail({
   posters,
   horizontal = false,
+  gallery,
 }: {
   posters: Poster[];
+  gallery?: Poster[];
   // 가로 슬롯(시트 위/아래)에 배치된 경우 — 포스터를 가로로 나란히 배열한다.
   horizontal?: boolean;
 }) {
   // 열려있는 포스터의 (필터된 배열 기준) 순번. null 이면 모달 닫힘.
   // 모달은 클릭 이후에만 열리므로(=하이드레이션 후) 별도 mounted 가드 없이 createPortal 안전.
+  const allPosters = gallery ?? posters;
   const [activeOrder, setActiveOrder] = useState<number | null>(null);
-  const active = activeOrder === null ? null : posters[activeOrder] ?? null;
+  const active = activeOrder === null ? null : allPosters[activeOrder] ?? null;
 
   const close = useCallback(() => setActiveOrder(null), []);
   const showPrev = useCallback(() => {
-    setActiveOrder((cur) => (cur === null ? cur : (cur - 1 + posters.length) % posters.length));
-  }, [posters.length]);
+    setActiveOrder((cur) => (cur === null ? cur : (cur - 1 + allPosters.length) % allPosters.length));
+  }, [allPosters.length]);
   const showNext = useCallback(() => {
-    setActiveOrder((cur) => (cur === null ? cur : (cur + 1) % posters.length));
-  }, [posters.length]);
+    setActiveOrder((cur) => (cur === null ? cur : (cur + 1) % allPosters.length));
+  }, [allPosters.length]);
 
   // 모달이 열려 있는 동안만 키보드 조작 + 배경 스크롤 잠금.
   useEffect(() => {
@@ -71,7 +74,7 @@ export default function ShowcasePosterRail({
           <button
             type="button"
             className={styles.showcasePosterOpen}
-            onClick={() => setActiveOrder(order)}
+            onClick={() => setActiveOrder(allPosters.findIndex(item=>item.i===p.i))}
           >
             {posterLabel(p.i)} 크게보기
           </button>
@@ -101,7 +104,7 @@ export default function ShowcasePosterRail({
                 닫기
               </button>
             </div>
-            {posters.length > 1 ? (
+            {allPosters.length > 1 ? (
               <>
                 <button
                   type="button"

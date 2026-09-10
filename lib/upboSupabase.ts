@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 
 import { WARDROBE_PARTS } from "./wardrobeShared";
 import type { WardrobeItem, WardrobeState, WardrobeTheme } from "./wardrobeShared";
+import { DELIVERY_PERIOD_DEFAULT, sanitizeDeliveryPeriodConfig } from "./deliveryPeriod";
+import type { DeliveryPeriodConfig } from "./deliveryPeriod";
 import { normalizeSheetFont } from "./sheetFonts";
 import {
   jaccardStrings,
@@ -1101,10 +1103,10 @@ export async function setStreamerTheme(streamer: StreamerRow, theme: string) {
 // DB 스키마를 새로 만들지 않고 modifier_state 와 같은 "최신 1건 조회" 패턴을 재사용한다.
 export type ShowcaseState = {
   bannerUrl: string | null;
-  posterUrls: [string | null, string | null, string | null];
+  posterUrls: [string | null, string | null, string | null, string | null, string | null];
   // 배너/포스터 클릭 시 이동할 링크(http/https 만). 없으면 null(클릭 안 됨).
   bannerLink: string | null;
-  posterLinks: [string | null, string | null, string | null];
+  posterLinks: [string | null, string | null, string | null, string | null, string | null];
   noticeText: string;
   // 공지 전용 폰트 키(빈값=기본). noticeFonts 화이트리스트로만 정규화됨.
   noticeFont: string;
@@ -1138,12 +1140,16 @@ export async function getShowcaseBySlug(slug: string): Promise<ShowcaseState | n
       showcase.posterUrls?.[0] ?? null,
       showcase.posterUrls?.[1] ?? null,
       showcase.posterUrls?.[2] ?? null,
+      showcase.posterUrls?.[3] ?? null,
+      showcase.posterUrls?.[4] ?? null,
     ],
     bannerLink: cleanShowcaseLink(showcase.bannerLink),
     posterLinks: [
       cleanShowcaseLink(showcase.posterLinks?.[0]),
       cleanShowcaseLink(showcase.posterLinks?.[1]),
       cleanShowcaseLink(showcase.posterLinks?.[2]),
+      cleanShowcaseLink(showcase.posterLinks?.[3]),
+      cleanShowcaseLink(showcase.posterLinks?.[4]),
     ],
     noticeText: showcase.noticeText ?? "",
     noticeFont: normalizeNoticeFont(showcase.noticeFont),
@@ -1212,7 +1218,7 @@ const SHOWCASE_IMAGE_EXTENSIONS: Record<string, string> = {
 // 쇼케이스 이미지(배너/포스터 2장)를 Supabase Storage 에 업로드하고 공개 URL을 반환한다.
 export async function uploadShowcaseImage(
   slug: string,
-  slot: "banner" | "poster0" | "poster1" | "poster2",
+  slot: "banner" | "poster0" | "poster1" | "poster2" | "poster3" | "poster4",
   file: { bytes: ArrayBuffer; contentType: string },
 ): Promise<string> {
   const ext = SHOWCASE_IMAGE_EXTENSIONS[file.contentType];
@@ -1428,12 +1434,13 @@ async function deliveryProgressFromAuditLogs(streamerId: string) {
 
 export async function getOperatorState(slug: string) {
   const streamer = await requireStreamer(slug);
-  const [viewerNotes, deliveryProgress, deliveryAssignments] = await Promise.all([
+  const [viewerNotes, deliveryProgress, deliveryAssignments, deliveryPeriod] = await Promise.all([
     getViewerNotes(streamer.id),
     getDeliveryProgress(streamer.id),
     getDeliveryAssignments(streamer.id),
+    getDeliveryPeriodConfig(streamer.id),
   ]);
-  return { viewerNotes, deliveryProgress, deliveryAssignments };
+  return { viewerNotes, deliveryProgress, deliveryAssignments, deliveryPeriod };
 }
 
 // 시청자 메모 첨부 이미지(fanId별 최신 1건). 텍스트 메모(viewer_notes 테이블)와는 별도 오버레이.
@@ -1716,6 +1723,46 @@ export async function setDeliveryAssignments(
     }),
   });
   return { saved: clean.length };
+}
+
+// 배송관리 "묶음(기간) 보기" 설정 — 표시 전용 오버레이(장부·판정 불변).
+// delivery_assignment 관례를 그대로 따른다: 관리자 전용 읽기(ops-state)라 OVERLAY_LATEST_ACTIONS
+// 에는 절대 넣지 않고, 전용 limit=1 쿼리로 최신 1건=현재 설정을 읽는다.
+const DELIVERY_PERIOD_ACTION = "delivery_period_updated";
+
+async function getDeliveryPeriodConfig(streamerId: string): Promise<DeliveryPeriodConfig> {
+  // 일시 오류를 기본값으로 삼키면 안 된다 — 클라이언트가 "설정 없음" 기준으로 저장해 스트리머의
+  // 마감선을 통째로 덮을 수 있다. 테이블 없는 레인만 기본값, 나머지는 실패 전파(배정과 동일 원칙).
+  let rows: Array<{ payload: { config?: unknown } | null }>;
+  try {
+    rows = await supabaseFetch(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${DELIVERY_PERIOD_ACTION}&select=payload&order=created_at.desc&limit=1`,
+    );
+  } catch (error) {
+    if (isMissingTableError(error)) return { ...DELIVERY_PERIOD_DEFAULT };
+    throw error;
+  }
+  if (!rows[0]?.payload) return { ...DELIVERY_PERIOD_DEFAULT };
+  return sanitizeDeliveryPeriodConfig(rows[0].payload.config);
+}
+
+export async function setDeliveryPeriodConfig(
+  slug: string,
+  config: unknown,
+): Promise<DeliveryPeriodConfig> {
+  const streamer = await requireStreamer(slug);
+  const clean = sanitizeDeliveryPeriodConfig(config);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: DELIVERY_PERIOD_ACTION,
+      actor: "operator",
+      payload: { config: clean },
+    }),
+  });
+  return clean;
 }
 
 async function latestCatalog(streamerId: string): Promise<CatalogRow> {
@@ -5133,4 +5180,10 @@ export async function applyCouponBackfill(
       : { accrued: 0, totalDelta: 0 };
   const ledger = await couponLedgerForStreamer(streamer.id);
   return { preview, ...result, ...ledger };
+}
+
+// Server-rendered fan month view uses allocation hints without exposing them in the public state DTO.
+export async function getFanDeliveryAssignmentsBySlug(slug: string) {
+  const streamer = await requireStreamer(slug);
+  return getDeliveryAssignments(streamer.id);
 }

@@ -1,0 +1,11 @@
+const fs=require('node:fs'),ts=require('typescript'),assert=require('node:assert/strict');
+require.extensions['.ts']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,f);
+const {editDeliveryRef}=require('../lib/deliveryRefEdit.ts');const {allocateDeliveryToRefs}=require('../lib/api.ts');
+const refs=[{entryId:'june',quantity:3,recordedAtMs:1},{entryId:'july',quantity:4,recordedAtMs:2},{entryId:'aug',quantity:2,recordedAtMs:3}];
+let plan=editDeliveryRef(refs,5,{},'aug',1,'now');assert.equal(plan.total,6);assert.deepEqual(allocateDeliveryToRefs(refs,plan.total,plan.hints).map(a=>a.allocated),[3,2,1]);
+plan=editDeliveryRef(refs,plan.total,plan.hints,'june',1,'later');assert.equal(plan.total,4);assert.deepEqual(allocateDeliveryToRefs(refs,plan.total,plan.hints).map(a=>a.allocated),[1,2,1]);
+plan=editDeliveryRef(refs,plan.total,plan.hints,'july',0,'later');assert.equal(plan.total,2);assert.deepEqual(allocateDeliveryToRefs(refs,plan.total,plan.hints).map(a=>a.allocated),[1,0,1]);
+assert.equal(plan.hints.aug.doneAt,'now');assert.equal(plan.hints.june.doneAt,'later');
+assert.equal(editDeliveryRef(refs,2,plan.hints,'aug',999,'later').total,3);
+assert.throws(()=>editDeliveryRef(refs,2,plan.hints,'missing',1,'later'));
+console.log('delivery-ref-edit: partial edits and reversals preserve other months');

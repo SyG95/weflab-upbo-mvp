@@ -1,3 +1,8 @@
+import IntegratedDelivery from './IntegratedDelivery';
+import {selectVisibleFanTabs} from '../../lib/fanVisibleTabs';
+import { isRefinedDesign, designId, type DesignId, type DesignRow } from "../../lib/designPreview";
+import { allocateFanMonthly, monthlyViewers, monthOf, normalizeMonth, summarizeMonth, type MonthlyStatus } from "../../lib/fanMonthly";
+import MonthPicker from "./MonthPicker";
 import styles from "./page.module.css";
 import ThresholdForm, { type ThresholdGroupRow } from "./ThresholdForm";
 import CatalogManager from "./CatalogManager";
@@ -9,6 +14,7 @@ import SpecialRuleManager from "./SpecialRuleManager";
 import {
   computeHoldings,
   DEFAULT_FAN_LAYOUT,
+  normalizeFanLayout,
   fanLayoutBlocksInSlot,
   filterEntriesByCatalogUsage,
   matchFanTabLabel,
@@ -17,6 +23,7 @@ import {
   matchGroupToConfig,
   normalizeAccountId,
   productColorById,
+  type DeliveryAssignment,
   type FanLayoutBlock,
   type FanLayoutSlot,
   type AggItem,
@@ -34,6 +41,7 @@ import {
   type ViewerSummary,
 } from "../../lib/api";
 import {
+  getFanDeliveryAssignmentsBySlug,
   getStreamerState,
   getShowcaseBySlug,
   getCouponStateBySlug,
@@ -90,6 +98,12 @@ import type { CSSProperties } from "react";
 type PageProps = {
   params: Promise<{ streamerSlug: string }>;
   searchParams: Promise<{
+    multi?: string;
+    product?: string;
+    design?: string;
+    preview?: string;
+    month?: string;
+    status?: string;
     admin?: string;
     q?: string;
     tab?: string;
@@ -99,6 +113,8 @@ type PageProps = {
     // 정가 탭 하위 유형(팬 표시 방식 subtabs 일 때): sig | event | server
     sfk?: string;
     w?: string;
+    // P1 시안 비교 스위치(2026-08-26): "b"=방송국 옆방 레이아웃(무커스텀·팬 화면 한정)
+    layout?: string;
   }>;
 };
 
@@ -307,7 +323,8 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
-  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w } = await searchParams;
+  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w, layout, month, status, design, preview, product, multi } = await searchParams;
+  const selectedDesign = designId("ref-u");
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
   // 옛 옷장 탭 주소(?tab=wardrobe[&w=컷id]) → 독립 화면으로 이동(8/12 탭 제거).
@@ -342,6 +359,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
               : "delivery";
 
   const result = await loadStreamerState(streamerSlug);
+  const monthlyAssignmentsPromise = result.ok && !isAdminMode && ((result.state.fanDeliveryReflect ?? "off") !== "off")
+    ? getFanDeliveryAssignmentsBySlug(streamerSlug).catch(() => null) : Promise.resolve([]);
   // 화면 제목용 표시 이름 — 슬러그는 주소 전용, 제목은 콘솔에서 입력한 이름(한글 가능).
   // 상태 로딩 실패 시(연결 안내 화면)만 슬러그로 폴백.
   const streamerName = (result.ok && result.state.displayName?.trim()) || streamerSlug;
@@ -408,6 +427,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       (showcase.bannerUrl || showcase.posterUrls?.some(Boolean) || showcase.noticeText?.trim()),
   );
   const showcaseOn = !isAdminMode && (showcaseContent || hasProbRail);
+  // P1 시안 B("방송국 옆방") 비교 스위치 — 무커스텀(쇼케이스 없음) 팬 화면에서만 켠다.
+  const layoutB = false;
   const posterItems = showcaseOn
     ? (showcase?.posterUrls ?? []).map((url, i) => ({ url, i })).filter((p) => Boolean(p.url))
     : [];
@@ -417,9 +438,14 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const noticeFontLink = noticeFontHref(noticeFont);
 
   // 블록 배치(스트리머별): 포스터/확률표/공지를 어느 슬롯에 둘지. 내용 없는 블록은 표시 안 함.
-  const fanLayout = (result.ok ? result.state.fanLayout : undefined) ?? DEFAULT_FAN_LAYOUT;
+  const fanLayout = normalizeFanLayout((result.ok ? result.state.fanLayout : undefined) ?? DEFAULT_FAN_LAYOUT);
   const blockPresent: Record<FanLayoutBlock, boolean> = {
-    posters: posterItems.length > 0,
+    poster0: posterItems.some(p=>p.i===0),
+    poster1: posterItems.some(p=>p.i===1),
+    poster2: posterItems.some(p=>p.i===2),
+    poster3: posterItems.some(p=>p.i===3),
+    poster4: posterItems.some(p=>p.i===4),
+
     reveal: revealTables.length > 0,
     notice: Boolean(showcaseOn && noticeText),
   };
@@ -432,11 +458,12 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
 
   // 블록 1개 렌더. horizontal=가로 슬롯(시트 위/아래) — 포스터는 가로 나열로 변형.
   const renderFanBlock = (block: FanLayoutBlock, horizontal: boolean) =>
-    block === "posters" ? (
+    block.startsWith("poster") ? (
       <ShowcasePosterRail
-        key="posters"
+        key={block}
+        gallery={posterItems.map(({url,i})=>({url:url as string,i,link:showcase?.posterLinks?.[i]??null}))}
         horizontal={horizontal}
-        posters={posterItems.map(({ url, i }) => ({
+        posters={posterItems.filter(p=>p.i===Number(block.slice(-1))).map(({ url, i }) => ({
           url: url as string,
           i,
           link: showcase?.posterLinks?.[i] ?? null,
@@ -457,9 +484,11 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const sheetAccess = isAdminMode ? await sheetAdminAccessState(streamerSlug) : null;
   const sheetAdminLocked = sheetAccess === "locked" || sheetAccess === "blocked-unconfigured";
 
+  const monthlyAssignments = await monthlyAssignmentsPromise;
   return (
     <main
       className={styles.page}
+      data-design={selectedDesign}
       style={themeStyle}
       data-fx={theme.fx?.background}
       data-glass={theme.fx?.glass ? "1" : undefined}
@@ -482,19 +511,21 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             )}
           </section>
         ) : null}
-        <header className={styles.cover}>
-          <div className={styles.coverTop}>
-            <div>
-              <h1 className={styles.coverName}>{sheetTitle}</h1>
+        {layoutB ? null : (
+          <header className={styles.cover}>
+            <div className={styles.coverTop}>
+              <div>
+                <h1 className={styles.coverName}>{sheetTitle}</h1>
+              </div>
+              <a
+                className={styles.adminTab}
+                href={isAdminMode ? `/${streamerSlug}` : `/${streamerSlug}?admin=1`}
+              >
+                {isAdminMode ? "팬 화면으로" : "관리자"}
+              </a>
             </div>
-            <a
-              className={styles.adminTab}
-              href={isAdminMode ? `/${streamerSlug}` : `/${streamerSlug}?admin=1`}
-            >
-              {isAdminMode ? "팬 화면으로" : "관리자"}
-            </a>
-          </div>
-        </header>
+          </header>
+        )}
 
         {isAdminMode && sheetAdminLocked ? (
           <SheetAdminGate
@@ -506,6 +537,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
           <ConnectionNotice reason={result.reason} slug={streamerSlug} />
         ) : isAdminMode ? (
           <AdminPanel
+            integratedMonth={normalizeMonth(month)}
             state={result.state}
             activeAdminTab={activeAdminTab}
             showcase={showcase}
@@ -533,6 +565,12 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 activeTab={activeTab}
                 activeRoulette={rtab ?? ""}
                 activeSigKind={sfk ?? ""}
+                activeMonth={normalizeMonth(month)}
+                monthlyStatus={status === "remaining" || status === "done" ? status : "all"}
+                monthlyAssignments={monthlyAssignments}
+                design={selectedDesign}
+                activeProduct={product ?? ""}
+                activeMonths={multi ?? ""}
                 excludedNames={fanCouponExcluded}
                 coupons={fanCoupons}
                 showCouponTab={showCouponTab}
@@ -554,10 +592,20 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             activeTab={activeTab}
             activeRoulette={rtab ?? ""}
             activeSigKind={sfk ?? ""}
+                activeMonth={normalizeMonth(month)}
+                monthlyStatus={status === "remaining" || status === "done" ? status : "all"}
+                monthlyAssignments={monthlyAssignments}
+                design={selectedDesign}
+                activeProduct={product ?? ""}
+                activeMonths={multi ?? ""}
             excludedNames={fanCouponExcluded}
             coupons={fanCoupons}
             showCouponTab={showCouponTab}
             wardrobeItems={wardrobeVisibleItems}
+            layoutB={layoutB}
+            sheetTitle={sheetTitle}
+            streamerName={streamerName}
+            stationLink={showcase?.bannerLink ?? null}
           />
         )}
       </div>
@@ -931,65 +979,6 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
   return tables;
 }
 
-// 배송 진행(처리 수량)을 팬 표시용으로 합산: (현재보유자 fanId, 상품명) → 배송완료 수량.
-// 팬 화면은 세트(33/330)·확률 구분 없이 상품명으로 합쳐 보여주므로 배송 수량도 같은 기준으로 합산한다.
-function buildProcessedByFanItem(state: StreamerState): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const d of state.deliveryProgress ?? []) {
-    const n = Math.max(0, Math.floor(Number(d.processedCount) || 0));
-    if (n <= 0) continue;
-    const key = `${normalizeAccountId(d.fanId)}@@${d.itemName}`;
-    map.set(key, (map.get(key) ?? 0) + n);
-  }
-  return map;
-}
-
-// 배송 반영을 팬 뷰어 요약에 적용한다.
-// remaining     : (a) 남은 개수(당첨−배송완료), 다 배송된 상품/시청자는 제외.
-// remaining_done : (b) 남은 개수 + 다 배송되면 사라지지 않고 "배송완료(done)"로 남김.
-// mark          : (c) 총량 유지 + delivered(배송완료 수량) 표시 부여.
-function applyDeliveryToSummaries(
-  viewers: ViewerSummary[],
-  processed: Map<string, number>,
-  mode: FanDeliveryReflect,
-): ViewerSummary[] {
-  if (mode === "off" || processed.size === 0) return viewers;
-  const out: ViewerSummary[] = [];
-  for (const v of viewers) {
-    const items: AggItem[] = [];
-    for (const it of v.items) {
-      const delivered = processed.get(`${v.fanId}@@${it.itemName}`) ?? 0;
-      if (delivered <= 0) {
-        items.push(it);
-        continue;
-      }
-      if (mode === "mark") {
-        items.push({ ...it, delivered });
-        continue;
-      }
-      const remaining = it.count - delivered;
-      if (remaining > 0) {
-        items.push({ ...it, count: remaining });
-      } else if (mode === "remaining_done") {
-        // 다 배송됨: 개수 0으로 두되 "배송완료"로 남긴다.
-        items.push({ ...it, count: 0, done: true });
-      }
-      // remaining(a): 다 배송된 상품은 아예 제외(위 조건에서 push 안 함).
-    }
-    // remaining(a): 남은 상품이 없으면 시청자 자체를 숨긴다.
-    if (mode === "remaining" && items.length === 0) continue;
-    const total = items.reduce((s, it) => s + it.count, 0);
-    if (mode === "remaining" && total <= 0) continue;
-    out.push({
-      ...v,
-      items,
-      total: mode === "mark" ? v.total : total,
-      maxProb: items.reduce((m, it) => Math.max(m, it.probability), 0),
-    });
-  }
-  return out;
-}
-
 // 보유 현황을 룰렛별로 나눈다. 보관 룰렛 상품은 팬 화면에서 제외, 매칭 안 되는 상품은 "기타".
 function partitionHoldingsByRoulette(
   holdings: ViewerHolding[],
@@ -1078,7 +1067,13 @@ function computeFanRouletteTabs(
   state: StreamerState,
   index: RouletteIndex,
   excludedNames: Set<string>,
+  month = "all",
+  status: MonthlyStatus = "all",
+  assignments: DeliveryAssignment[] | null = [],
 ): {
+  previewRows: DesignRow[];
+  monthlyHoldings: ViewerHolding[];
+  allocated: ReturnType<typeof allocateFanMonthly>;
   showRouletteTabs: boolean;
   groups: Array<{ key: string; label: string; viewers: ViewerSummary[] }>;
   allEntries: UpboEntry[];
@@ -1100,18 +1095,18 @@ function computeFanRouletteTabs(
     computeHoldings(allEntries, state.itemEvents ?? []),
     excludedNames,
   );
-  const deliveryMode: FanDeliveryReflect = state.fanDeliveryReflect ?? "off";
-  const processed = deliveryMode === "off" ? new Map<string, number>() : buildProcessedByFanItem(state);
+  const deliveryMode: FanDeliveryReflect = assignments === null ? "off" : state.fanDeliveryReflect ?? "off";
+  const hiddenHoldings = filterHoldingsByExcludedNames(computeHoldings(filterEntriesByCatalogUsage((state.upboEntries ?? []).filter(e => !visibleUnderArchive(e)), state.catalogs ?? [], state.catalogUsageByVersion), state.itemEvents ?? []), excludedNames);
+  const allocated = allocateFanMonthly(holdings, deliveryMode === "off" ? [] : state.deliveryProgress ?? [], assignments ?? [], hiddenHoldings);
   const parts = partitionHoldingsByRoulette(holdings, index);
-  const toViewers = (h: ViewerHolding[]) =>
-    applyDeliveryToSummaries(holdingsToViewerSummaries(h, { mergeSets: true }), processed, deliveryMode);
+  const monthlyHoldings = flattenGroups(parts);
+  const toViewers = (h: ViewerHolding[]) => monthlyViewers(h, allocated, month, deliveryMode, status);
   const showRouletteTabs = shouldShowRouletteTabs(parts);
   const groups = showRouletteTabs
-    ? parts
-        .map((p) => ({ key: p.key, label: p.label, viewers: toViewers(p.holdings) }))
-        .filter((g) => g.viewers.length > 0)
-    : [{ key: "__all__", label: "전체", viewers: toViewers(flattenGroups(parts)) }];
-  return { showRouletteTabs, groups, allEntries, deliveryMode };
+    ? parts.map(p => ({ key: p.key, label: p.label, viewers: toViewers(p.holdings) }))
+    : [{ key: "__all__", label: "전체", viewers: toViewers(monthlyHoldings) }];
+  const previewRows: DesignRow[] = parts.flatMap(p => p.holdings.flatMap(owner => owner.items.map((item,i) => ({id:`${p.key}:${owner.key}:${item.entryId}:${i}`,ownerId:owner.key,ownerName:owner.ownerName,item:item.itemName,group:p.label,month:monthOf(item),date:monthOf(item)!=="etc" && item.recordedAtMs ? new Intl.DateTimeFormat("ko-KR",{timeZone:"Asia/Seoul",year:"2-digit",month:"2-digit",day:"2-digit"}).format(item.recordedAtMs) : "기타",timestamp:item.recordedAtMs,quantity:item.quantity,done:allocated.get(item)??0}))));
+  return { showRouletteTabs, groups, allEntries, deliveryMode, monthlyHoldings, allocated, previewRows };
 }
 
 // ── 정가 유형(시그니처/이벤트/서버, sy 2026-08-09) 팬 표시 조각들 ──
@@ -1222,10 +1217,20 @@ function FanView({
   activeTab,
   activeRoulette,
   activeSigKind,
+  activeMonth,
+  monthlyStatus,
+  monthlyAssignments,
+  design,
+  activeProduct,
+  activeMonths,
   excludedNames,
   coupons,
   showCouponTab,
   wardrobeItems,
+  layoutB,
+  sheetTitle,
+  streamerName,
+  stationLink,
 }: {
   state: StreamerState;
   slug: string;
@@ -1234,22 +1239,38 @@ function FanView({
   activeRoulette: string;
   // 정가 탭 하위 유형(표시 방식 subtabs 일 때만 의미). sig | event | server 외 값 = sig.
   activeSigKind: string;
+  activeMonth: string;
+  monthlyStatus: MonthlyStatus;
+  monthlyAssignments: DeliveryAssignment[] | null;
+  design: DesignId;
+  activeProduct: string;
+  activeMonths: string;
   excludedNames: Set<string>;
   coupons: CouponBalance[] | null;
   showCouponTab: boolean;
   // 옷장 공개 컷(버튼 노출 판단 + 건수 표시용) — 옷장 화면 자체는 /slug/wardrobe 독립 페이지.
   wardrobeItems: WardrobeState["items"];
+  // P1 시안 B 비교 스위치(?layout=b, 무커스텀 팬 화면 한정) — 신원 카드+룰렛 레일 레이아웃.
+  layoutB?: boolean;
+  sheetTitle?: string;
+  streamerName?: string;
+  // 방송국 링크 = 배너 링크 실데이터 재사용(showcase.bannerLink). 없으면 버튼 자체를 안 그린다(가짜 버튼 금지).
+  stationLink?: string | null;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
-  const { showRouletteTabs, groups: rouletteGroups, allEntries, deliveryMode } =
-    computeFanRouletteTabs(state, rouletteIndex, excludedNames);
+  const { showRouletteTabs, groups: computedRouletteGroups, allEntries, deliveryMode, monthlyHoldings, allocated, previewRows } =
+    computeFanRouletteTabs(state, rouletteIndex, excludedNames, activeTab === "ledger" && !["l3","l4","h4"].includes(design) ? activeMonth : "all", activeTab === "ledger" ? monthlyStatus : "all", monthlyAssignments);
+  const months = [...new Set(monthlyHoldings.flatMap(v => v.items.map(monthOf)))].filter(m => m !== "etc").sort().reverse();
+  const monthlyTotal = summarizeMonth(monthlyHoldings, allocated, activeMonth);
+  const etcTotal = summarizeMonth(monthlyHoldings, allocated, "etc");
+  const monthSuffix = `&design=${design}${design === "h4" && activeMonths ? `&multi=${encodeURIComponent(activeMonths)}` : ""}${design === "h2" && activeProduct ? `&product=${encodeURIComponent(activeProduct)}` : ""}${activeMonth !== "all" ? `&month=${encodeURIComponent(activeMonth)}` : ""}${deliveryMode !== "off" && monthlyStatus !== "all" ? `&status=${monthlyStatus}` : ""}`;
   // 쿠폰 탭 이름(스트리머별, 표시 전용) — 기본 "쿠폰", 꾸폰·마일리지처럼 바꿔 부를 수 있다.
   const couponLabel = state.couponTabLabel?.trim() || "쿠폰";
   // 쿠폰 탭: 잔액을 시청자 단위로 묶고 검색어로 거른다(0=사용완료도 표시). null=조회 실패(빈 장부와 구분).
   const couponLoadFailed = activeTab === "coupon" && coupons === null;
   const couponViewersAll = activeTab === "coupon" && coupons ? groupFanCoupons(coupons) : [];
   const couponViewersShown = filterFanCoupons(couponViewersAll, searchQuery);
-  const activeGroup = rouletteGroups.find((g) => g.key === activeRoulette) ?? rouletteGroups[0];
+  const {visibleGroups:rouletteGroups,activeGroup}=selectVisibleFanTabs(computedRouletteGroups,activeRoulette);
   const rtabKey = activeGroup?.key;
   const activeViewers = activeGroup?.viewers ?? [];
   // 정가 탭 유형 구분(시그니처/이벤트/서버, sy 2026-08-09). subtabs 모드면 하위 탭으로 걸러 보여준다.
@@ -1269,9 +1290,11 @@ function FanView({
   const fixedTabViewers = useSigSubtabs
     ? filterViewersBySigKind(activeViewers, sigByCount, sigKind)
     : activeViewers;
-  const shownViewers = filterViewers(onFixedTab ? fixedTabViewers : activeViewers, searchQuery);
+  const productOptions = [...new Set((onFixedTab ? fixedTabViewers : activeViewers).flatMap(v=>v.items.map(i=>i.itemName)))].sort();
+  const searchedViewers = filterViewers(onFixedTab ? fixedTabViewers : activeViewers, searchQuery);
+  const shownViewers = design === "h2" && activeProduct ? searchedViewers.flatMap(v=>{const items=v.items.filter(i=>i.itemName===activeProduct); return items.length ? [{...v,items,total:items.reduce((n,i)=>n+i.count,0)}] : [];}) : searchedViewers;
   // 전체 고유 시청자 수(여러 룰렛에 걸친 사람은 1명으로).
-  const allViewerCount = new Set(rouletteGroups.flatMap((g) => g.viewers.map((v) => v.key))).size;
+  const allViewerCount = new Set(monthlyHoldings.map(v => v.key)).size;
 
   // 획득 기록은 원본 entry 기반(전체 기록, 룰렛탭·배송반영과 무관).
   const history = historyRows(allEntries, searchQuery);
@@ -1280,7 +1303,7 @@ function FanView({
   const pillBaseViewers = onFixedTab ? fixedTabViewers : activeViewers;
   const countPill =
     activeTab === "ledger"
-      ? searchQuery
+      ? ["l3","l4","h4"].includes(design) ? `전체 ${pillBaseViewers.length}명` : searchQuery
         ? `${shownViewers.length} / ${pillBaseViewers.length}명`
         : `${pillBaseViewers.length}명`
       : activeTab === "coupon"
@@ -1293,8 +1316,46 @@ function FanView({
           ? `${history.length} / ${allEntries.length}건`
           : `${allEntries.length}건`;
 
+  const monthPicker = <MonthPicker products={productOptions} product={activeProduct} design={design} slug={slug} months={months} selected={activeMonth} status={deliveryMode === "off" ? "all" : monthlyStatus} reflect={deliveryMode !== "off"} total={monthlyTotal} etcCount={etcTotal.quantity} unavailable={monthlyAssignments === null} query={{ q: searchQuery, rtab: activeRoulette, sfk: activeSigKind, layout: layoutB ? "b" : "" }} />;
+
   return (
-    <>
+    <div className={styles.fanLayout} data-layout-b={layoutB ? "" : undefined}>
+      {layoutB ? (
+        <aside className={styles.idRail}>
+          <div className={styles.idCard}>
+            <div className={styles.idAvatar} aria-hidden="true">
+              {(streamerName || slug).trim().charAt(0)}
+            </div>
+            <div className={styles.idText}>
+              <h1 className={styles.idName}>{sheetTitle || `${streamerName || slug} 업보시트`}</h1>
+            </div>
+            {stationLink ? (
+              <a className={styles.stationBtn} href={stationLink} target="_blank" rel="noopener noreferrer">
+                방송국 가기 ↗
+              </a>
+            ) : null}
+            <a className={styles.idAdminLink} href={`/${slug}?admin=1`}>
+              관리자
+            </a>
+          </div>
+          {showRouletteTabs && rouletteGroups.length > 0 ? (
+            <div className={styles.railRoulette}>
+              <h2>룰렛별 기록</h2>
+              {rouletteGroups.map((g) => (
+                <a
+                  key={g.key}
+                  className={styles.railRouletteItem}
+                  href={`/${slug}?layout=b&rtab=${encodeURIComponent(g.key)}${monthSuffix}`}
+                >
+                  <span>{g.label}</span>
+                  <span className={styles.railRouletteCount}>{g.viewers.length}명</span>
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+      <div className={styles.fanMain}>
       <section className={styles.finder} aria-labelledby="finder-title">
         <div className={styles.finderTitleRow}>
           <h2 id="finder-title">내 업보 확인</h2>
@@ -1306,7 +1367,14 @@ function FanView({
             </a>
           ) : null}
         </div>
+        <div className={design === "h1" ? styles.searchWithMonth : undefined}>
         <form className={styles.searchRow} action={`/${slug}`} method="get">
+          {activeMonth !== "all" ? <input type="hidden" name="month" value={activeMonth} /> : null}
+          <input type="hidden" name="design" value={design} />
+          {design === "h4" && activeMonths ? <input type="hidden" name="multi" value={activeMonths} /> : null}
+          {design === "h2" && activeProduct ? <input type="hidden" name="product" value={activeProduct} /> : null}
+          {monthlyStatus !== "all" && deliveryMode !== "off" ? <input type="hidden" name="status" value={monthlyStatus} /> : null}
+          {layoutB ? <input type="hidden" name="layout" value="b" /> : null}
           {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
           {activeTab === "coupon" ? <input type="hidden" name="tab" value="coupon" /> : null}
           {activeTab === "ledger" && showRouletteTabs && rtabKey ? (
@@ -1323,11 +1391,34 @@ function FanView({
           />
           <button type="submit">찾기</button>
         </form>
-        <p className={styles.summaryLine}>
-          시청자 {allViewerCount}명 · 자동 기록 {allEntries.length}건 · 기준{" "}
-          {state.settings?.thresholdPercent ?? "—"}% · 마지막 반영 {fmtKst(lastApplied)}
-          {deliveryMode !== "off" ? " · 배송 반영 중" : ""}
-        </p>
+        {activeTab === "ledger" && design === "h1" ? monthPicker : null}
+        </div>
+        {/* P1 기본값 라운드(2026-08-26): 잔글씨 상태줄 → 시간 도장 + 숫자 띠.
+            멜론 차트 문법 — 기준 시각이 이 장부의 제목급 신뢰 신호(원정 27). 전부 실데이터. */}
+        {isRefinedDesign(design) ? <p className={styles.compactStats}>시청자 {allViewerCount}명 · 자동 기록 {allEntries.length}건 · 기준 {state.settings?.thresholdPercent ?? '—'}% · 마지막 반영 {lastApplied ? fmtKst(lastApplied) : '대기 중'}{deliveryMode !== 'off' ? ' · 배송 반영 중' : ''}</p> : <>
+        <div className={styles.stampTimeRow}>
+          <span className={styles.stampTimeValue}>
+            {lastApplied ? `${fmtKst(lastApplied)} 기준` : "아직 첫 반영 전"}
+          </span>
+          {lastApplied ? <span className={styles.stampTimeLabel}>마지막 자동 반영</span> : null}
+          {deliveryMode !== "off" ? <span className={styles.stampTimeLabel}>배송 반영 중</span> : null}
+        </div>
+        <div className={styles.statStrip}>
+          <div>
+            <b>{allEntries.length}</b>
+            <span>자동 기록</span>
+          </div>
+          <div>
+            <b>{allViewerCount}</b>
+            <span>시청자</span>
+          </div>
+          <div>
+            <b>{state.settings?.thresholdPercent ?? "—"}%</b>
+            <span>기록 기준</span>
+          </div>
+        </div>
+        </>}
+        {activeTab === "ledger" && design === "l2" ? monthPicker : null}
       </section>
 
       <div className={styles.perforation} aria-hidden="true" />
@@ -1337,29 +1428,31 @@ function FanView({
           <div className={styles.tabs} role="tablist">
             <a
               className={activeTab === "ledger" ? styles.tabActiveLink : styles.tabLink}
-              href={tabHref(slug, "ledger", searchQuery)}
+              href={`${tabHref(slug, "ledger", searchQuery)}${searchQuery ? monthSuffix : monthSuffix.replace(/^&/, "?")}`}
             >
               업보 목록
             </a>
             <a
               className={activeTab === "history" ? styles.tabActiveLink : styles.tabLink}
-              href={tabHref(slug, "history", searchQuery)}
+              href={`${tabHref(slug, "history", searchQuery)}${monthSuffix}`}
             >
               획득 기록
             </a>
             {showCouponTab ? (
               <a
                 className={activeTab === "coupon" ? styles.tabActiveLink : styles.tabLink}
-                href={tabHref(slug, "coupon", searchQuery)}
+                href={`${tabHref(slug, "coupon", searchQuery)}${monthSuffix}`}
               >
                 {couponLabel}
               </a>
             ) : null}
           </div>
-          <span className={styles.countPill}>{countPill}</span>
+          <div className={styles.monthHeaderTools}>{activeTab === "ledger" && design === "l1" ? monthPicker : null}<span className={styles.countPill}>{countPill}</span></div>
         </div>
 
-        {activeTab === "ledger" && showRouletteTabs ? (
+        {activeTab === "ledger" && design !== "l1" && design !== "l2" && design !== "h1" && design !== "h2" && !["l3","l4","h3","h4"].includes(design) ? monthPicker : null}
+
+        {activeTab === "ledger" && showRouletteTabs && rouletteGroups.length > 0 ? (
           <div className={styles.rouletteTabs} role="tablist" aria-label="룰렛 구분">
             {rouletteGroups.map((g) => (
               <a
@@ -1367,7 +1460,7 @@ function FanView({
                 className={g.key === rtabKey ? styles.rouletteTabActive : styles.rouletteTab}
                 href={`/${slug}?rtab=${encodeURIComponent(g.key)}${
                   searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
-                }`}
+                }${monthSuffix}`}
               >
                 {g.label}
                 <span className={styles.rouletteTabCount}>{g.viewers.length}</span>
@@ -1378,11 +1471,11 @@ function FanView({
 
         {useSigSubtabs ? (
           <div className={styles.sigSubTabs} role="tablist" aria-label="정가 유형 구분">
-            {(["sig", "event", "server"] as SignatureKind[]).map((k) => {
+            {(["sig", "event", "server"] as SignatureKind[]).filter(k=>filterViewersBySigKind(activeViewers,sigByCount,k).length>0).map((k) => {
               const n = filterViewersBySigKind(activeViewers, sigByCount, k).length;
               const href = `/${slug}?rtab=__fixed__&sfk=${k}${
                 searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
-              }`;
+              }${monthSuffix}`;
               return (
                 <a key={k} className={k === sigKind ? styles.sigSubTabActive : styles.sigSubTab} href={href}>
                   {SIG_KIND_NAME[k]}
@@ -1392,6 +1485,8 @@ function FanView({
             })}
           </div>
         ) : null}
+
+        {activeTab === "ledger" && design === "h2" ? monthPicker : null}
 
         {onFixedTab ? (
           <SignatureRail
@@ -1419,8 +1514,15 @@ function FanView({
         ) : (
           <HistoryTable rows={history} searchQuery={searchQuery} hideIds={state.fanIdHidden === true} />
         )}
+        {activeTab === "ledger" && ["l3","h3"].includes(design) ? monthPicker : null}
+        {/* P1 기본값 라운드: 페이지가 "-"나 표에서 뚝 끊기지 않게 끝맺음 한 줄(전부 실데이터·실설명). */}
+        <div className={styles.sheetFooter}>
+          <span>위플랩 룰렛 기록에서 자동으로 반영되는 공개 장부예요.</span>
+          {lastApplied ? <span>마지막 반영 {fmtKst(lastApplied)}</span> : null}
+        </div>
       </section>
-    </>
+      </div>
+    </div>
   );
 }
 
@@ -1429,9 +1531,18 @@ function FanView({
 // ID를 어떤 자리에도 노출하지 않고 자리표시 문구만 보여준다(8/10 프라이버시 결정 유지).
 function FanNameLabel({ nickname, fanId, hideIds }: { nickname: string; fanId: string; hideIds?: boolean }) {
   const name = (nickname ?? "").trim();
-  if (name) return <>{name}</>;
-  if (!hideIds && fanId) return <span className={styles.nameFallbackId}>{fanId}</span>;
-  return <span className={styles.nameFallbackNone}>닉네임 미등록</span>;
+  if (!name) {
+    if (!hideIds && fanId) return <span className={styles.nameFallbackId}>{fanId}</span>;
+    return <span className={styles.nameFallbackNone}>닉네임 미등록</span>;
+  }
+  // P1 기본값 라운드(2026-08-26): 계정ID 열을 없애고 이름 아래 잔글씨로 통합 —
+  // 모바일에서 표 최소 폭이 줄어 건수까지 한 화면에 들어온다. 숨김 시트는 이름만.
+  return (
+    <>
+      {name}
+      {!hideIds && fanId ? <span className={styles.nameCellId}>{fanId}</span> : null}
+    </>
+  );
 }
 
 function LedgerTable({
@@ -1468,7 +1579,6 @@ function LedgerTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            {hideIds ? null : <th>계정ID</th>}
             <th>업보</th>
             <th className={styles.countCol}>건수</th>
           </tr>
@@ -1480,7 +1590,6 @@ function LedgerTable({
               <td className={styles.nameCell}>
                 <FanNameLabel nickname={v.fanNickname} fanId={v.fanId} hideIds={hideIds} />
               </td>
-              {hideIds ? null : <td className={styles.idCell}>{v.fanId}</td>}
               <td>
                 <div className={styles.upboCell}>
                   {v.items.map((it) => {
@@ -1575,7 +1684,6 @@ function HistoryTable({
         <thead>
           <tr>
             <th className={styles.nameCol}>닉네임</th>
-            {hideIds ? null : <th>계정ID</th>}
             <th>상품</th>
             {showSet ? <th className={styles.probCol}>룰렛 세트</th> : null}
             <th className={styles.donateCol} title="위플랩 표시시간 원문">
@@ -1589,7 +1697,6 @@ function HistoryTable({
               <td className={styles.nameCell}>
                 <FanNameLabel nickname={e.fanNickname} fanId={e.fanId} hideIds={hideIds} />
               </td>
-              {hideIds ? null : <td className={styles.idCell}>{e.fanId}</td>}
               <td>
                 {/* 확률 열은 표기하지 않는다(sy 확정 2026-07-07). 정가는 배지+이름(접두어 제거)으로 표기. */}
                 {e.sourceKey.startsWith("fixed:") ? (
@@ -1624,7 +1731,11 @@ function AdminPanel({
   showcase,
   coupon,
   wardrobe,
+  deliveryOnly = false,
+  integratedMonth,
 }: {
+  deliveryOnly?: boolean;
+  integratedMonth?: string;
   state: StreamerState;
   activeAdminTab: AdminTab;
   showcase: ShowcaseState | null;
@@ -1800,6 +1911,25 @@ function AdminPanel({
     return out.map((t) => ({ ...t, label: uiPrefs.tabLabels[t.id]?.trim() || t.label }));
   })();
 
+  if(deliveryOnly)return <DeliveryManager
+              slug={state.slug}
+              viewers={viewers}
+              fixedEntries={entries
+                .filter((e) => e.sourceKey.startsWith("fixed:"))
+                .map((e) => ({
+                  sourceKey: e.sourceKey,
+                  fanId: e.fanId,
+                  fanNickname: e.fanNickname,
+                  itemName: e.itemName,
+                  donateTimeText: e.donateTimeText,
+                }))}
+              fixedPriceNotes={state.fixedPriceNotes ?? []}
+              archivedHiddenCounts={archivedHiddenCounts}
+              hiddenViewers={hiddenViewerSummaries}
+              archivedFanAt={deliveryArchivedFanAt}
+              entryCount={(state.upboEntries ?? []).length}
+            />;
+
   return (
     <AdminCollapseProvider slug={state.slug} initialCollapsed={uiPrefs.collapsed}>
     <div className={styles.adminPanel}>
@@ -1860,6 +1990,7 @@ function AdminPanel({
         <CollapsibleCard sectionKey="delivery" title="배송 관리">
           {/* 시청자가 전부 숨김 처리된 경우에도 "숨긴 시청자" 탭(복구)은 열 수 있어야 한다. */}
           {viewers.length > 0 || hiddenViewerSummaries.length > 0 ? (
+            <IntegratedDelivery month={integratedMonth ?? "all"}>
             <DeliveryManager
               slug={state.slug}
               viewers={viewers}
@@ -1878,6 +2009,7 @@ function AdminPanel({
               archivedFanAt={deliveryArchivedFanAt}
               entryCount={(state.upboEntries ?? []).length}
             />
+            </IntegratedDelivery>
           ) : (
             <p className={styles.fieldHint}>아직 배송할 업보 기록이 없어요.</p>
           )}
@@ -2109,7 +2241,12 @@ function AdminPanel({
               slug={state.slug}
               initial={state.fanLayout}
               available={{
-                posters: Boolean(showcase?.posterUrls?.some(Boolean)),
+                poster0: Boolean(showcase?.posterUrls?.[0]),
+                poster1: Boolean(showcase?.posterUrls?.[1]),
+                poster2: Boolean(showcase?.posterUrls?.[2]),
+                poster3: Boolean(showcase?.posterUrls?.[3]),
+                poster4: Boolean(showcase?.posterUrls?.[4]),
+
                 reveal: Boolean(
                   state.fanRevealEnabled && (state.rouletteConfig ?? []).some((c) => c.revealed),
                 ),
