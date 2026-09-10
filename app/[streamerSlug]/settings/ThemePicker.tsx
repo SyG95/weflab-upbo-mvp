@@ -34,9 +34,9 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
-        setMsg({ kind: "err", text: data?.error || "저장 실패 — 다시 시도해 주세요." });
+        setMsg({ kind: "err", text: data?.error || "저장하지 못했어요. 다시 시도해 주세요." });
       } else {
-        setMsg({ kind: "ok", text: "저장됐어요! 업보시트에 바로 적용됩니다." });
+        setMsg({ kind: "ok", text: "저장했어요." });
       }
     } catch {
       setMsg({ kind: "err", text: "네트워크 오류로 저장하지 못했어요." });
@@ -52,12 +52,10 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
           href={`/${slug}?admin=1&atab=settings`}
           style={{ fontSize: 13, opacity: 0.7, textDecoration: "none", color: "inherit" }}
         >
-          ← 업보시트 관리자 설정으로
+          ← 관리자 설정
         </a>
-        <h1 className={styles.title}>업보시트 테마 고르기</h1>
-        <p className={styles.sub}>
-          <b>{slug}</b> 업보시트의 전체 분위기를 골라보세요. 표·기능은 그대로, 색·느낌만 바뀝니다.
-        </p>
+        <h1 className={styles.title}>테마 설정</h1>
+
       </header>
 
       <div className={styles.layout}>
@@ -74,7 +72,7 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
               <span className={styles.cardLabel}>
                 {t.emoji} {t.label}
               </span>
-              <span className={styles.cardBlurb}>{t.blurb}</span>
+
             </button>
           ))}
         </div>
@@ -88,7 +86,7 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
 
       <section className={styles.customPanel} aria-label="직접 색상 설정">
         <div className={styles.paletteHeader}>
-          <div><span className={styles.paletteEyebrow}>MY PALETTE</span><h2>내 색상으로 꾸미기<span className={styles.paletteDot} /></h2><p>좋아하는 세 가지 색으로, 나만의 시트를 완성해 보세요.</p></div>
+          <div><h2>직접 색상 고르기</h2></div>
           <label className={styles.paletteToggle}><input type="checkbox" role="switch" aria-label="직접 색상 사용" checked={Boolean(custom)} onChange={e=>setCustom(e.target.checked?colors:null)}/><span className={styles.toggleTrack} aria-hidden="true"/><span>{custom?'사용 중':'사용 안 함'}</span></label>
         </div>
         {custom ? <>
@@ -97,19 +95,19 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
               <input aria-label={['배경색 선택','카드색 선택','포인트색 선택'][i]} type="color" value={/^#[0-9a-f]{6}$/i.test(colors[key])?colors[key]:'#ffffff'} onChange={e=>setColors({...colors,[key]:e.target.value})}/>
               <span className={styles.editColor} aria-hidden="true">↗ 색상 선택</span>
             </label>
-            <div className={styles.colorMeta}><div><label htmlFor={`palette-${key}`}>{['배경색','카드색','포인트색'][i]}</label><span>{['시트 전체의 분위기','내용이 담기는 바탕','버튼과 강조에 쓰는 색'][i]}</span></div><input id={`palette-${key}`} aria-label={['배경색 HEX','카드색 HEX','포인트색 HEX'][i]} spellCheck={false} autoComplete="off" value={colors[key]} maxLength={7} aria-invalid={!/^#[0-9a-f]{6}$/i.test(colors[key])} onChange={e=>setColors({...colors,[key]:e.target.value})}/></div>
+            <div className={styles.colorMeta}><div><label htmlFor={`palette-${key}`}>{['배경색','카드색','포인트색'][i]}</label></div><input id={`palette-${key}`} aria-label={['배경색 HEX','카드색 HEX','포인트색 HEX'][i]} spellCheck={false} autoComplete="off" value={colors[key]} maxLength={7} aria-invalid={!/^#[0-9a-f]{6}$/i.test(colors[key])} onChange={e=>setColors({...colors,[key]:e.target.value})}/></div>
           </div>)}</div>
           <div className={styles.paletteFooter}>
-            <div className={styles.paletteStatus} role="status" data-valid={safe && valid}><span className={styles.statusMark} aria-hidden="true">{safe && valid?'✓':'!'}</span><div><strong>{!valid?'색상 코드를 확인해 주세요':!safe?'배경과 카드의 밝기를 맞춰 주세요':'편안하게 읽을 수 있는 조합이에요'}</strong><span>{!valid?'#RRGGBB 형식으로 입력할 수 있어요.':!safe?'둘 다 밝게 또는 어둡게 바꾸면 글자가 선명해져요.':'글자와 버튼의 명도는 자동으로 맞춰드려요.'}</span></div></div>
+            {(!valid || !safe) && <div className={styles.paletteStatus} role="status"><span className={styles.statusMark} aria-hidden="true">!</span><div><strong>{!valid?'색상 코드를 확인해 주세요.':'글자가 잘 안 보여요.'}</strong><span>{!valid?'#FFFFFF처럼 6자리로 입력해 주세요.':'배경과 카드를 둘 다 밝게 또는 어둡게 바꿔 주세요.'}</span></div></div>}
             <button className={styles.paletteReset} type="button" onClick={()=>{setCustom(null);setMsg(null);}}>↶ 기본 테마로 복원</button>
           </div>
-          {safe && valid && palette && <details className={styles.paletteDetails}><summary>색상 적용 정보</summary><p>본문 최소 대비 {palette.ratio.toFixed(2)}:1 · 포인트 적용색 <span style={{background:palette.accent}} aria-hidden="true"/> {palette.accent.toUpperCase()}<br/>가독성을 위해 입력한 포인트색의 명도가 보정될 수 있어요. 커스텀 배경은 정적으로 표시됩니다.</p></details>}
-        </> : <div className={styles.paletteOff}><span aria-hidden="true">◯ ◯ ◯</span><p>지금은 선택한 기본 테마를 사용하고 있어요.<br/>스위치를 켜면 직접 색상을 조합할 수 있어요.</p></div>}
-        <p className={styles.paletteHint}>변경한 색상은 미리보기에만 적용돼요. 마음에 들면 아래에서 저장해 주세요.</p>
+          {safe && valid && palette && palette.accent.toLowerCase() !== colors.accent.toLowerCase() && <p className={styles.paletteHint}>글자가 잘 보이도록 포인트색을 <b>{palette.accent.toUpperCase()}</b>로 조정했어요.</p>}
+        </> : <div className={styles.paletteOff}><p>기본 테마를 사용 중이에요.</p></div>}
+        <p className={styles.paletteHint}>저장을 눌러야 시트에 반영돼요.</p>
       </section>
       <div className={styles.saveBar}>
         <button className={styles.saveBtn} type="button" onClick={save} disabled={saving || !safe}>
-          {saving ? "저장 중…" : `${theme.emoji} 이 테마로 저장`}
+          {saving ? "저장 중…" : "저장"}
         </button>
       </div>
       {msg ? <p className={msg.kind === "ok" ? styles.ok : styles.err}>{msg.text}</p> : null}
