@@ -394,6 +394,8 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
     void saveThemes(ids.map((id) => ({ id, name: byId.get(id)!.name })));
   };
 
+  const displayExample = state.items.find((item) => item.featured && !item.hidden) ?? state.items.find((item) => !item.hidden) ?? state.items[0];
+
   // ── 렌더 ─────────────────────────────────────────────────
 
   return (
@@ -401,13 +403,27 @@ export default function WardrobeManager({ slug, initial }: { slug: string; initi
       <details className={styles.classificationSettings}>
         <summary>옷장 이름 · 이미지 표시</summary>
         <div className={styles.displaySettings}>
-          <label>옷장 이름<input aria-label="옷장 이름" value={displayTitle} maxLength={60} placeholder="비워두면 기본 이름을 사용해요" disabled={locked} onChange={(e) => setDisplayTitle(e.target.value)} /></label>
+          <div className={styles.displayNameRow}>
+            <label>옷장 이름<input aria-label="옷장 이름" value={displayTitle} maxLength={60} placeholder="기본 이름" disabled={locked} onChange={(e) => setDisplayTitle(e.target.value)} /></label>
+            <button className={styles.displaySave} type="button" disabled={locked} onClick={() => void postAction({ action: "display", settings: { title: displayTitle, imageFit: displayFit } })}>저장</button>
+          </div>
           <fieldset disabled={locked}><legend>이미지 표시</legend><div className={styles.displayOptions}>
-            <button type="button" aria-pressed={displayFit === "contain"} onClick={() => setDisplayFit("contain")}>전체 이미지 보기</button>
-            <button type="button" aria-pressed={displayFit === "cover"} onClick={() => setDisplayFit("cover")}>꽉 채우기</button>
+            {(["contain", "cover"] as const).map((fit) => (
+              <button key={fit} type="button" aria-pressed={displayFit === fit} onClick={() => setDisplayFit(fit)}>
+                <span className={styles.displayExample} aria-hidden="true">
+                  {displayExample ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={displayExample.url} alt="" loading="lazy" style={{ objectFit: fit }} />
+                  ) : (
+                    <svg viewBox="0 0 160 90" preserveAspectRatio={fit === "contain" ? "xMidYMid meet" : "xMidYMid slice"}>
+                      <rect width="160" height="90" fill="#cce7f3" /><circle cx="120" cy="25" r="12" fill="#ffe5a2" /><path d="M0 90 50 25 110 90Z" fill="#85b6a4" /><path d="M55 90 110 45 160 90Z" fill="#b0cdb2" />
+                    </svg>
+                  )}
+                </span>
+                <span className={styles.displayOptionLabel}>{fit === "contain" ? "전체 이미지" : "꽉 채우기"}<span className={styles.displayCheck} aria-hidden="true">{displayFit === fit ? "✓" : ""}</span></span>
+              </button>
+            ))}
           </div></fieldset>
-          <p>{displayFit === "contain" ? "사진 전체가 보여요. 비율에 따라 여백이 생겨요." : "카드를 빈틈없이 채워요. 사진 가장자리가 잘릴 수 있어요."}</p>
-          <button type="button" disabled={locked} onClick={() => void postAction({ action: "display", settings: { title: displayTitle, imageFit: displayFit } })}>옷장 표시 저장</button>
         </div>
       </details>
       <details className={styles.classificationSettings}>

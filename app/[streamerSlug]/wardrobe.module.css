@@ -791,14 +791,25 @@
 .classificationSettings summary { cursor: pointer; font-weight: 600; }
 .classificationSettings p { margin: 10px 0; font-size: 13px; }
 
-.displaySettings { display: grid; gap: 14px; padding: 18px 0 4px; max-width: 560px; }
-.displaySettings > label { display: grid; gap: 8px; }
-.displaySettings input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--paper-line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; }
+.displaySettings { display: grid; gap: 12px; padding: 14px 0 2px; max-width: 460px; font-size: 13px; }
+.displayNameRow { display: flex; align-items: flex-end; gap: 8px; }
+.displayNameRow > label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.displaySettings input { width: 100%; height: 36px; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--paper-line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
 .displaySettings fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-.displaySettings legend { margin-bottom: 8px; }
-.displayOptions { display: flex; gap: 6px; }
-.displaySettings button { padding: 10px 14px; border: 1px solid var(--paper-line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
-.displayOptions button { flex: 1; }
-.displayOptions button[aria-pressed="true"] { border-color: var(--stamp); box-shadow: inset 0 0 0 1px var(--stamp); color: var(--stamp); }
-.displaySettings p { margin: 0; font-size: 14px; }
+.displaySettings legend { margin-bottom: 7px; }
+.displayOptions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.displaySettings button { border: 1px solid var(--paper-line); border-radius: 9px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.displaySettings .displaySave { height: 36px; padding: 0 16px; color: var(--stamp); font-weight: 600; }
+.displayOptions > button { display: flex; align-items: center; gap: 12px; padding: 9px; text-align: left; min-width: 0; }
+.displayOptions > button[aria-pressed="true"] { border-color: var(--stamp); box-shadow: inset 0 0 0 1px var(--stamp); }
+.displayExample { display: block; flex-shrink: 0; width: 66px; height: 88px; border-radius: 5px; overflow: hidden; background: repeating-conic-gradient(#c8c8c818 0% 25%,transparent 0% 50%) 0 0/12px 12px; border: 1px solid var(--paper-line); }
+.displayExample img,.displayExample svg { display: block; width: 100%; height: 100%; }
+.displayOptionLabel { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
+.displayCheck { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--paper-line); display: grid; place-items: center; font-size: 11px; }
+.displayOptions > button[aria-pressed="true"] .displayCheck { background: var(--stamp); color: var(--surface); border-color: var(--stamp); }
 .displaySettings button:disabled { opacity: .5; cursor: default; }
+.displaySettings button:focus-visible,.displaySettings input:focus-visible { outline: 2px solid var(--stamp); outline-offset: 3px; }
+@media (max-width: 480px) {
+  .displayOptions > button { flex-direction: column; gap: 8px; }
+  .displayOptionLabel { display: flex; align-items: center; gap: 8px; }
+}
