@@ -87,13 +87,25 @@ export default function ThemePicker({ slug, initialThemeId, initialCustom }: { s
       </div>
 
       <section className={styles.customPanel} aria-label="직접 색상 설정">
-        <h2>내 색상으로 꾸미기</h2>
-        <label><input type="checkbox" checked={Boolean(custom)} onChange={e=>setCustom(e.target.checked?colors:null)} /> 직접 색상 사용</label>
-        <p>HEX 코드 또는 색상 선택기로 지정하세요. 입력 중에는 미리보기만 바뀌며 저장 버튼을 눌러야 반영됩니다.</p>
-        {custom && <><div className={styles.colorFields}>{(['background','surface','accent'] as const).map((key,i)=><label key={key}>{['배경색','카드색','포인트색'][i]}<input aria-label={['배경색 선택','카드색 선택','포인트색 선택'][i]} type="color" value={/^#[0-9a-f]{6}$/i.test(colors[key])?colors[key]:'#ffffff'} onChange={e=>setColors({...colors,[key]:e.target.value})}/><input aria-label={['배경색 HEX','카드색 HEX','포인트색 HEX'][i]} value={colors[key]} maxLength={7} onChange={e=>setColors({...colors,[key]:e.target.value})}/></label>)}</div>
-        <p role="status">{!valid?'#RRGGBB 형식으로 입력해 주세요.':!safe?'배경과 카드의 밝기 차이가 커 글자를 읽기 어려워요. 둘 다 밝게 또는 어둡게 조정해 주세요.':`본문 최소 대비 ${palette!.ratio.toFixed(2)}:1 · 읽기 좋은 글자색을 자동 적용합니다.`}</p>
-        {safe && palette && <p>포인트 적용색 <b>{palette.accent}</b> — 입력한 색이 흐리면 글자와 버튼을 위해 명도를 보정합니다. 커스텀 배경은 정적으로 표시합니다.</p>}
-        <button type="button" onClick={()=>{setCustom(null);setMsg(null);}}>선택한 기본 테마로 복원</button></>}
+        <div className={styles.paletteHeader}>
+          <div><span className={styles.paletteEyebrow}>MY PALETTE</span><h2>내 색상으로 꾸미기<span className={styles.paletteDot} /></h2><p>좋아하는 세 가지 색으로, 나만의 시트를 완성해 보세요.</p></div>
+          <label className={styles.paletteToggle}><input type="checkbox" role="switch" aria-label="직접 색상 사용" checked={Boolean(custom)} onChange={e=>setCustom(e.target.checked?colors:null)}/><span className={styles.toggleTrack} aria-hidden="true"/><span>{custom?'사용 중':'사용 안 함'}</span></label>
+        </div>
+        {custom ? <>
+          <div className={styles.colorFields}>{(['background','surface','accent'] as const).map((key,i)=><div className={styles.colorTile} key={key}>
+            <label className={styles.colorWell} style={{background:/^#[0-9a-f]{6}$/i.test(colors[key])?colors[key]:'#eeeeee'}}>
+              <input aria-label={['배경색 선택','카드색 선택','포인트색 선택'][i]} type="color" value={/^#[0-9a-f]{6}$/i.test(colors[key])?colors[key]:'#ffffff'} onChange={e=>setColors({...colors,[key]:e.target.value})}/>
+              <span className={styles.editColor} aria-hidden="true">↗ 색상 선택</span>
+            </label>
+            <div className={styles.colorMeta}><div><label htmlFor={`palette-${key}`}>{['배경색','카드색','포인트색'][i]}</label><span>{['시트 전체의 분위기','내용이 담기는 바탕','버튼과 강조에 쓰는 색'][i]}</span></div><input id={`palette-${key}`} aria-label={['배경색 HEX','카드색 HEX','포인트색 HEX'][i]} spellCheck={false} autoComplete="off" value={colors[key]} maxLength={7} aria-invalid={!/^#[0-9a-f]{6}$/i.test(colors[key])} onChange={e=>setColors({...colors,[key]:e.target.value})}/></div>
+          </div>)}</div>
+          <div className={styles.paletteFooter}>
+            <div className={styles.paletteStatus} role="status" data-valid={safe && valid}><span className={styles.statusMark} aria-hidden="true">{safe && valid?'✓':'!'}</span><div><strong>{!valid?'색상 코드를 확인해 주세요':!safe?'배경과 카드의 밝기를 맞춰 주세요':'편안하게 읽을 수 있는 조합이에요'}</strong><span>{!valid?'#RRGGBB 형식으로 입력할 수 있어요.':!safe?'둘 다 밝게 또는 어둡게 바꾸면 글자가 선명해져요.':'글자와 버튼의 명도는 자동으로 맞춰드려요.'}</span></div></div>
+            <button className={styles.paletteReset} type="button" onClick={()=>{setCustom(null);setMsg(null);}}>↶ 기본 테마로 복원</button>
+          </div>
+          {safe && valid && palette && <details className={styles.paletteDetails}><summary>색상 적용 정보</summary><p>본문 최소 대비 {palette.ratio.toFixed(2)}:1 · 포인트 적용색 <span style={{background:palette.accent}} aria-hidden="true"/> {palette.accent.toUpperCase()}<br/>가독성을 위해 입력한 포인트색의 명도가 보정될 수 있어요. 커스텀 배경은 정적으로 표시됩니다.</p></details>}
+        </> : <div className={styles.paletteOff}><span aria-hidden="true">◯ ◯ ◯</span><p>지금은 선택한 기본 테마를 사용하고 있어요.<br/>스위치를 켜면 직접 색상을 조합할 수 있어요.</p></div>}
+        <p className={styles.paletteHint}>변경한 색상은 미리보기에만 적용돼요. 마음에 들면 아래에서 저장해 주세요.</p>
       </section>
       <div className={styles.saveBar}>
         <button className={styles.saveBtn} type="button" onClick={save} disabled={saving || !safe}>
