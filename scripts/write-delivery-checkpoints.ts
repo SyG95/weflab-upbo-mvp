@@ -20,11 +20,12 @@ type Ev = { id?: string; payload: unknown; created_at: string };
 const sortItems = <T extends { fanId: string; itemKey: string }>(items: T[]) =>
   [...items].sort((a, b) => `${a.fanId}@@${a.itemKey}`.localeCompare(`${b.fanId}@@${b.itemKey}`));
 
-const streamers = await LIB.supabaseFetchAll<{ id: string; slug: string }>(`/${prefix}streamers?select=id,slug&order=created_at.asc`);
+const streamers = await LIB.supabaseFetchAll<{ id: string; slug: string; created_at?: string }>(`/${prefix}streamers?select=id,slug,created_at`, LIB.PAGE_CREATED_ASC);
 let written = 0, skipped = 0, failed = 0;
 for (const s of streamers) {
   const events = await LIB.supabaseFetchAll<Ev>(
-    `/${prefix}audit_logs?streamer_id=eq.${s.id}&action=eq.delivery_progress_updated&select=id,payload,created_at&order=created_at.asc,id.asc`,
+    `/${prefix}audit_logs?streamer_id=eq.${s.id}&action=eq.delivery_progress_updated&select=id,payload,created_at`,
+    LIB.PAGE_CREATED_ASC,
   );
   const full = sortItems(LIB.foldDeliveryEvents(events));
   const line = `${s.slug.padEnd(14)} 이벤트 ${String(events.length).padStart(4)} 항목 ${String(full.length).padStart(4)}`;

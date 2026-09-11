@@ -62,7 +62,7 @@ function diffKeys(a: unknown, b: unknown, path = "", out: string[] = []): string
   return out;
 }
 
-const streamers = await NEW.supabaseFetchAll<{ id: string; slug: string }>(`/${prefix}streamers?select=id,slug&order=created_at.asc`);
+const streamers = await NEW.supabaseFetchAll<{ id: string; slug: string; created_at?: string }>(`/${prefix}streamers?select=id,slug,created_at`, NEW.PAGE_CREATED_ASC);
 const targets = only.length ? streamers.filter((s) => only.includes(s.slug)) : streamers;
 const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
 let okA = 0, okB = 0, failA = 0, failB = 0;
@@ -71,7 +71,8 @@ const report: string[] = [];
 for (const s of targets) {
   // A) 체크포인트 성질 검증(실제 이벤트)
   const events = await NEW.supabaseFetchAll<Ev>(
-    `/${prefix}audit_logs?streamer_id=eq.${s.id}&action=eq.delivery_progress_updated&select=id,payload,created_at&order=created_at.asc,id.asc`,
+    `/${prefix}audit_logs?streamer_id=eq.${s.id}&action=eq.delivery_progress_updated&select=id,payload,created_at`,
+    NEW.PAGE_CREATED_ASC,
   );
   const full = sortItems(NEW.foldDeliveryEvents(events));
   const splits = new Set<number>([0, events.length, Math.floor(events.length / 2), events.findIndex((e) => e.created_at >= cutoff)].filter((n) => n >= 0));

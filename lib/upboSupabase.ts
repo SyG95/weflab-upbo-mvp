@@ -299,17 +299,37 @@ async function supabaseCount(path: string): Promise<number> {
 }
 
 // ★운영 Supabase(PostgREST)는 요청당 최대 1,000행만 돌려준다(max-rows, 2026-09-11 실측: limit=5000 을
-// 붙여도 1,000행). 그 이상이 필요한 목록은 offset 으로 페이지를 순회해 전부 받는다.
-// path 에는 limit/offset 을 넣지 말 것(여기서 붙인다). order 는 호출부가 고정해야 페이지가 안정된다.
-// id 가 있는 행은 페이지 경계에서 중복될 수 있어(순회 중 삽입) id 기준으로 한 번만 담는다.
+// 붙여도 1,000행). 그 이상이 필요한 목록은 "키셋 커서"로 페이지를 이어 받는다 — 마지막 행의 정렬 키 값을
+// 다음 페이지의 필터로 쓰므로, 순회 도중 앞쪽 행이 지워지거나(수동기록 삭제·되돌리기) 새 행이 끼어들어도
+// 건너뜀·중복이 없다(offset 방식의 약점). path 에는 order/limit/offset 을 넣지 말 것(여기서 붙인다).
+// keys 의 열은 select 에 포함돼야 하고(값을 읽어 커서를 만든다) 마지막 키는 유일해야 한다(id 권장).
+// 커서 문법(PostgREST): desc 2키 = or=(k1.lt.v1,and(k1.eq.v1,k2.lt.v2)), asc 는 gt.
+export type PageKey = { column: string; dir: "asc" | "desc" };
+export const PAGE_CREATED_ASC: PageKey[] = [{ column: "created_at", dir: "asc" }, { column: "id", dir: "asc" }];
+export const PAGE_CREATED_DESC: PageKey[] = [{ column: "created_at", dir: "desc" }, { column: "id", dir: "desc" }];
 const SUPABASE_PAGE = 1000;
 const SUPABASE_MAX_PAGES = 200; // 20만 행 상한 — 폭주 방지용, 도달 시 이후 페이지는 버린다(경고 로그).
-export async function supabaseFetchAll<T extends { id?: string }>(path: string): Promise<T[]> {
+export function keysetCursorFilter(keys: PageKey[], last: Record<string, unknown>): string | null {
+  const values = keys.map((k) => last[k.column]);
+  if (values.some((v) => v === null || v === undefined)) return null;
+  const enc = (v: unknown) => encodeURIComponent(String(v));
+  const branches: string[] = [];
+  keys.forEach((k, i) => {
+    const op = k.dir === "desc" ? "lt" : "gt";
+    const eqs = keys.slice(0, i).map((e, j) => `${e.column}.eq.${enc(values[j])}`);
+    const cmp = `${k.column}.${op}.${enc(values[i])}`;
+    branches.push(eqs.length ? `and(${[...eqs, cmp].join(",")})` : cmp);
+  });
+  return `or=(${branches.join(",")})`;
+}
+export async function supabaseFetchAll<T extends Record<string, unknown>>(path: string, keys: PageKey[]): Promise<T[]> {
   const joiner = path.includes("?") ? "&" : "?";
+  const order = keys.map((k) => `${k.column}.${k.dir}`).join(",");
   const out: T[] = [];
   const seen = new Set<string>();
+  let cursor: string | null = null;
   for (let page = 0; page < SUPABASE_MAX_PAGES; page += 1) {
-    const chunk = await supabaseFetch<T[]>(`${path}${joiner}offset=${page * SUPABASE_PAGE}&limit=${SUPABASE_PAGE}`);
+    const chunk = await supabaseFetch<T[]>(`${path}${joiner}${cursor ? `${cursor}&` : ""}order=${order}&limit=${SUPABASE_PAGE}`);
     for (const row of chunk) {
       const id = typeof row?.id === "string" ? row.id : null;
       if (id) {
@@ -319,6 +339,12 @@ export async function supabaseFetchAll<T extends { id?: string }>(path: string):
       out.push(row);
     }
     if (chunk.length < SUPABASE_PAGE) return out;
+    const next = keysetCursorFilter(keys, chunk[chunk.length - 1]);
+    if (!next) {
+      console.warn(`[supabaseFetchAll] 정렬 키에 null — 커서를 만들 수 없어 여기서 멈춤: ${path.slice(0, 80)}`);
+      return out;
+    }
+    cursor = next;
   }
   console.warn(`[supabaseFetchAll] 페이지 상한 도달: ${path.slice(0, 80)}`);
   return out;
@@ -846,7 +872,8 @@ async function getAllItemEvents(streamerId: string): Promise<ReturnType<typeof m
   try {
     // limit=20000 은 운영에서 1,000행에서 잘린다(max-rows) → 페이지 순회로 전량.
     const rows = await supabaseFetchAll<ItemEventRow>(
-      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&select=*&order=created_at.asc,id.asc`,
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&select=*`,
+      PAGE_CREATED_ASC,
     );
     return rows.map(mapItemEvent);
   } catch (error) {
@@ -905,7 +932,8 @@ export async function getStreamerState(slug: string) {
       `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.desc&limit=1`,
     ),
     supabaseFetchAll<UpboEntryRow>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc,id.desc`,
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*`,
+      PAGE_CREATED_DESC,
     ),
     getAllItemEvents(streamer.id),
     specialRuleOverrides(streamer.id),
@@ -1014,13 +1042,16 @@ export async function getAdminDashboardSource(slug: string) {
     ),
     // 검증실 전용: 배치·기록·원본 전량이 필요하다 → 1,000행 max-rows 를 넘기기 위해 페이지 순회(2026-09-11).
     supabaseFetchAll<BatchRow>(
-      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.asc,id.asc`,
+      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*`,
+      [{ column: "applied_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
     supabaseFetchAll<UpboEntryRow>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc,id.desc`,
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*`,
+      PAGE_CREATED_DESC,
     ),
     supabaseFetchAll<RawImportRow & { id?: string }>(
-      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,captured_at,saved_at,raw&order=saved_at.asc,id.asc`,
+      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,captured_at,saved_at,raw`,
+      [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
   ]);
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
@@ -1519,12 +1550,24 @@ async function latestDeliveryCheckpoint(streamerId: string): Promise<DeliveryChe
 
 function deliveryEventsPath(streamerId: string, since: string | null): string {
   const sinceFilter = since ? `&created_at=gt.${encodeURIComponent(since)}` : "";
-  return `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated${sinceFilter}&select=id,payload,created_at&order=created_at.asc,id.asc`;
+  return `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated${sinceFilter}&select=id,payload,created_at`;
+}
+
+// 체크포인트 이후를 읽을 때 coversThrough 보다 DELIVERY_CHECKPOINT_OVERLAP_MS 만큼 앞부터 읽는다.
+// 이유: 체크포인트가 이벤트를 읽은 뒤에 커밋된(그러나 created_at 은 그보다 이른) 저장이 있으면 그 이벤트가
+// 체크포인트에도 없고 "이후" 필터에도 안 걸려 사라진다(Codex 적대 리뷰 2026-09-11). 겹치는 구간의 이벤트를
+// 시간순으로 다시 접는 것은 멱등이다 — 체크포인트는 이미 그 이벤트들을 반영한 상태이고, 같은 순서로 다시
+// 적용하면 키별 마지막 값이 그대로다(tests/query-diet.test.ts "겹침 창 재적용 멱등").
+const DELIVERY_CHECKPOINT_OVERLAP_MS = 60_000;
+export function overlapSince(coversThrough: string): string {
+  const ms = Date.parse(coversThrough);
+  return Number.isFinite(ms) ? new Date(ms - DELIVERY_CHECKPOINT_OVERLAP_MS).toISOString() : coversThrough;
 }
 
 async function deliveryProgressFromAuditLogs(streamerId: string) {
   const checkpoint = await latestDeliveryCheckpoint(streamerId);
-  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, checkpoint?.coversThrough ?? null));
+  const since = checkpoint ? overlapSince(checkpoint.coversThrough) : null;
+  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, since), PAGE_CREATED_ASC);
   return foldDeliveryEvents(rows, checkpoint?.items ?? []);
 }
 
@@ -1533,7 +1576,7 @@ async function deliveryProgressFromAuditLogs(streamerId: string) {
 export async function writeDeliveryCheckpoint(
   streamerId: string,
 ): Promise<{ written: boolean; eventCount: number; itemCount: number; coversThrough: string | null; reason?: string }> {
-  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, null));
+  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, null), PAGE_CREATED_ASC);
   if (rows.length === 0) return { written: false, eventCount: 0, itemCount: 0, coversThrough: null, reason: "no-events" };
   const items = foldDeliveryEvents(rows);
   const coversThrough = rows[rows.length - 1].created_at;
@@ -1998,8 +2041,9 @@ export async function saveCatalogForStreamer(streamer: StreamerRow, capture: Cat
 async function existingSourceKeys(streamerId: string): Promise<Set<string>> {
   // limit=10000 은 운영에서 1,000행에서 잘린다(max-rows). 중복 삽입 자체는 DB unique(streamer_id,source_key)+
   // on_conflict 가 막지만, 판정 요약(record/duplicate 수)이 어긋나므로 전량을 페이지 순회로 읽는다.
-  const rows = await supabaseFetchAll<{ id?: string; source_key: string }>(
-    `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&select=id,source_key&order=created_at.asc,id.asc`,
+  const rows = await supabaseFetchAll<{ id?: string; source_key: string; created_at?: string }>(
+    `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&select=id,source_key,created_at`,
+    PAGE_CREATED_ASC,
   );
   return new Set(rows.map((row) => row.source_key));
 }
@@ -3811,8 +3855,9 @@ async function rejudgeContextForStreamer(streamer: StreamerRow) {
   const aliases = await itemAliasesForStreamer(streamer.id);
   const [rawRows, knownSourceKeys, specialItemRules] = await Promise.all([
     // 재판정 후보는 원본 전량이 필요하다(나월 8/24~28 복구 선례) → 1,000행 max-rows 를 넘기는 페이지 순회.
-    supabaseFetchAll<{ id?: string; batch_id: string | null; raw: Json }>(
-      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,saved_at,raw&order=saved_at.asc,id.asc`,
+    supabaseFetchAll<{ id?: string; batch_id: string | null; raw: Json; saved_at?: string | null }>(
+      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,saved_at,raw`,
+      [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
     existingSourceKeys(streamer.id),
     specialRulesForCatalog(streamer.id, catalogItems),
@@ -4842,8 +4887,9 @@ export function computeCouponAccruals(
 
 // 이미 자동 적립된 sourceKey 집합(재적립 2차 방어). created_by="auto" 이벤트의 note 에 심긴 참조를 읽는다.
 async function autoAccruedSourceKeys(streamerId: string): Promise<Set<string>> {
-  const rows = await supabaseFetch<Array<{ note: string | null }>>(
-    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=note&order=created_at.desc&limit=2000`,
+  const rows = await supabaseFetchAll<{ id?: string; note: string | null; created_at?: string }>(
+    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=id,note,created_at`,
+    PAGE_CREATED_DESC,
   );
   const out = new Set<string>();
   for (const row of rows) {
@@ -5231,13 +5277,15 @@ export function applyCancelledQuantity<T extends { entryId: string; effectiveCou
 //   전량 취소는 제외하고 부분 취소는 남은 수량만 센다(되돌려진 취소는 복원된 것으로 본다).
 async function recordEntriesForCouponBackfill(streamerId: string): Promise<CouponBackfillEntry[]> {
   const [rows, eventRows] = await Promise.all([
+    // 소급 대상(당첨 기록)·취소 이벤트·기적립 열쇠는 같은 범위(전량)로 읽어야 한다 — 어느 하나만 1,000행에서
+    // 잘리면 "이미 적립된 옛 당첨"이 새것으로 보여 이중 적립된다(Codex 적대 리뷰 2026-09-11).
     supabaseFetchAll<UpboEntryRow>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=in.(pending,completed)&select=*&order=created_at.desc,id.desc`,
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=in.(pending,completed)&select=*`,
+      PAGE_CREATED_DESC,
     ),
-    supabaseFetch<
-      Array<{ id: string; upbo_entry_id: string; event_type: string; quantity_delta?: number | null; after_json?: unknown }>
-    >(
-      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&event_type=in.(cancel,void,admin_adjustment)&select=id,upbo_entry_id,event_type,quantity_delta,after_json&limit=5000`,
+    supabaseFetchAll<{ id: string; upbo_entry_id: string; event_type: string; quantity_delta?: number | null; after_json?: unknown; created_at?: string }>(
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&event_type=in.(cancel,void,admin_adjustment)&select=id,upbo_entry_id,event_type,quantity_delta,after_json,created_at`,
+      PAGE_CREATED_ASC,
     ),
   ]);
   const cancelled = cancelledQuantityByEntry(
