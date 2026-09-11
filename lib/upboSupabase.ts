@@ -298,6 +298,32 @@ async function supabaseCount(path: string): Promise<number> {
   return Number.isFinite(total) ? total : 0;
 }
 
+// ★운영 Supabase(PostgREST)는 요청당 최대 1,000행만 돌려준다(max-rows, 2026-09-11 실측: limit=5000 을
+// 붙여도 1,000행). 그 이상이 필요한 목록은 offset 으로 페이지를 순회해 전부 받는다.
+// path 에는 limit/offset 을 넣지 말 것(여기서 붙인다). order 는 호출부가 고정해야 페이지가 안정된다.
+// id 가 있는 행은 페이지 경계에서 중복될 수 있어(순회 중 삽입) id 기준으로 한 번만 담는다.
+const SUPABASE_PAGE = 1000;
+const SUPABASE_MAX_PAGES = 200; // 20만 행 상한 — 폭주 방지용, 도달 시 이후 페이지는 버린다(경고 로그).
+export async function supabaseFetchAll<T extends { id?: string }>(path: string): Promise<T[]> {
+  const joiner = path.includes("?") ? "&" : "?";
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < SUPABASE_MAX_PAGES; page += 1) {
+    const chunk = await supabaseFetch<T[]>(`${path}${joiner}offset=${page * SUPABASE_PAGE}&limit=${SUPABASE_PAGE}`);
+    for (const row of chunk) {
+      const id = typeof row?.id === "string" ? row.id : null;
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      out.push(row);
+    }
+    if (chunk.length < SUPABASE_PAGE) return out;
+  }
+  console.warn(`[supabaseFetchAll] 페이지 상한 도달: ${path.slice(0, 80)}`);
+  return out;
+}
+
 function tokenHash(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -818,8 +844,9 @@ export async function resolveExtensionToken(rawToken: string): Promise<StreamerR
 // item_events 테이블이 아직 없으면 빈 배열로 안전하게 폴백한다.
 async function getAllItemEvents(streamerId: string): Promise<ReturnType<typeof mapItemEvent>[]> {
   try {
-    const rows = await supabaseFetch<ItemEventRow[]>(
-      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&select=*&order=created_at.asc&limit=20000`,
+    // limit=20000 은 운영에서 1,000행에서 잘린다(max-rows) → 페이지 순회로 전량.
+    const rows = await supabaseFetchAll<ItemEventRow>(
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamerId}&select=*&order=created_at.asc,id.asc`,
     );
     return rows.map(mapItemEvent);
   } catch (error) {
@@ -862,19 +889,27 @@ export async function getStreamerState(slug: string) {
   // 앞 병렬 묶음에 합쳐 순차 왕복을 줄인다(buildSpecialItemRuleCandidates 는 동기 계산).
   // 팬 설정 오버레이(OVERLAY_LATEST_ACTIONS)는 개별 limit=1 조회 9회를 한 번의 in.(...) 쿼리로
   // 합쳐 받아, 아래에서 action별 최신 1건으로 갈라 각 헬퍼에 주입한다(파싱은 기존과 동일).
-  const [catalogs, batches, entries, itemEvents, ruleOverrides, modifierState, usageByVersion, fixedPriceNotes, archivedFanAt, deliveryProgress, overlayRows] = await Promise.all([
+  // ★조회 다이어트(2026-09-11, 팬 페이지 1회 전송량 채루 822KB→약 1/4 목표, 화면·판정 불변):
+  //  - catalogs: 옛 버전은 groups 만(items·raw 제외 — 화면은 groups 와 건수 열만 쓴다), 최신 1버전만 전체.
+  //  - import_batches: 화면은 "마지막 반영 시각"(최신 1건)만 쓴다 → limit=1.
+  //  - upbo_entries: limit=5000 은 운영에서 1,000행에서 잘렸다(max-rows) → 페이지 순회로 전량.
+  //  - modifier_state: 팬·관리 화면은 두배권 대기 명단만 쓴다(처리 열쇠 5,000개 목록은 판정 전용) → JSON 경로 select.
+  const [catalogsSlim, catalogLatestRows, batches, entries, itemEvents, ruleOverrides, modifierState, usageByVersion, fixedPriceNotes, archivedFanAt, deliveryProgress, overlayRows] = await Promise.all([
     supabaseFetch<CatalogRow[]>(
-      `/${tableName("catalogs")}?streamer_id=eq.${streamer.id}&select=*&order=version.asc`,
+      `/${tableName("catalogs")}?streamer_id=eq.${streamer.id}&select=${CATALOG_SLIM_COLUMNS}&order=version.asc`,
+    ),
+    supabaseFetch<CatalogRow[]>(
+      `/${tableName("catalogs")}?streamer_id=eq.${streamer.id}&select=*&order=version.desc&limit=1`,
     ),
     supabaseFetch<BatchRow[]>(
-      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.asc`,
+      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.desc&limit=1`,
     ),
-    supabaseFetch<UpboEntryRow[]>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc&limit=5000`,
+    supabaseFetchAll<UpboEntryRow>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc,id.desc`,
     ),
     getAllItemEvents(streamer.id),
     specialRuleOverrides(streamer.id),
-    latestModifierState(streamer.id),
+    latestPendingModifierState(streamer.id),
     catalogUsageByVersion(streamer.id),
     fixedPriceNotesForStreamer(streamer.id),
     archivedFanAtForStreamer(streamer.id),
@@ -883,6 +918,8 @@ export async function getStreamerState(slug: string) {
       `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=in.(${OVERLAY_LATEST_ACTIONS.join(",")})&select=action,payload,created_at&order=created_at.desc`,
     ),
   ]);
+  // 옛 버전 행(groups 만)에 최신 1버전 전체 행을 끼워 넣는다 — mapCatalog 결과는 items 가 [] 인 옛 버전만 다르다.
+  const catalogs = mergeCatalogRows(catalogsSlim, catalogLatestRows[0]);
   // desc 정렬이므로 action별 처음 만난 행 = 최신 1건. 개별 limit=1 조회와 동일.
   const overlayLatest = new Map<string, OverlayLatestRow>();
   for (const row of overlayRows) {
@@ -975,14 +1012,15 @@ export async function getAdminDashboardSource(slug: string) {
     supabaseFetch<CatalogRow[]>(
       `/${tableName("catalogs")}?streamer_id=eq.${streamer.id}&select=*&order=version.asc`,
     ),
-    supabaseFetch<BatchRow[]>(
-      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.asc`,
+    // 검증실 전용: 배치·기록·원본 전량이 필요하다 → 1,000행 max-rows 를 넘기기 위해 페이지 순회(2026-09-11).
+    supabaseFetchAll<BatchRow>(
+      `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}&select=*&order=applied_at.asc,id.asc`,
     ),
-    supabaseFetch<UpboEntryRow[]>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc&limit=5000`,
+    supabaseFetchAll<UpboEntryRow>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&select=*&order=created_at.desc,id.desc`,
     ),
-    supabaseFetch<RawImportRow[]>(
-      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=batch_id,captured_at,saved_at,raw&order=saved_at.asc&limit=2000`,
+    supabaseFetchAll<RawImportRow & { id?: string }>(
+      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,captured_at,saved_at,raw&order=saved_at.asc,id.asc`,
     ),
   ]);
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
@@ -1409,32 +1447,128 @@ async function viewerNotesFromAuditLogs(streamerId: string) {
   return Array.from(latest.values());
 }
 
-async function deliveryProgressFromAuditLogs(streamerId: string) {
-  const rows = await supabaseFetch<Array<{ payload: unknown; created_at: string }>>(
-    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated&select=payload,created_at&order=created_at.asc&limit=5000`,
-  );
-  const latest = new Map<string, ReturnType<typeof mapDeliveryProgress>>();
+// ── 배송 처리 이력(audit_logs 폴백 레인) ─────────────────────────────────────
+// 운영엔 delivery_progress 테이블이 없어 저장이 delivery_progress_updated 이벤트로 append 된다.
+// 원래는 팬 페이지를 열 때마다 이 이벤트를 "처음부터 전부" 읽어 접었다(채루 152건·3.4MB, 게다가 1,000행
+// max-rows 에 걸리면 최신분이 잘림). 2026-09-11 체크포인트 도입: 같은 접기 함수가 만든 답을
+// delivery_progress_checkpoint 이벤트 한 장으로 남기고, 읽을 때는 "체크포인트 + 그 뒤 이벤트"만 접는다.
+// 정확성 근거 = fold(all) === fold(rest, fold(prefix)) (순수 함수 성질, tests/query-diet.test.ts).
+// 되돌리기 = 체크포인트 이벤트 삭제(없으면 자동으로 전량 접기).
+type DeliveryProgressItem = ReturnType<typeof mapDeliveryProgress>;
+type DeliveryEventRow = { id?: string; payload: unknown; created_at: string };
+const DELIVERY_CHECKPOINT_ACTION = "delivery_progress_checkpoint";
+// 체크포인트 이후 저장 이벤트가 이 개수 이상 쌓이면 저장 직후 새 체크포인트를 남긴다(읽기 비용 상한).
+const DELIVERY_CHECKPOINT_EVERY = Math.max(2, Math.floor(Number(process.env.UPBO_DELIVERY_CHECKPOINT_EVERY || 50)));
+
+function parseDeliveryItem(rawItem: unknown, fallbackUpdatedAt: string): DeliveryProgressItem | null {
+  const item = payloadObject(rawItem);
+  const fanId = normalizeAccountId(payloadString(item, "fanId"));
+  const itemKey = payloadString(item, "itemKey");
+  if (!fanId || !itemKey) return null;
+  return {
+    fanId,
+    fanNickname: payloadString(item, "fanNickname"),
+    itemKey,
+    itemName: payloadString(item, "itemName"),
+    probability: payloadNumber(item, "probability"),
+    amountRangeLabel: payloadString(item, "amountRangeLabel"),
+    processedCount: Math.max(0, Math.floor(payloadNumber(item, "processedCount"))),
+    updatedAt: payloadString(item, "updatedAt") || fallbackUpdatedAt,
+  };
+}
+
+// 이벤트를 시간순으로 접는다. initial = 체크포인트가 담은 상태(항목별 updatedAt 포함). 같은 키는 뒤가 이긴다.
+// 이벤트 항목의 updatedAt 은 항상 그 이벤트의 created_at(기존 동작 그대로 — 항목 안의 updatedAt 은 무시).
+export function foldDeliveryEvents(
+  rows: Array<{ payload: unknown; created_at: string }>,
+  initial: DeliveryProgressItem[] = [],
+): DeliveryProgressItem[] {
+  const latest = new Map<string, DeliveryProgressItem>();
+  for (const item of initial) latest.set(`${item.fanId}@@${item.itemKey}`, item);
   for (const row of rows) {
     const payload = payloadObject(row.payload);
     const rawItems = Array.isArray(payload.items) ? payload.items : [];
     for (const rawItem of rawItems) {
-      const item = payloadObject(rawItem);
-      const fanId = normalizeAccountId(payloadString(item, "fanId"));
-      const itemKey = payloadString(item, "itemKey");
-      if (!fanId || !itemKey) continue;
-      latest.set(`${fanId}@@${itemKey}`, {
-        fanId,
-        fanNickname: payloadString(item, "fanNickname"),
-        itemKey,
-        itemName: payloadString(item, "itemName"),
-        probability: payloadNumber(item, "probability"),
-        amountRangeLabel: payloadString(item, "amountRangeLabel"),
-        processedCount: Math.max(0, Math.floor(payloadNumber(item, "processedCount"))),
-        updatedAt: row.created_at,
-      });
+      const parsed = parseDeliveryItem(rawItem, row.created_at);
+      if (!parsed) continue;
+      latest.set(`${parsed.fanId}@@${parsed.itemKey}`, { ...parsed, updatedAt: row.created_at });
     }
   }
   return Array.from(latest.values()).filter((item) => item.processedCount > 0);
+}
+
+type DeliveryCheckpoint = { coversThrough: string; items: DeliveryProgressItem[]; createdAt: string };
+
+async function latestDeliveryCheckpoint(streamerId: string): Promise<DeliveryCheckpoint | null> {
+  const rows = await supabaseFetch<Array<{ payload: unknown; created_at: string }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${DELIVERY_CHECKPOINT_ACTION}&select=payload,created_at&order=created_at.desc&limit=1`,
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const payload = payloadObject(row.payload);
+  const coversThrough = payloadString(payload, "coversThrough");
+  if (!coversThrough) return null;
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const items: DeliveryProgressItem[] = [];
+  for (const rawItem of rawItems) {
+    const parsed = parseDeliveryItem(rawItem, row.created_at);
+    if (parsed) items.push(parsed);
+  }
+  return { coversThrough, items, createdAt: row.created_at };
+}
+
+function deliveryEventsPath(streamerId: string, since: string | null): string {
+  const sinceFilter = since ? `&created_at=gt.${encodeURIComponent(since)}` : "";
+  return `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated${sinceFilter}&select=id,payload,created_at&order=created_at.asc,id.asc`;
+}
+
+async function deliveryProgressFromAuditLogs(streamerId: string) {
+  const checkpoint = await latestDeliveryCheckpoint(streamerId);
+  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, checkpoint?.coversThrough ?? null));
+  return foldDeliveryEvents(rows, checkpoint?.items ?? []);
+}
+
+// 체크포인트 한 장 기록: 이벤트 전량을 접은 답 + 어디까지 접었는지(coversThrough=마지막 이벤트 created_at).
+// 기록 직전 "coversThrough 이하 이벤트 수"를 다시 세어 접은 수와 다르면(사이에 끼어든 이벤트) 기록하지 않는다.
+export async function writeDeliveryCheckpoint(
+  streamerId: string,
+): Promise<{ written: boolean; eventCount: number; itemCount: number; coversThrough: string | null; reason?: string }> {
+  const rows = await supabaseFetchAll<DeliveryEventRow>(deliveryEventsPath(streamerId, null));
+  if (rows.length === 0) return { written: false, eventCount: 0, itemCount: 0, coversThrough: null, reason: "no-events" };
+  const items = foldDeliveryEvents(rows);
+  const coversThrough = rows[rows.length - 1].created_at;
+  const recount = await supabaseCount(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated&created_at=lte.${encodeURIComponent(coversThrough)}&select=id`,
+  );
+  if (recount !== rows.length) {
+    return { written: false, eventCount: rows.length, itemCount: items.length, coversThrough, reason: `recount-mismatch:${recount}` };
+  }
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamerId,
+      action: DELIVERY_CHECKPOINT_ACTION,
+      actor: "system",
+      payload: { version: 1, coversThrough, eventCount: rows.length, items },
+    }),
+  });
+  return { written: true, eventCount: rows.length, itemCount: items.length, coversThrough };
+}
+
+// 저장 직후 호출: 마지막 체크포인트 이후 이벤트가 DELIVERY_CHECKPOINT_EVERY 이상이면 새 체크포인트를 남긴다.
+// 실패해도 저장 결과에는 영향 없음(읽기는 항상 옛 방식으로 폴백 가능).
+async function maybeCompactDeliveryCheckpoint(streamerId: string): Promise<void> {
+  try {
+    const checkpoint = await latestDeliveryCheckpoint(streamerId);
+    const sinceFilter = checkpoint ? `&created_at=gt.${encodeURIComponent(checkpoint.coversThrough)}` : "";
+    const pending = await supabaseCount(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.delivery_progress_updated${sinceFilter}&select=id`,
+    );
+    if (pending >= DELIVERY_CHECKPOINT_EVERY) await writeDeliveryCheckpoint(streamerId);
+  } catch (error) {
+    console.warn("[delivery-checkpoint] compaction skipped:", error instanceof Error ? error.message : String(error));
+  }
 }
 
 export async function getOperatorState(slug: string) {
@@ -1652,6 +1786,8 @@ export async function saveDeliveryProgress(
         },
       }),
     });
+    // 이벤트가 쌓이면 체크포인트로 접어 둔다(읽기 비용 상한). 실패는 저장 결과에 영향 없음.
+    await maybeCompactDeliveryCheckpoint(streamer.id);
   }
   return { saved: toWrite.length };
 }
@@ -1860,8 +1996,10 @@ export async function saveCatalogForStreamer(streamer: StreamerRow, capture: Cat
 }
 
 async function existingSourceKeys(streamerId: string): Promise<Set<string>> {
-  const rows = await supabaseFetch<Array<{ source_key: string }>>(
-    `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&select=source_key&limit=10000`,
+  // limit=10000 은 운영에서 1,000행에서 잘린다(max-rows). 중복 삽입 자체는 DB unique(streamer_id,source_key)+
+  // on_conflict 가 막지만, 판정 요약(record/duplicate 수)이 어긋나므로 전량을 페이지 순회로 읽는다.
+  const rows = await supabaseFetchAll<{ id?: string; source_key: string }>(
+    `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&select=id,source_key&order=created_at.asc,id.asc`,
   );
   return new Set(rows.map((row) => row.source_key));
 }
@@ -1880,6 +2018,32 @@ async function specialRuleOverrides(streamerId: string): Promise<SpecialItemRule
 
 async function specialRulesForCatalog(streamerId: string, catalogItems: NormalizedCatalogItem[]): Promise<SpecialItemRule[]> {
   return buildSpecialItemRuleCandidates(catalogItems, await specialRuleOverrides(streamerId));
+}
+
+// 팬·관리 화면용: 두배권 "대기 명단"만 읽는다(JSON 경로 select). 처리 열쇠 목록(최대 5,000개, 행당 40~70KB)은
+// 판정(apply/preview)에서만 필요하고 화면은 안 쓴다 — 페이지 로드 전송량을 줄이기 위한 분리(2026-09-11).
+async function latestPendingModifierState(streamerId: string): Promise<ModifierState> {
+  const rows = await supabaseFetch<Array<{ pending: unknown }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.modifier_state&select=pending:payload->modifierState->pendingByViewer&order=created_at.desc&limit=1`,
+  );
+  const pending = rows[0]?.pending;
+  const pendingByViewer =
+    pending && typeof pending === "object" && !Array.isArray(pending)
+      ? (pending as ModifierState["pendingByViewer"])
+      : {};
+  return { pendingByViewer, processedSourceKeys: [] };
+}
+
+// 팬·관리 화면용 카탈로그 슬림 조회: 옛 버전은 groups 까지만(items·raw 제외). 화면은 groups 와 건수 열만 쓰고,
+// items 는 최신 1버전(특수규칙 후보 계산)에서만 필요하다. raw 는 화면 어디서도 안 읽는다.
+const CATALOG_SLIM_COLUMNS =
+  "id,streamer_id,version,display_name,amount_set_label,source_url,captured_at,group_count,item_count,probability_sums,warnings,groups";
+export function mergeCatalogRows(slimRows: CatalogRow[], latestFull: CatalogRow | undefined): CatalogRow[] {
+  return slimRows.map((row) =>
+    latestFull && row.version === latestFull.version
+      ? latestFull
+      : ({ ...row, items: row.items ?? [], raw: row.raw ?? null } as CatalogRow),
+  );
 }
 
 async function latestModifierState(streamerId: string): Promise<ModifierState> {
@@ -3646,8 +3810,9 @@ async function rejudgeContextForStreamer(streamer: StreamerRow) {
   );
   const aliases = await itemAliasesForStreamer(streamer.id);
   const [rawRows, knownSourceKeys, specialItemRules] = await Promise.all([
-    supabaseFetch<Array<{ batch_id: string | null; raw: Json }>>(
-      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=batch_id,saved_at,raw&order=saved_at.asc&limit=2000`,
+    // 재판정 후보는 원본 전량이 필요하다(나월 8/24~28 복구 선례) → 1,000행 max-rows 를 넘기는 페이지 순회.
+    supabaseFetchAll<{ id?: string; batch_id: string | null; raw: Json }>(
+      `/${tableName("raw_imports")}?streamer_id=eq.${streamer.id}&type=eq.results&select=id,batch_id,saved_at,raw&order=saved_at.asc,id.asc`,
     ),
     existingSourceKeys(streamer.id),
     specialRulesForCatalog(streamer.id, catalogItems),
@@ -5066,8 +5231,8 @@ export function applyCancelledQuantity<T extends { entryId: string; effectiveCou
 //   전량 취소는 제외하고 부분 취소는 남은 수량만 센다(되돌려진 취소는 복원된 것으로 본다).
 async function recordEntriesForCouponBackfill(streamerId: string): Promise<CouponBackfillEntry[]> {
   const [rows, eventRows] = await Promise.all([
-    supabaseFetch<UpboEntryRow[]>(
-      `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=in.(pending,completed)&select=*&order=created_at.desc&limit=5000`,
+    supabaseFetchAll<UpboEntryRow>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamerId}&status=in.(pending,completed)&select=*&order=created_at.desc,id.desc`,
     ),
     supabaseFetch<
       Array<{ id: string; upbo_entry_id: string; event_type: string; quantity_delta?: number | null; after_json?: unknown }>

@@ -1,0 +1,169 @@
+// 조회 다이어트(2026-09-11) 순수 로직 테스트:
+//  1) foldDeliveryEvents — fold(all) === fold(rest, fold(prefix)) (체크포인트 정확성의 근거)
+//  2) mergeCatalogRows — 옛 버전 items=[]·최신 버전 전체 행
+//  3) supabaseFetchAll — 1,000행 페이지 순회·id 중복 제거·마지막 페이지 판정
+import test, { before } from "node:test";
+import assert from "node:assert/strict";
+
+// lib/upboSupabase 는 import 시점에 env 를 읽으므로(정적 import 는 호이스팅됨) before 훅에서 동적 import 한다.
+type Lib = typeof import("../lib/upboSupabase");
+let foldDeliveryEvents: Lib["foldDeliveryEvents"];
+let mergeCatalogRows: Lib["mergeCatalogRows"];
+let supabaseFetchAll: Lib["supabaseFetchAll"];
+before(async () => {
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "test-key";
+  const lib = await import("../lib/upboSupabase");
+  foldDeliveryEvents = lib.foldDeliveryEvents;
+  mergeCatalogRows = lib.mergeCatalogRows;
+  supabaseFetchAll = lib.supabaseFetchAll;
+});
+
+type Ev = { payload: unknown; created_at: string };
+
+function ev(at: string, items: Array<Record<string, unknown>>): Ev {
+  return { payload: { items }, created_at: at };
+}
+
+// 결정적 의사난수(재현 가능)
+function rng(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+function randomEvents(seed: number, n: number): Ev[] {
+  const r = rng(seed);
+  const fans = ["a1", "b2", "c3", "(d4)", "e5"];
+  const keys = ["치킨@@1@@33", "커피@@5@@33", "굿즈@@0.5@@330", "노래@@2@@33"];
+  const out: Ev[] = [];
+  const t0 = Date.parse("2026-08-01T00:00:00Z");
+  for (let i = 0; i < n; i += 1) {
+    const count = 1 + Math.floor(r() * 3);
+    const items: Array<Record<string, unknown>> = [];
+    for (let k = 0; k < count; k += 1) {
+      items.push({
+        fanId: fans[Math.floor(r() * fans.length)],
+        fanNickname: `닉${Math.floor(r() * 3)}`,
+        itemKey: keys[Math.floor(r() * keys.length)],
+        itemName: "상품",
+        probability: Math.floor(r() * 10),
+        amountRangeLabel: r() < 0.5 ? "33" : "330",
+        processedCount: Math.floor(r() * 4), // 0 포함(처리 취소)
+      });
+    }
+    // 옛 통째 스냅샷(8/26 이전)처럼 큰 이벤트도 섞는다
+    if (i % 7 === 0) for (const f of fans) items.push({ fanId: f, itemKey: keys[0], itemName: "상품", processedCount: Math.floor(r() * 2) });
+    out.push(ev(new Date(t0 + i * 60_000).toISOString(), items));
+  }
+  return out;
+}
+
+function sortItems<T extends { fanId: string; itemKey: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => `${a.fanId}@@${a.itemKey}`.localeCompare(`${b.fanId}@@${b.itemKey}`));
+}
+
+test("foldDeliveryEvents: 체크포인트 분할과 전량 접기가 같다(모든 분할점)", () => {
+  for (const seed of [1, 7, 42, 2026]) {
+    const all = randomEvents(seed, 60);
+    const full = sortItems(foldDeliveryEvents(all));
+    for (let split = 0; split <= all.length; split += 1) {
+      const checkpoint = foldDeliveryEvents(all.slice(0, split)); // 체크포인트 = 접은 답(>0 만)
+      const viaCheckpoint = sortItems(foldDeliveryEvents(all.slice(split), checkpoint));
+      assert.deepEqual(viaCheckpoint, full, `seed=${seed} split=${split}`);
+    }
+  }
+});
+
+test("foldDeliveryEvents: 체크포인트가 JSON 왕복(직렬화→역직렬화)돼도 같다", () => {
+  const all = randomEvents(9, 40);
+  const full = sortItems(foldDeliveryEvents(all));
+  const cp = JSON.parse(JSON.stringify(foldDeliveryEvents(all.slice(0, 25))));
+  const restored = sortItems(foldDeliveryEvents(all.slice(25), cp));
+  assert.deepEqual(restored, full);
+});
+
+test("foldDeliveryEvents: 항목 updatedAt 은 그 항목을 마지막으로 바꾼 이벤트 시각", () => {
+  const rows = [
+    ev("2026-08-01T00:00:00Z", [{ fanId: "a1", itemKey: "k", itemName: "x", processedCount: 1 }]),
+    ev("2026-08-02T00:00:00Z", [{ fanId: "b2", itemKey: "k", itemName: "x", processedCount: 2 }]),
+  ];
+  const full = foldDeliveryEvents(rows);
+  assert.equal(full.find((i) => i.fanId === "a1")?.updatedAt, "2026-08-01T00:00:00Z");
+  const cp = foldDeliveryEvents(rows.slice(0, 1));
+  const via = foldDeliveryEvents(rows.slice(1), cp);
+  assert.equal(via.find((i) => i.fanId === "a1")?.updatedAt, "2026-08-01T00:00:00Z");
+  assert.equal(via.find((i) => i.fanId === "b2")?.updatedAt, "2026-08-02T00:00:00Z");
+});
+
+test("foldDeliveryEvents: 0 으로 되돌린 항목은 결과에서 빠지고, 다시 올리면 돌아온다", () => {
+  const rows = [
+    ev("2026-08-01T00:00:00Z", [{ fanId: "a1", itemKey: "k", itemName: "x", processedCount: 3 }]),
+    ev("2026-08-02T00:00:00Z", [{ fanId: "a1", itemKey: "k", itemName: "x", processedCount: 0 }]),
+  ];
+  assert.equal(foldDeliveryEvents(rows).length, 0);
+  const cp = foldDeliveryEvents(rows); // 빈 체크포인트
+  const later = ev("2026-08-03T00:00:00Z", [{ fanId: "a1", itemKey: "k", itemName: "x", processedCount: 1 }]);
+  assert.equal(foldDeliveryEvents([later], cp)[0]?.processedCount, 1);
+});
+
+test("mergeCatalogRows: 옛 버전은 items=[]·raw=null, 최신 버전은 전체 행", () => {
+  const slim = [
+    { id: "c1", streamer_id: "s", version: 1, groups: [{ groupIndex: 0 }], item_count: 5 },
+    { id: "c2", streamer_id: "s", version: 2, groups: [{ groupIndex: 0 }], item_count: 6 },
+  ] as unknown as Parameters<typeof mergeCatalogRows>[0];
+  const full = { id: "c2", streamer_id: "s", version: 2, groups: [{ groupIndex: 0 }], items: [{ itemName: "x" }], raw: { r: 1 } } as unknown as Parameters<typeof mergeCatalogRows>[1];
+  const merged = mergeCatalogRows(slim, full);
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged[0].items, []);
+  assert.equal(merged[0].raw, null);
+  assert.equal(merged[1], full);
+  // 최신 행이 없으면(빈 카탈로그) 그대로
+  assert.equal(mergeCatalogRows(slim, undefined)[1].items instanceof Array, true);
+});
+
+test("supabaseFetchAll: 1,000행 단위 페이지 순회 + id 중복 제거 + 마지막 페이지에서 정지", async () => {
+  const total = 2503;
+  const rows = Array.from({ length: total }, (_, i) => ({ id: `r${i}`, n: i }));
+  const calls: string[] = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    calls.push(url);
+    const offset = Number(new URL(url).searchParams.get("offset") || 0);
+    const limit = Number(new URL(url).searchParams.get("limit") || 1000);
+    let page = rows.slice(offset, offset + limit);
+    // 2페이지 경계에서 삽입이 끼어든 상황 흉내: 첫 행이 앞 페이지 마지막과 중복
+    if (offset === 1000) page = [rows[999], ...page.slice(0, page.length - 1)];
+    return new Response(JSON.stringify(page), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const got = await supabaseFetchAll<{ id: string; n: number }>("/upbo_alpha_upbo_entries?streamer_id=eq.x&select=*&order=created_at.desc,id.desc");
+    assert.equal(calls.length, 3);
+    assert.ok(calls[0].includes("offset=0&limit=1000"));
+    assert.ok(calls[2].includes("offset=2000&limit=1000"));
+    const ids = new Set(got.map((r) => r.id));
+    assert.equal(ids.size, got.length, "id 중복 없음");
+    assert.equal(got.length, total - 1, "중복 1건 제거 후(경계 삽입 흉내로 1건은 밀려남)");
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("supabaseFetchAll: 첫 페이지가 1,000행 미만이면 요청 1회로 끝난다", async () => {
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify([{ id: "a" }, { id: "b" }]), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const got = await supabaseFetchAll<{ id: string }>("/t?select=*&order=id.asc");
+    assert.equal(calls, 1);
+    assert.equal(got.length, 2);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
