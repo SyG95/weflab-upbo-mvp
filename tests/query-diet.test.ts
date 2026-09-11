@@ -148,13 +148,13 @@ test("keysetCursorFilter: PostgREST or=() 커서 문법과 '+' 인코딩", async
   assert.equal(f, "or=(created_at.lt.2026-09-11T08%3A32%3A33.802%2B00%3A00,and(created_at.eq.2026-09-11T08%3A32%3A33.802%2B00%3A00,id.lt.abc))");
   const g = lib.keysetCursorFilter(lib.PAGE_CREATED_ASC, { created_at: "2026-01-01T00:00:00Z", id: "x" });
   assert.equal(g, "or=(created_at.gt.2026-01-01T00%3A00%3A00Z,and(created_at.eq.2026-01-01T00%3A00%3A00Z,id.gt.x))");
-  assert.equal(lib.keysetCursorFilter(lib.PAGE_CREATED_ASC, { created_at: null, id: "x" }), null);
+  assert.throws(() => lib.keysetCursorFilter(lib.PAGE_CREATED_ASC, { created_at: null, id: "x" }), /정렬 키에 null/);
 });
 
 // 커서 문법을 해석하는 가짜 PostgREST — 페이지 사이에 행이 지워져도 건너뜀이 없는지 본다.
 function fakeServer(rows: Array<{ id: string; created_at: string; n: number }>, dir: "asc" | "desc") {
   const calls: string[] = [];
-  const fetchImpl = (async (input: string | URL | Request) => {
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     calls.push(url.search);
     const limit = Number(url.searchParams.get("limit") || 1000);
@@ -166,7 +166,12 @@ function fakeServer(rows: Array<{ id: string; created_at: string; n: number }>, 
       const [, op, ca, , , id] = m;
       data = data.filter((r) => (op === "lt" ? r.created_at < ca || (r.created_at === ca && r.id < id) : r.created_at > ca || (r.created_at === ca && r.id > id)));
     }
-    return new Response(JSON.stringify(data.slice(0, limit)), { status: 200, headers: { "content-type": "application/json" } });
+    const page = data.slice(0, limit);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (String((init as RequestInit | undefined)?.headers && new Headers((init as RequestInit).headers).get("prefer")) === "count=exact") {
+      headers["content-range"] = `0-${Math.max(0, page.length - 1)}/${data.length}`;
+    }
+    return new Response(JSON.stringify(page), { status: 200, headers });
   }) as typeof fetch;
   return { calls, fetchImpl };
 }
@@ -177,14 +182,15 @@ test("supabaseFetchAll: 키셋 커서로 1,000행 페이지를 이어 받고, �
   const { calls, fetchImpl } = fakeServer(rows, "desc");
   const origFetch = globalThis.fetch;
   let deleted = false;
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const res = await fetchImpl(input);
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const res = await fetchImpl(input, init);
     // 첫 페이지 응답 직후 "앞쪽" 행 하나(가장 최신, desc 정렬의 1번째)를 삭제 — offset 방식이면 1,001번째가 밀려 건너뛰어진다
     if (!deleted) { deleted = true; rows.splice(rows.findIndex((r) => r.n === total - 1), 1); }
     return res;
   }) as typeof fetch;
   try {
     const got = await supabaseFetchAll<{ id: string; created_at: string; n: number }>("/upbo_alpha_upbo_entries?streamer_id=eq.x&select=*", PAGE_CREATED_DESC);
+    // 첫 페이지 count=2503, 지워진 행은 이미 1페이지에 담겼으므로 3페이지 뒤 out=2503=total 로 종료(서버 상한 가정 없음)
     assert.equal(calls.length, 3);
     assert.ok(calls[0].includes("order=created_at.desc%2Cid.desc") || calls[0].includes("order=created_at.desc,id.desc"));
     assert.ok(calls[1].includes("or="), "2페이지부터 커서 필터");
@@ -198,12 +204,30 @@ test("supabaseFetchAll: 키셋 커서로 1,000행 페이지를 이어 받고, �
   }
 });
 
-test("supabaseFetchAll: 첫 페이지가 1,000행 미만이면 요청 1회로 끝난다", async () => {
+test("supabaseFetchAll: 전체 건수 헤더가 없으면 빈 페이지까지 읽어 끝난다", async () => {
   const origFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
     calls += 1;
-    return new Response(JSON.stringify([{ id: "a", created_at: "2026-01-01T00:00:00Z" }, { id: "b", created_at: "2026-01-01T00:00:01Z" }]), { status: 200 });
+    const rows = calls === 1 ? [{ id: "a", created_at: "2026-01-01T00:00:00Z" }, { id: "b", created_at: "2026-01-01T00:00:01Z" }] : [];
+    return new Response(JSON.stringify(rows), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const got = await supabaseFetchAll<{ id: string; created_at: string }>("/t?select=*", PAGE_CREATED_ASC);
+    // 전체 건수 헤더가 없으면 빈 페이지가 올 때까지 읽는다(2회). 헤더가 있으면 1회.
+    assert.equal(calls, 2);
+    assert.equal(got.length, 2);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test("supabaseFetchAll: 첫 페이지 count=exact 로 전체 건수를 받으면 소량 목록은 요청 1회", async () => {
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify([{ id: "a", created_at: "2026-01-01T00:00:00Z" }, { id: "b", created_at: "2026-01-01T00:00:01Z" }]), { status: 200, headers: { "content-range": "0-1/2" } });
   }) as typeof fetch;
   try {
     const got = await supabaseFetchAll<{ id: string; created_at: string }>("/t?select=*", PAGE_CREATED_ASC);

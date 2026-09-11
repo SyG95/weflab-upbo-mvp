@@ -307,11 +307,16 @@ async function supabaseCount(path: string): Promise<number> {
 export type PageKey = { column: string; dir: "asc" | "desc" };
 export const PAGE_CREATED_ASC: PageKey[] = [{ column: "created_at", dir: "asc" }, { column: "id", dir: "asc" }];
 export const PAGE_CREATED_DESC: PageKey[] = [{ column: "created_at", dir: "desc" }, { column: "id", dir: "desc" }];
-const SUPABASE_PAGE = 1000;
-const SUPABASE_MAX_PAGES = 200; // 20만 행 상한 — 폭주 방지용, 도달 시 이후 페이지는 버린다(경고 로그).
-export function keysetCursorFilter(keys: PageKey[], last: Record<string, unknown>): string | null {
+// 페이지 크기: 운영 max-rows(1,000)에 맞추되 env 로 낮춰 커서 분기를 실데이터로 검증할 수 있게 한다.
+const SUPABASE_PAGE = Math.max(1, Math.floor(Number(process.env.UPBO_SUPABASE_PAGE || 1000)));
+const SUPABASE_MAX_PAGES = 200_000; // 행 상한이 아니라 무한 루프 방지용(페이지 크기가 작아도 전량 읽도록 넉넉히).
+export function keysetCursorFilter(keys: PageKey[], last: Record<string, unknown>): string {
   const values = keys.map((k) => last[k.column]);
-  if (values.some((v) => v === null || v === undefined)) return null;
+  if (values.some((v) => v === null || v === undefined)) {
+    // 정렬 키가 null 이면 커서를 만들 수 없고, 조용히 일부만 돌려주면 "기록 실종"이 된다(적대 리뷰 2026-09-11).
+    // 정렬 키 열(created_at/applied_at/saved_at/id)은 스키마상 NOT NULL 이라 실제로는 오지 않아야 한다 — 오면 크게 실패.
+    throw new Error(`[supabaseFetchAll] 정렬 키에 null: ${keys.map((k) => `${k.column}=${String(last[k.column])}`).join(", ")}`);
+  }
   const enc = (v: unknown) => encodeURIComponent(String(v));
   const branches: string[] = [];
   keys.forEach((k, i) => {
@@ -322,14 +327,32 @@ export function keysetCursorFilter(keys: PageKey[], last: Record<string, unknown
   });
   return `or=(${branches.join(",")})`;
 }
+// 한 페이지 + (첫 페이지에서만) 전체 건수. 전체 건수는 Prefer: count=exact 의 content-range 에서 읽는다.
+async function supabaseFetchPage<T>(path: string, wantCount: boolean): Promise<{ rows: T[]; total: number | null }> {
+  assertSupabaseEnv();
+  const headers = new Headers({ apikey: SUPABASE_SERVICE_ROLE_KEY!, authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` });
+  if (wantCount) headers.set("prefer", "count=exact");
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, { headers, cache: "no-store" });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${text || res.statusText}`);
+  const totalRaw = (res.headers.get("content-range") || "").split("/")[1];
+  const total = totalRaw && totalRaw !== "*" && Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : null;
+  return { rows: (text ? JSON.parse(text) : []) as T[], total };
+}
 export async function supabaseFetchAll<T extends Record<string, unknown>>(path: string, keys: PageKey[]): Promise<T[]> {
   const joiner = path.includes("?") ? "&" : "?";
   const order = keys.map((k) => `${k.column}.${k.dir}`).join(",");
   const out: T[] = [];
   const seen = new Set<string>();
   let cursor: string | null = null;
+  let total: number | null = null;
   for (let page = 0; page < SUPABASE_MAX_PAGES; page += 1) {
-    const chunk = await supabaseFetch<T[]>(`${path}${joiner}${cursor ? `${cursor}&` : ""}order=${order}&limit=${SUPABASE_PAGE}`);
+    // 종료 판정은 "서버 상한이 정확히 1,000"이라는 가정에 기대지 않는다(적대 리뷰 2026-09-11): 첫 페이지에서 받은
+    // 전체 건수에 도달했거나, 빈 페이지가 오면 끝. 건수를 못 받으면 빈 페이지까지 읽는다.
+    const res = await supabaseFetchPage<T>(`${path}${joiner}${cursor ? `${cursor}&` : ""}order=${order}&limit=${SUPABASE_PAGE}`, page === 0);
+    if (page === 0) total = res.total;
+    const chunk = res.rows;
+    if (chunk.length === 0) return out;
     for (const row of chunk) {
       const id = typeof row?.id === "string" ? row.id : null;
       if (id) {
@@ -338,16 +361,10 @@ export async function supabaseFetchAll<T extends Record<string, unknown>>(path: 
       }
       out.push(row);
     }
-    if (chunk.length < SUPABASE_PAGE) return out;
-    const next = keysetCursorFilter(keys, chunk[chunk.length - 1]);
-    if (!next) {
-      console.warn(`[supabaseFetchAll] 정렬 키에 null — 커서를 만들 수 없어 여기서 멈춤: ${path.slice(0, 80)}`);
-      return out;
-    }
-    cursor = next;
+    if (total !== null && out.length >= total) return out;
+    cursor = keysetCursorFilter(keys, chunk[chunk.length - 1]);
   }
-  console.warn(`[supabaseFetchAll] 페이지 상한 도달: ${path.slice(0, 80)}`);
-  return out;
+  throw new Error(`[supabaseFetchAll] 페이지 상한 도달: ${path.slice(0, 80)}`);
 }
 
 function tokenHash(token: string): string {
