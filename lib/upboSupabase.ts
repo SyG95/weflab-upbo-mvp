@@ -309,7 +309,7 @@ export const PAGE_CREATED_ASC: PageKey[] = [{ column: "created_at", dir: "asc" }
 export const PAGE_CREATED_DESC: PageKey[] = [{ column: "created_at", dir: "desc" }, { column: "id", dir: "desc" }];
 // 페이지 크기: 운영 max-rows(1,000)에 맞추되 env 로 낮춰 커서 분기를 실데이터로 검증할 수 있게 한다.
 const SUPABASE_PAGE = Math.max(1, Math.floor(Number(process.env.UPBO_SUPABASE_PAGE || 1000)));
-const SUPABASE_MAX_PAGES = 200_000; // 행 상한이 아니라 무한 루프 방지용(페이지 크기가 작아도 전량 읽도록 넉넉히).
+const SUPABASE_MAX_PAGES = 5_000; // 무한 루프 방지용 상한(1,000행 페이지면 500만 행). 도달하면 조용히 자르지 않고 throw.
 export function keysetCursorFilter(keys: PageKey[], last: Record<string, unknown>): string {
   const values = keys.map((k) => last[k.column]);
   if (values.some((v) => v === null || v === undefined)) {
