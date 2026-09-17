@@ -33,13 +33,44 @@
 .root[data-refinement="ref-l"] .months button{border:0;border-radius:0;border-bottom:2px solid transparent;background:none}
 .root[data-refinement="ref-l"] .months button[aria-pressed=true]{border-bottom-color:var(--stamp,#be547f)}
 .root[data-refinement="ref-l"] .table tbody tr:nth-child(even){background:var(--surface)}
-.root[data-refinement="ref-l"] .people small{display:none}
+.root[data-refinement="ref-l"] .who small{display:none}
 .root[data-refinement="ref-h"] .split{grid-template-columns:160px minmax(0,1fr);gap:10px;border:0}
 .root[data-refinement="ref-h"] .detail{border:1px solid var(--paper-line);border-radius:4px}
-.root[data-refinement="ref-h"] .people small{display:none}
+.root[data-refinement="ref-h"] .who small{display:none}
 @media(max-width:680px){.root[data-refinement^="ref-"] .split{grid-template-columns:minmax(0,1fr);gap:0}.root[data-refinement^="ref-"] .people{max-height:72px!important}.root[data-refinement^="ref-"] .people button{min-width:120px;padding:8px}.root[data-refinement^="ref-"] .toolbar>span{margin-left:0}.root[data-refinement^="ref-"] .count,.root[data-refinement^="ref-"] .pending,.root[data-refinement^="ref-"] .done{min-height:40px!important}}
 .root[data-refinement^="ref-"] .tableWrap{max-height:calc(100vh - 168px);overflow:auto}
 .root[data-refinement^="ref-"] .table thead th{position:sticky;top:0;z-index:2;background:var(--surface)}
 @media(max-width:767px){.root[data-refinement^="ref-"] .count,.root[data-refinement^="ref-"] .pending,.root[data-refinement^="ref-"] .done{min-height:44px!important}.root[data-refinement^="ref-"] .table td{height:44px}}
 
 .root{--accent:var(--stamp);--accent-soft:var(--stamp-soft);--line:var(--paper-line)}
+
+/* ── 배송 대기열 라운드(2026-09-17): 시청자 목록 높이 고정·한 줄 압축·경과일 칩 ── */
+/* 데스크톱 밀도 규칙은 min-width 로 감싼다 — 뒤에 오는 규칙이 같은 특정도의 모바일(≤680/≤767) 규칙을 소스 순서로 덮지 않도록. */
+@media(min-width:768px){
+  /* 왼쪽 시청자 목록 높이를 선택 시청자의 줄 수와 분리해 오른쪽 표와 같은 화면 높이 기준으로 고정. */
+  .root[data-refinement^="ref-"] .people{max-height:calc(100vh - 168px)}
+  .root[data-refinement^="ref-"] .people button{padding:6px 9px;min-height:40px;gap:8px}
+  /* 표 한 줄 압축: 연도·금액대가 차지하던 둘째 줄 제거. 줄 높이 바닥은 완료 수량 입력칸이라 입력칸·상태 버튼도 줄 높이에 맞춘다. */
+  .root[data-refinement^="ref-"] .table td{height:36px}
+  .root[data-refinement^="ref-"] .count{min-height:24px!important;padding:2px 4px!important}
+  .root[data-refinement^="ref-"] .done,.root[data-refinement^="ref-"] .pending{padding:4px 8px}
+}
+/* 시청자 칸 아이디·"ID 필요" 도 같은 줄로(둘째 줄 제거는 시청자 상세뿐 아니라 월별 기록 표에도). */
+.root[data-refinement^="ref-"] .table td small{display:inline;margin:0 0 0 6px}
+.who{display:block;min-width:0;flex:1;font-weight:600}
+.nick,.who small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nums{display:block;flex:none;text-align:right;font-variant-numeric:tabular-nums}
+.nums b{display:block}
+.nums small{margin-top:1px}
+.people button[data-old="true"] .nums small{color:#a85320;font-weight:600}
+/* 날짜 칸: 118px(데스크톱)/80px(모바일). 넘치면 칩이 다음 줄로 내려가고 잘리지 않는다. */
+.whenCol{width:118px}
+.when{white-space:normal;overflow:hidden;font-variant-numeric:tabular-nums}
+.age{display:inline-block;margin-left:6px;padding:0 7px;border-radius:999px;font-size:10px;font-weight:700;font-style:normal;white-space:nowrap;background:var(--stamp-soft,#fbdce8);color:var(--stamp,#e8407e);font-variant-numeric:tabular-nums}
+.age[data-old]{background:#f7e8dc;color:#a85320}
+/* 날짜 출처 배지(수동·교환·반영) — 옛 시청자별 목록의 배지와 같은 의미. */
+.kind{margin-left:4px;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.tag{margin-left:6px;font-size:10px;font-weight:400;color:var(--muted)}
+.root[data-refinement^="ref-"] .product{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.emptyAction{margin-left:6px;border:1px solid var(--paper-line);border-radius:5px;background:var(--surface);padding:3px 9px;font-size:11px;color:var(--stamp,#e8407e)}
+@media(max-width:680px){.whenCol{width:80px}.who small{display:none}.nums small{display:none}}

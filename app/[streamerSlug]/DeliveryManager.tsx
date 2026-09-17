@@ -1,6 +1,7 @@
 "use client";
 
 import FinalDeliveryView from "./FinalDeliveryView";
+import { AGE_OLD_DAYS, ageDaysFrom } from "../../lib/deliveryAge";
 import {editDeliveryRef} from "../../lib/deliveryRefEdit";
 import {useDeliveryEditorScope} from "./DeliveryEditorScope";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -224,11 +225,7 @@ function fmtShortDateTime(input: string | number): string {
   return `${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
 }
 
-// 기록 시각으로부터의 경과일(그날=1일째). 오래 밀린 줄 강조 기준(30일)과 함께 쓴다.
-const AGE_OLD_DAYS = 30;
-function ageDaysFrom(ms: number, nowMs: number): number {
-  return Math.max(1, Math.floor((nowMs - ms) / 86_400_000) + 1);
-}
+// 기록 시각으로부터의 경과일·오래 밀림 기준은 lib/deliveryAge 공용(월별 배송관리 뷰와 동일 규칙).
 
 // 시각 출처 배지 문구 — donate(원문 후원 시각)는 배지 없이 날짜만.
 const KIND_BADGE: Partial<Record<RecordedKind, { label: string; title: string }>> = {
