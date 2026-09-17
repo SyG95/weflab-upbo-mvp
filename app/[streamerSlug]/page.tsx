@@ -323,7 +323,8 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
-  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w, layout, month, status, design, preview, product, multi } = await searchParams;
+  // 팬 화면의 완료/미완료 필터(status)는 2026-09-17 제거 — 스트리머의 표시방법 설정이 팬에게 보이는 범위를 정한다.
+  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w, layout, month, design, preview, product, multi } = await searchParams;
   const selectedDesign = designId("ref-u");
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
@@ -566,7 +567,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
                 activeRoulette={rtab ?? ""}
                 activeSigKind={sfk ?? ""}
                 activeMonth={normalizeMonth(month)}
-                monthlyStatus={status === "remaining" || status === "done" ? status : "all"}
+                monthlyStatus="all"
                 monthlyAssignments={monthlyAssignments}
                 design={selectedDesign}
                 activeProduct={product ?? ""}
@@ -593,7 +594,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             activeRoulette={rtab ?? ""}
             activeSigKind={sfk ?? ""}
                 activeMonth={normalizeMonth(month)}
-                monthlyStatus={status === "remaining" || status === "done" ? status : "all"}
+                monthlyStatus="all"
                 monthlyAssignments={monthlyAssignments}
                 design={selectedDesign}
                 activeProduct={product ?? ""}
@@ -1316,7 +1317,7 @@ function FanView({
           ? `${history.length} / ${allEntries.length}건`
           : `${allEntries.length}건`;
 
-  const monthPicker = <MonthPicker products={productOptions} product={activeProduct} design={design} slug={slug} months={months} selected={activeMonth} status={deliveryMode === "off" ? "all" : monthlyStatus} reflect={deliveryMode !== "off"} total={monthlyTotal} etcCount={etcTotal.quantity} unavailable={monthlyAssignments === null} query={{ q: searchQuery, rtab: activeRoulette, sfk: activeSigKind, layout: layoutB ? "b" : "" }} />;
+  const monthPicker = <MonthPicker products={productOptions} product={activeProduct} design={design} slug={slug} months={months} selected={activeMonth} reflect={deliveryMode !== "off"} total={monthlyTotal} etcCount={etcTotal.quantity} unavailable={monthlyAssignments === null} query={{ q: searchQuery, rtab: activeRoulette, sfk: activeSigKind, layout: layoutB ? "b" : "" }} />;
 
   return (
     <div className={styles.fanLayout} data-layout-b={layoutB ? "" : undefined}>
@@ -1373,7 +1374,6 @@ function FanView({
           <input type="hidden" name="design" value={design} />
           {design === "h4" && activeMonths ? <input type="hidden" name="multi" value={activeMonths} /> : null}
           {design === "h2" && activeProduct ? <input type="hidden" name="product" value={activeProduct} /> : null}
-          {monthlyStatus !== "all" && deliveryMode !== "off" ? <input type="hidden" name="status" value={monthlyStatus} /> : null}
           {layoutB ? <input type="hidden" name="layout" value="b" /> : null}
           {activeTab === "history" ? <input type="hidden" name="tab" value="history" /> : null}
           {activeTab === "coupon" ? <input type="hidden" name="tab" value="coupon" /> : null}
