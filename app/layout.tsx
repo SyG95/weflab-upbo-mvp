@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import FanAnalytics from "./FanAnalytics";
 
 export const metadata: Metadata = {
   title: "Weflab Upbo",
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ko">
-      <body>{children}</body>
+      <body>
+        {children}
+        <FanAnalytics />
+      </body>
     </html>
   );
 }
