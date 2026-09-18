@@ -1,6 +1,7 @@
 "use client";
 
 import FinalDeliveryView from "./FinalDeliveryView";
+import { soopStationUrl } from "../../lib/soopStation";
 import { AGE_OLD_DAYS, ageDaysFrom } from "../../lib/deliveryAge";
 import {editDeliveryRef} from "../../lib/deliveryRefEdit";
 import {useDeliveryEditorScope} from "./DeliveryEditorScope";
@@ -50,15 +51,6 @@ type FixedPriceNote = {
   images?: string[];
   updatedAt?: string;
 };
-
-// 시청자 계정ID → 숲 방송국 주소. ch.sooplive.co.kr/{id} 는 www.sooplive.com/station/{id} 로
-// 301 리다이렉트되므로 최종 주소를 바로 쓴다. 계정ID가 없으면 null → 버튼을 그리지 않는다.
-// (숲이 없는 계정도 200을 주기 때문에 링크가 살아있는지는 미리 확인할 수 없다.)
-function soopStationUrl(fanId: string | null | undefined): string | null {
-  const id = (fanId ?? "").trim().toLowerCase();
-  if (!id) return null;
-  return `https://www.sooplive.com/station/${encodeURIComponent(id)}`;
-}
 
 const MAX_FIXED_NOTE_LEN = 2000;
 // 메모당 첨부 이미지 최대 개수(서버 MAX_MEMO_IMAGES와 동일하게 맞춤).

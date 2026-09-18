@@ -4,6 +4,7 @@ import type { AggItem, ViewerSummary } from '../../lib/api';
 import { monthLabel } from '../../lib/designPreview';
 import { resolveBucketId } from '../../lib/deliveryPeriod';
 import { AGE_OLD_DAYS, ageDaysFrom } from '../../lib/deliveryAge';
+import { soopStationUrl } from '../../lib/soopStation';
 import s from './FinalDelivery.module.css';
 
 export type FinalDeliveryRow = {
@@ -159,6 +160,8 @@ export default function FinalDeliveryView({
     [queueRows, peopleSort, nowMs, touched, pendingOrTouched],
   );
   const selected = viewers.find((p) => p.id === viewer) ?? viewers[0];
+  // 옛 시청자별 목록의 "방송국 ↗" 와 같은 링크. 계정ID가 없으면 null → 그리지 않는다.
+  const stationUrl = selected ? soopStationUrl(selected.rs[0].v.fanId) : null;
   // 선택한 시청자가 목록에서 사라지면(필터·검색·저장) 선택을 비워 첫 시청자로 돌아간다.
   // 폴백(viewers[0])을 state 에 확정하지는 않는다 — 운영 저장값 로딩 전 임시 목록의 1번을 굳혀 버리는 경합 방지.
   useEffect(() => {
@@ -416,9 +419,21 @@ export default function FinalDeliveryView({
                       {selected.rs[0].v.fanId} · {monthLabel(month)}
                     </small>
                   </div>
-                  <button disabled={disabled} onClick={() => onNote(selected.rs[0].v)}>
-                    메모
-                  </button>
+                  <div className={s.personActions}>
+                    <button disabled={disabled} onClick={() => onNote(selected.rs[0].v)}>
+                      메모
+                    </button>
+                    {stationUrl && (
+                      <a
+                        href={stationUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`${selected.rs[0].v.fanNickname || selected.rs[0].v.fanId} 방송국 열기 (새 탭)`}
+                      >
+                        방송국 ↗
+                      </a>
+                    )}
+                  </div>
                 </header>
                 {table(selected.rs, false)}
               </>
