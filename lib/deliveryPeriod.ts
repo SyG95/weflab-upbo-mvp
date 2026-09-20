@@ -5,8 +5,9 @@
 //  - 완료 배분(allocateDeliveryToRefs)은 항상 전체 refs 로 먼저 계산하고, 이 모듈은 그 결과 행을
 //    묶음으로 "거르기만" 한다 — 조각 부분집합으로 배분을 다시 돌리면 완료가 엉뚱한 묶음으로 이동한다.
 //  - 반개구간: 경계 비교는 [시작, 다음 경계 0시) — 23:59:59 비교는 밀리초 기록을 흘린다.
-//  - 후원 시각(donate, KST)만 기간 묶음에 넣는다. 수동·교환·반영(created 폴백)·시각 없음 조각은
-//    후원한 달을 모르거나 다른 시각(교환 시각 등)이라 "기타" 묶음으로 분리한다(숨기지 않음).
+//  - 후원 시각(donate, KST)과 스트리머가 적은 수동기록 날짜(manual_dated)만 기간 묶음에 넣는다.
+//    옛 수동(manual)·교환·반영(created 폴백)·시각 없음 조각은 후원한 달을 모르거나 다른 시각
+//    (교환 시각 등)이라 "기타" 묶음으로 분리한다(숨기지 않음).
 // fixedPricePeriod.ts(정가 기간, sy 확정 2026-08-09)와 같은 KST 경계 축 — 순수 모듈 관례에 따라
 // 레인 간 직접 import 없이 자급자족한다.
 
@@ -88,7 +89,9 @@ export function sanitizeDeliveryPeriodConfig(value: unknown): DeliveryPeriodConf
   return { mode, cutoffs: cutoffs.slice(0, MAX_CUTOFFS) };
 }
 
-// 조각 1건의 묶음 id. kind 는 배송 refs 의 recordedKind("donate"|"manual"|"exchange"|"created"|null).
+// 조각 1건의 묶음 id. kind 는 배송 refs 의 recordedKind("donate"|"manual"|"manual_dated"|"exchange"|"created"|null).
+// 기간에 들어가는 시각 = 위플랩 원문(donate) + 스트리머가 적은 수동기록 날짜(manual_dated). 옛 수동기록(manual,
+// 시각=기록 생성 시각)은 그대로 기타 — 기존 기록의 의미가 조용히 바뀌지 않는다(sy 2026-09-20).
 // mode==="none" 이면 호출부가 묶음 UI 자체를 그리지 않으므로 여기선 항상 "" 을 돌려준다.
 export function resolveBucketId(
   config: DeliveryPeriodConfig,
@@ -96,8 +99,12 @@ export function resolveBucketId(
   recordedKind: string | null | undefined,
 ): string {
   if (config.mode === "none") return "";
-  // 후원 원문 시각이 아닌 것(교환=교환 시각, 수동·반영=기록 시각)은 기간 숫자를 오염시키지 않게 기타로.
-  if (recordedAtMs === null || recordedAtMs === undefined || recordedKind !== "donate") {
+  // 후원 시각이 아닌 것(교환=교환 시각, 옛 수동·반영=기록 시각)은 기간 숫자를 오염시키지 않게 기타로.
+  if (
+    recordedAtMs === null ||
+    recordedAtMs === undefined ||
+    (recordedKind !== "donate" && recordedKind !== "manual_dated")
+  ) {
     return BUCKET_ETC;
   }
   if (config.mode === "monthly") {

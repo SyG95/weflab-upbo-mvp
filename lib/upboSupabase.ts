@@ -2475,6 +2475,8 @@ export type ManualEntryInput = {
   catalogGroupIndex?: number | null;
   catalogVersion?: number | null;
   count: number;
+  // 스트리머가 적은 후원 날짜(KST "YYYY-MM-DD HH:MM", 검증은 route 에서). 없거나 "" 이면 옛 수동기록과 동일(날짜 모름).
+  donateTimeText?: string;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2499,7 +2501,7 @@ export async function createManualEntry(streamer: StreamerRow, input: ManualEntr
       fan_id: normalizeAccountId(input.fanId),
       item_name: input.itemName,
       probability: Number(input.probability) || 0,
-      donate_time_text: "",
+      donate_time_text: input.donateTimeText ?? "",
       donation_type: "manual",
       catalog_group_index: input.catalogGroupIndex ?? null,
       amount_range_label: input.amountRangeLabel ?? "",
@@ -2530,6 +2532,54 @@ export async function updateManualEntryCount(streamer: StreamerRow, entryId: str
       }),
     },
   );
+}
+
+// 수동기록 후원 날짜 수정(붙이기/바꾸기/지우기=""). source_key manual:* 만 대상 — donate_time_text·updated_at 만
+// 바꾸고 admin_note(개수)는 건드리지 않는다. 옛 수동기록은 스트리머가 여기로 날짜를 붙일 때만 바뀐다(sy 2026-09-20).
+export async function updateManualEntryDate(
+  streamer: StreamerRow,
+  entryId: string,
+  donateTimeText: string,
+): Promise<void> {
+  if (!UUID_RE.test(entryId)) throw new Error("invalid entry id");
+  await supabaseFetch(
+    `/${tableName("upbo_entries")}?id=eq.${entryId}&streamer_id=eq.${streamer.id}&source_key=like.manual:*`,
+    {
+      method: "PATCH",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify({
+        donate_time_text: donateTimeText,
+        updated_at: new Date().toISOString(),
+      }),
+    },
+  );
+}
+
+// "그날 표": beforeIso(exclusive) 이전에 캡처된 룰렛표 중 최대 버전 1건을 슬림(version·captured_at·groups)으로.
+// 그 전 캡처가 없으면 최소 버전. 캡처가 하나도 없으면 null. latestVersion 은 현재 활성 버전(=최대 버전,
+// getStreamerState 의 currentCatalogVersion 과 같은 규칙) — 호출부가 "현재 표와 같음" 을 판단한다.
+// 관리자 on-demand 전용(수동기록 폼) — 팬 경로에서는 부르지 않는다.
+export async function catalogSlimAtOrBefore(
+  streamerId: string,
+  beforeIso: string,
+): Promise<{ version: number; capturedAt: string | null; groups: unknown; latestVersion: number } | null> {
+  const select = "version,captured_at,groups";
+  const base = `/${tableName("catalogs")}?streamer_id=eq.${streamerId}`;
+  const [latestRows, atRows] = await Promise.all([
+    supabaseFetch<Array<{ version: number }>>(`${base}&select=version&order=version.desc&limit=1`),
+    supabaseFetch<Array<Pick<CatalogRow, "version" | "captured_at" | "groups">>>(
+      `${base}&captured_at=lt.${encodeURIComponent(beforeIso)}&select=${select}&order=version.desc&limit=1`,
+    ),
+  ]);
+  const latestVersion = latestRows[0]?.version;
+  if (latestVersion === undefined) return null;
+  const row =
+    atRows[0] ??
+    (await supabaseFetch<Array<Pick<CatalogRow, "version" | "captured_at" | "groups">>>(
+      `${base}&select=${select}&order=version.asc&limit=1`,
+    ))[0];
+  if (!row) return null;
+  return { version: row.version, capturedAt: row.captured_at ?? null, groups: row.groups, latestVersion };
 }
 
 // 수동기록 삭제(행 제거). source_key manual:* 만 대상 — 자동수집/원본은 물리삭제 금지.
@@ -3201,8 +3251,27 @@ export async function setRouletteConfig(
 // audit_logs 오버레이 최신 1건(action=fan_tab_labels_updated). 스키마 변경 없음.
 const FAN_TAB_LABELS_MAX = 100;
 const FAN_TAB_NAME_MAX = 30;
+// "지난 시즌 · L" 탭 이름(팬 탭 되짚기, 2026-09-20): 키 = 금액대 라벨 L(40자 이하), 값 = 이름. 최대 50키.
+const FAN_PAST_LABEL_KEY_MAX = 40;
+const FAN_PAST_LABELS_MAX = 50;
 
-function sanitizeFanTabLabels(raw: unknown): FanTabLabels {
+function sanitizePastLabels(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  let count = 0;
+  for (const [rawKey, rawValue] of Object.entries(raw as Record<string, unknown>)) {
+    const key = rawKey.trim();
+    if (!key || key.length > FAN_PAST_LABEL_KEY_MAX) continue;
+    const value = typeof rawValue === "string" ? rawValue.trim().slice(0, FAN_TAB_NAME_MAX) : "";
+    if (!value) continue;
+    if (!(key in out)) count++;
+    out[key] = value;
+    if (count >= FAN_PAST_LABELS_MAX) break;
+  }
+  return count > 0 ? out : undefined;
+}
+
+export function sanitizeFanTabLabels(raw: unknown): FanTabLabels {
   const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const entries: FanTabLabelEntry[] = [];
   if (Array.isArray(obj.entries)) {
@@ -3260,11 +3329,13 @@ function sanitizeFanTabLabels(raw: unknown): FanTabLabels {
     typeof obj.fixedLabel === "string" ? obj.fixedLabel.trim().slice(0, FAN_TAB_NAME_MAX) : "";
   const otherLabel =
     typeof obj.otherLabel === "string" ? obj.otherLabel.trim().slice(0, FAN_TAB_NAME_MAX) : "";
+  const pastLabels = sanitizePastLabels(obj.pastLabels);
   return {
     entries,
     order: order.length > 0 ? order : undefined,
     fixedLabel: fixedLabel || undefined,
     otherLabel: otherLabel || undefined,
+    ...(pastLabels ? { pastLabels } : {}),
   };
 }
 

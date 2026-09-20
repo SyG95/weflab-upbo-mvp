@@ -1941,6 +1941,19 @@
   flex: none;
 }
 
+/* 드래그 불참 행("지난 시즌 · L" 탭: 룰렛 뒤 고정) — 손잡이 대신 잠금 표시, 잡기 커서 없음 */
+.tabEditRowLocked {
+  cursor: default;
+}
+
+.tabEditGripLocked {
+  color: var(--muted);
+  font-size: 12px;
+  flex: none;
+  cursor: default;
+  opacity: 0.6;
+}
+
 .tabEditDefault {
   font-size: 13px;
   font-weight: 800;
@@ -2970,6 +2983,9 @@
 
 .ieForm {
   display: grid;
+  /* 그리드 열의 기본 min-width:auto 를 풀어 둔다 — "그날 표" 옵션처럼 긴 글이 든 select 가
+     열을 밀어 375px 에서 가로 넘침을 만들던 것을 막는다(2026-09-20). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin: 14px 0;
   /* 상품이 많아도 위 탭·아래 실행버튼은 고정되고, 이 폼 영역만 스크롤되게 한다.
@@ -2981,7 +2997,9 @@
 
 .ieField {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 5px;
+  min-width: 0;
 }
 
 .ieLabel {
@@ -3189,6 +3207,28 @@
   color: var(--stamp);
 }
 
+/* 수동기록 날짜 칩(오늘/어제/날짜 고르기/날짜 모름) — 눌린 칩만 강조 */
+.ieChipBtn[aria-pressed="true"] {
+  border-color: var(--stamp);
+  background: var(--stamp-soft);
+  color: var(--stamp);
+}
+
+/* 수동기록 날짜 줄: 칩·인라인 date input 가로 나열(좁으면 줄바꿈) */
+.ieDateRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ieDateInput {
+  height: 36px;
+  padding: 0 10px;
+  font-size: 14px;
+  max-width: 100%;
+}
+
 .ieChipBtnDanger {
   color: var(--destructive);
 }
@@ -3322,6 +3362,9 @@
   background: var(--paper);
   color: var(--ink);
   cursor: pointer;
+  /* 긴 옵션("그날 표 (vN · 날짜 캡처)" 등)이 들어와도 칸을 넘지 않게. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .ieSelect:focus-visible {

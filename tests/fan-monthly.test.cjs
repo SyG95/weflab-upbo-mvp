@@ -11,6 +11,12 @@ const owners=[{key:'fan',ownerId:'fan',ownerName:'테스트',items:[a,b,c],total
 const progress=[{fanId:'fan',fanNickname:'테스트',itemKey:'단컷@@1@@33',itemName:'단컷',processedCount:4}];
 const alloc=allocateFanMonthly(owners,progress);
 assert.equal(monthOf(a),'2026-08');assert.equal(monthOf(b),'2026-09');assert.equal(monthOf(c),'etc');
+// 수동기록 날짜(manual_dated): 스트리머가 적은 날짜의 달에 집계된다. 옛 수동(manual)은 위처럼 etc 유지.
+const md=ref('manual-dated','2026-08-05T12:00:00+09:00',2,'manual_dated');
+assert.equal(monthOf(md),'2026-08');
+assert.deepEqual(summarizeMonth([{...owners[0],items:[a,b,c,md],total:11}],allocateFanMonthly([{...owners[0],items:[a,b,c,md],total:11}],[]),'2026-08'),{quantity:5,delivered:0,remaining:5});
+assert.equal(entryRecordedAt({sourceKey:'manual:x',donateTimeText:'2026-08-05 12:00'}).kind,'manual_dated');
+assert.equal(entryRecordedAt({sourceKey:'manual:x',donateTimeText:'',createdAt:'2026-08-05T03:00:00Z'}).kind,'manual');
 assert.equal(alloc.get(a),3);assert.equal(alloc.get(b),1);
 assert.deepEqual(summarizeMonth(owners,alloc,'2026-09'),{quantity:4,delivered:1,remaining:3});
 assert.equal(monthlyViewers(owners,alloc,'2026-08','remaining','all').length,0);

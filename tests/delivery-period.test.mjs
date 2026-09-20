@@ -55,6 +55,16 @@ assertEq(resolveBucketId(monthly, kst("2026-08-05T12:00:00"), "manual"), BUCKET_
 assertEq(resolveBucketId(monthly, kst("2026-08-05T12:00:00"), "created"), BUCKET_ETC, "반영 폴백 조각 → 기타");
 assertEq(resolveBucketId(monthly, kst("2026-08-05T12:00:00"), null), BUCKET_ETC, "종류 없음 → 기타");
 
+// ── 수동기록 날짜(manual_dated, 2026-09-20): 스트리머가 적은 후원 날짜는 donate 와 같이 기간에 묶인다.
+//    옛 수동기록(manual)은 시각이 있어도(createdAt 폴백) 기타 유지 — 기존 기록의 의미 불변.
+assertEq(resolveBucketId(monthly, kst("2026-08-05T12:00:00"), "manual_dated"), "m:2026-08", "수동 날짜 조각 → 월 묶음");
+assertEq(resolveBucketId(monthly, kst("2026-08-31T23:59:59.999"), "manual_dated"), "m:2026-08", "수동 날짜 월말 경계 → 8월");
+assertEq(resolveBucketId(custom, kst("2026-07-15T12:00:00"), "manual_dated"), "c:2026-07-15", "수동 날짜 조각 → 마감선 묶음");
+assertEq(resolveBucketId(custom, kst("2026-09-01T12:00:00"), "manual_dated"), BUCKET_CURRENT, "수동 날짜 마지막 마감선 이후 → 진행 중");
+assertEq(resolveBucketId(monthly, null, "manual_dated"), BUCKET_ETC, "수동 날짜인데 시각 없음 → 기타");
+assertEq(resolveBucketId(monthly, kst("2026-08-05T12:00:00"), "manual"), BUCKET_ETC, "옛 수동 조각(시각 있어도) → 기타 유지");
+assertEq(resolveBucketId(custom, kst("2026-07-01T12:00:00"), "manual"), BUCKET_ETC, "옛 수동 조각 마감선 모드에서도 기타 유지");
+
 // ── none 모드: 묶음 UI 자체가 없으므로 빈 id ──
 assertEq(resolveBucketId({ mode: "none", cutoffs: [] }, kst("2026-08-05T12:00:00"), "donate"), "", "none → 빈 id");
 

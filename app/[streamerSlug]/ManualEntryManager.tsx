@@ -2,12 +2,24 @@
 
 // 수동기록 관리 화면. 위플랩에 안 잡히는 룰렛 결과·정가 시그니처를 스트리머가 직접 넣는 "입력/보관 창구".
 // 저장 실체는 upbo_entries(source_key manual:...) 라서, 배송·양도교환·팬화면은 자동수집분과 동등하게 다룬다.
-// 여기서는 추가 / 목록 / 개수 수정 / 삭제(수동분만)만 한다.
+// 여기서는 추가 / 목록 / 개수 수정 / 후원 날짜 붙이기·바꾸기 / 삭제(수동분만)만 한다.
+// 후원 날짜(2026-09-20): 앞으로 넣는 수동기록은 날짜(기본 오늘)가 같이 저장돼 배송 기간·월별·팬 탭이 잡힌다.
+// 옛 수동기록은 목록의 [날짜 붙이기] 를 눌러야만 바뀐다(자동 소급 없음 — sy 결정).
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
-import { normalizeAccountId, type UpboEntry } from "../../lib/api";
+import { normalizeAccountId, parseDonateTimeMs, type UpboEntry } from "../../lib/api";
+import { bucketLabel } from "../../lib/deliveryPeriod";
+import {
+  kstDateOf,
+  kstTodayOf,
+  kstYesterdayOf,
+  manualDonateTimeText,
+  manualEntryDateLabel,
+  manualEntryDateValue,
+  type ManualDateMode,
+} from "../../lib/manualEntryDate";
 
 type ItemChoice = {
   itemName: string;
@@ -23,34 +35,64 @@ const CUSTOM_ITEM = "__custom__";
 // "정가 시그니처" sentinel — 나눠 낸 후원 등 수집기(단일 후원 갯수 일치)가 못 잡은 정가를 손으로 넣는다.
 // 자동 정가기록과 같은 모양(itemName `정가 N개`, 확률 0, 라벨 "정가")으로 저장해야 팬 화면 정가 탭에서 합산된다.
 const FIXED_ITEM = "__fixed__";
+// "그날 표"(후원 날짜 당시 룰렛표) 상품 선택지 접두 — 현재 표 choiceKey 와 절대 겹치지 않게 한다.
+const PAST_PREFIX = "__past__@@";
+
+const MONTHLY = { mode: "monthly" as const, cutoffs: [] };
+
+// 그날 표 조회 상태(관리자 on-demand GET catalog-items-at). 날짜가 활성 표 캡처일보다 이를 때만 부른다.
+type PastTable =
+  | { status: "idle" }
+  | { status: "loading"; date: string }
+  | { status: "error"; date: string; text: string }
+  | { status: "same"; date: string }
+  | { status: "ready"; date: string; version: number; capturedAt: string | null; items: ItemChoice[] };
 
 export default function ManualEntryManager({
   slug,
   entries,
   catalogItems,
   catalogVersion,
+  catalogCapturedAt,
+  currentItemTabs,
   signatureCounts,
 }: {
   slug: string;
   entries: UpboEntry[];
   catalogItems: ItemChoice[];
   catalogVersion: number | null;
+  // 활성 표 캡처 시각(ISO). 고른 후원 날짜가 이보다 이르면 "그날 표" 상품을 추가로 보여준다.
+  catalogCapturedAt: string | null;
+  // 현재 표 상품명 → 팬 탭 이름(보관 룰렛이면 ""). 팬 화면이 상품명으로 탭을 먼저 찾으므로,
+  // 도착지 미리보기가 실제 도착 탭과 어긋나지 않게 같은 색인을 쓴다.
+  currentItemTabs: Record<string, string>;
   signatureCounts: number[];
 }) {
   const router = useRouter();
   const [ownerId, setOwnerId] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [idOpen, setIdOpen] = useState(false);
-  const [pick, setPick] = useState(""); // choiceKey 또는 CUSTOM_ITEM
+  const [pick, setPick] = useState(""); // choiceKey 또는 CUSTOM_ITEM / FIXED_ITEM / PAST_PREFIX+…
   // 직접 입력(룰렛확률표에 없는 상품): 이름 필수, 확률은 선택(없으면 0 — 정가·교환 직접입력과 동일 취급).
   const [customName, setCustomName] = useState("");
   const [customProb, setCustomProb] = useState("");
   // 정가 시그니처 갯수(풍선 갯수). 등록된 시그 갯수가 있으면 첫 값을 기본으로 깔아 준다.
   const [fixedCount, setFixedCount] = useState("");
   const [count, setCount] = useState(1);
+  // 언제 후원했나요 — 기본 오늘. "날짜 고르기"면 date input 노출.
+  // 렌더 중 Date.now() 를 부르지 않도록(렌더 순수성) 오늘 날짜는 처음 한 번 state 로 잡고,
+  // 모드가 가리키는 날짜(donateDate)는 칩·date input 핸들러에서만 다시 계산한다. 저장 문자열은 제출 시점에 새로 만든다.
+  const [today] = useState(() => kstTodayOf());
+  const [dateMode, setDateMode] = useState<ManualDateMode>("today");
+  const [pickedDate, setPickedDate] = useState("");
+  const [donateDate, setDonateDate] = useState<string | null>(() => kstTodayOf());
+  const [pastTable, setPastTable] = useState<PastTable>({ status: "idle" });
+  const pastReq = useRef(0);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 목록 줄의 날짜 편집(한 번에 한 줄).
+  const [dateEdit, setDateEdit] = useState<{ id: string; value: string } | null>(null);
   const idRef = useRef<HTMLInputElement>(null);
 
   // 시청자 계정 자동완성 후보(정가만 있는 계정 제외).
@@ -82,6 +124,7 @@ export default function ManualEntryManager({
 
   // 상품 선택지(룰렛확률표, 사용 on + 업보 기준 이하) — 룰렛별 optgroup.
   const choiceKey = (c: ItemChoice) => `${c.rouletteId ?? ""}@@${c.itemName}@@${c.probability}`;
+  const pastKey = (c: ItemChoice) => `${PAST_PREFIX}${c.catalogGroupIndex ?? ""}@@${c.itemName}@@${c.probability}`;
   const catalogSorted = useMemo(
     () =>
       [...catalogItems].sort(
@@ -106,6 +149,108 @@ export default function ManualEntryManager({
   }, [catalogSorted]);
   const showGroups = rouletteGroups.length > 1;
   const picked = catalogItems.find((c) => choiceKey(c) === pick) ?? null;
+  const pastItems = pastTable.status === "ready" ? pastTable.items : [];
+  const pickedPast = pick.startsWith(PAST_PREFIX) ? (pastItems.find((c) => pastKey(c) === pick) ?? null) : null;
+  // 현재 표에 있는 금액대 라벨 집합 — 그날 표 상품의 도착지 미리보기용.
+  const currentLabels = useMemo(
+    () => new Set(catalogItems.map((c) => c.amountRangeLabel?.trim() ?? "").filter(Boolean)),
+    [catalogItems],
+  );
+
+  // 활성 표 캡처 시각(ms) — 저장할 후원 시각이 이보다 이르면 그날 표를 조회한다.
+  const capturedMs = useMemo(() => {
+    const ms = catalogCapturedAt ? Date.parse(catalogCapturedAt) : NaN;
+    return Number.isNaN(ms) ? null : ms;
+  }, [catalogCapturedAt]);
+
+  // 후원 날짜(YYYY-MM-DD) — 모드에 따라. "unknown" 은 null.
+  function effectiveDateOf(mode: ManualDateMode, dateValue: string): string | null {
+    if (mode === "today") return kstTodayOf();
+    if (mode === "yesterday") return kstYesterdayOf();
+    if (mode === "pick") return dateValue.trim() || null;
+    return null;
+  }
+
+  // 날짜가 바뀔 때마다 그날 표 후보를 맞춘다(이벤트 핸들러에서만 호출 — effect 없음).
+  // 경계는 "저장할 시각" 그대로다 — 같은 날 표를 새로 캡처해도 그 전에 일어난 후원은 옛 표를 받는다.
+  async function syncPastTable(date: string | null, at: string | null) {
+    const token = ++pastReq.current;
+    const atMs = at ? parseDonateTimeMs(at) : null;
+    if (!date || !at || atMs === null || capturedMs === null || atMs >= capturedMs) {
+      setPastTable({ status: "idle" });
+      setPick((p) => (p.startsWith(PAST_PREFIX) ? "" : p));
+      return;
+    }
+    setPastTable({ status: "loading", date });
+    try {
+      const res = await fetch(
+        `/api/s/${encodeURIComponent(slug)}/catalog-items-at?at=${encodeURIComponent(at)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (token !== pastReq.current) return;
+      if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
+      if (data?.sameAsCurrent) {
+        setPastTable({ status: "same", date });
+        setPick((p) => (p.startsWith(PAST_PREFIX) ? "" : p));
+        return;
+      }
+      const items: ItemChoice[] = Array.isArray(data?.items) ? data.items : [];
+      setPastTable({
+        status: "ready",
+        date,
+        version: Number(data?.version),
+        capturedAt: typeof data?.capturedAt === "string" ? data.capturedAt : null,
+        items,
+      });
+      // 이전 그날 표에서 고른 상품이 새 표에 없으면 선택 해제.
+      setPick((p) => (p.startsWith(PAST_PREFIX) && !items.some((c) => pastKey(c) === p) ? "" : p));
+    } catch (e) {
+      if (token !== pastReq.current) return;
+      setPastTable({
+        status: "error",
+        date,
+        text: e instanceof Error && e.message ? e.message : "그날 표를 불러오지 못했어요.",
+      });
+      setPick((p) => (p.startsWith(PAST_PREFIX) ? "" : p));
+    }
+  }
+
+  function chooseDateMode(mode: ManualDateMode) {
+    setDateMode(mode);
+    const date = effectiveDateOf(mode, pickedDate);
+    setDonateDate(date);
+    void syncPastTable(date, manualDonateTimeText(mode, pickedDate) || null);
+  }
+
+  function changePickedDate(value: string) {
+    setPickedDate(value);
+    const date = effectiveDateOf("pick", value);
+    setDonateDate(date);
+    void syncPastTable(date, manualDonateTimeText("pick", value) || null);
+  }
+
+  // 도착지 미리보기: → 팬 화면: {탭} · {월}. 상품을 골랐을 때만 그린다.
+  const destination = (() => {
+    let tab: string | null = null;
+    if (pick === FIXED_ITEM) tab = "정가";
+    else if (pick === CUSTOM_ITEM) tab = "기타";
+    else if (picked) tab = picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
+    else if (pickedPast) {
+      // 팬 화면은 상품명으로 현재 표 탭을 먼저 찾는다 — 같은 이름이 현재 표에도 있으면 그 탭으로 간다.
+      const current = currentItemTabs[pickedPast.itemName];
+      const L = pickedPast.amountRangeLabel?.trim() ?? "";
+      if (current) tab = current;
+      else if (current === "") tab = "보관된 룰렛(팬 화면에 안 보임)";
+      else if (!L) tab = "기타";
+      else if (currentLabels.has(L)) tab = `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «지난 시즌 · ${L}»)`;
+      else tab = `지난 시즌 · ${L}`;
+    }
+    if (tab === null) return null;
+    // "올해" 판단 기준도 state 의 오늘(렌더 중 Date.now() 없음).
+    const nowMs = Date.parse(`${today}T00:00:00+09:00`);
+    const month = donateDate ? bucketLabel(`m:${donateDate.slice(0, 7)}`, MONTHLY, nowMs) : "기타(날짜 미확인)";
+    return `→ 팬 화면: ${tab} · ${month}`;
+  })();
 
   // 수동기록 목록(최근순).
   const manualEntries = useMemo(
@@ -162,6 +307,15 @@ export default function ManualEntryManager({
         catalogGroupIndex: null,
         catalogVersion: null,
       };
+    } else if (pickedPast && pastTable.status === "ready") {
+      // 그날 표 상품: 그 버전·그룹으로 저장 → 팬 탭 되짚기(1단계)가 금액대 탭 또는 "지난 시즌 · L" 로 보낸다.
+      itemPayload = {
+        itemName: pickedPast.itemName,
+        probability: pickedPast.probability,
+        amountRangeLabel: pickedPast.amountRangeLabel ?? "",
+        catalogGroupIndex: pickedPast.catalogGroupIndex ?? null,
+        catalogVersion: pastTable.version,
+      };
     } else if (picked) {
       itemPayload = {
         itemName: picked.itemName,
@@ -172,6 +326,11 @@ export default function ManualEntryManager({
       };
     } else {
       setMsg({ type: "err", text: "상품을 골라 주세요." });
+      return;
+    }
+    const donateTimeText = manualDonateTimeText(dateMode, pickedDate);
+    if (donateTimeText === null) {
+      setMsg({ type: "err", text: "후원 날짜를 골라 주세요. (모르면 «날짜 모름»)" });
       return;
     }
     const known = accountOptions.find((a) => a.id === normalizeAccountId(id))?.nickname ?? "";
@@ -186,6 +345,7 @@ export default function ManualEntryManager({
           fanNickname: ownerName.trim() || known,
           ...itemPayload,
           count,
+          donateTimeText,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -198,6 +358,7 @@ export default function ManualEntryManager({
       setCustomProb("");
       setFixedCount("");
       setCount(1);
+      // 날짜 모드·고른 날짜·그날 표는 유지 — 같은 날 기록을 이어서 넣는 흐름이 잦다.
       router.refresh();
     } catch (e) {
       setMsg({ type: "err", text: e instanceof Error ? e.message : "추가에 실패했어요." });
@@ -224,6 +385,27 @@ export default function ManualEntryManager({
     }
   }
 
+  // 목록 줄의 후원 날짜 저장(붙이기/바꾸기 = "YYYY-MM-DD 12:00", 지우기 = "").
+  async function saveEntryDate(id: string, donateTimeText: string) {
+    setBusyId(id);
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/manual-entries`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, donateTimeText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
+      setMsg({ type: "ok", text: donateTimeText ? "후원 날짜를 저장했어요." : "후원 날짜를 지웠어요." });
+      setDateEdit(null);
+      router.refresh();
+    } catch (e) {
+      setMsg({ type: "err", text: e instanceof Error && e.message ? e.message : "날짜 저장에 실패했어요." });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function removeEntry(id: string) {
     setBusyId(id);
     try {
@@ -240,6 +422,19 @@ export default function ManualEntryManager({
       setBusyId(null);
     }
   }
+
+  const dateChips: Array<{ mode: ManualDateMode; label: string }> = [
+    { mode: "today", label: "오늘" },
+    { mode: "yesterday", label: "어제" },
+    { mode: "pick", label: "날짜 고르기" },
+    { mode: "unknown", label: "날짜 모름" },
+  ];
+  const pastCaptureText =
+    pastTable.status === "ready"
+      ? pastTable.capturedAt && !Number.isNaN(Date.parse(pastTable.capturedAt))
+        ? kstDateOf(Date.parse(pastTable.capturedAt))
+        : "캡처일 미상"
+      : "";
 
   return (
     <div className={styles.ieWrap}>
@@ -340,6 +535,15 @@ export default function ManualEntryManager({
             }}
           >
             <option value="">상품을 고르세요…</option>
+            {pastTable.status === "ready" && pastItems.length > 0 ? (
+              <optgroup label={`그날 표 (v${pastTable.version} · ${pastCaptureText} 캡처)`}>
+                {pastItems.map((c) => (
+                  <option key={pastKey(c)} value={pastKey(c)}>
+                    {c.itemName} · {c.probability}%{c.rouletteLabel ? ` · ${c.rouletteLabel}` : ""}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
             {showGroups
               ? rouletteGroups.map((g) => (
                   <optgroup key={g.rid} label={g.label}>
@@ -364,7 +568,55 @@ export default function ManualEntryManager({
               먼저 켜거나, «직접 입력…»으로 넣을 수 있어요.
             </span>
           ) : null}
+          {pastTable.status === "loading" ? (
+            <span className={styles.ieFormHint}>{pastTable.date} 당시 룰렛표를 불러오는 중…</span>
+          ) : pastTable.status === "error" ? (
+            <span className={styles.ieFormHint}>그날 표를 불러오지 못했어요 — 현재 표 상품으로 넣을 수 있어요. ({pastTable.text})</span>
+          ) : pastTable.status === "same" ? (
+            <span className={styles.ieFormHint}>{pastTable.date} 당시 표는 현재 표와 같아요.</span>
+          ) : pastTable.status === "ready" && pastItems.length === 0 ? (
+            <span className={styles.ieFormHint}>
+              {pastTable.date} 당시 표(v{pastTable.version})에는 업보 기준 이하 상품이 없어요 — 현재 표 상품이나 «직접 입력…»으로 넣을 수 있어요.
+            </span>
+          ) : pastTable.status === "ready" ? (
+            <span className={styles.ieFormHint}>
+              «그날 표» 상품을 고르면 그 당시 금액대 탭(현재 표에 없으면 «지난 시즌 · 금액대» 탭)으로 들어가요.
+            </span>
+          ) : null}
         </label>
+
+        <div className={styles.ieField}>
+          <span className={styles.ieLabel}>언제 후원했나요</span>
+          <div className={styles.ieDateRow}>
+            {dateChips.map((c) => (
+              <button
+                key={c.mode}
+                type="button"
+                className={styles.ieChipBtn}
+                aria-pressed={dateMode === c.mode}
+                onClick={() => chooseDateMode(c.mode)}
+              >
+                {c.label}
+              </button>
+            ))}
+            {dateMode === "pick" ? (
+              <input
+                type="date"
+                className={`${styles.ieInput} ${styles.ieDateInput}`}
+                value={pickedDate}
+                max={today}
+                onChange={(e) => changePickedDate(e.target.value)}
+                aria-label="후원 날짜"
+              />
+            ) : null}
+          </div>
+          <span className={styles.ieFormHint}>
+            {dateMode === "unknown"
+              ? "날짜 없이 저장돼요 — 배송 기간·월별에서는 «기타»로 묶여요(옛 수동기록과 같음)."
+              : "날짜가 있으면 배송 기간·월별 묶음에 자동수집분과 같이 들어가요. 어제·고른 날짜는 정오로 저장돼요."}
+          </span>
+          {destination ? <span className={styles.ieFormHint}>{destination}</span> : null}
+        </div>
 
         {pick === FIXED_ITEM ? (
           <label className={styles.ieField}>
@@ -444,11 +696,12 @@ export default function ManualEntryManager({
             disabled={
               saving ||
               !ownerId.trim() ||
+              (dateMode === "pick" && !pickedDate.trim()) ||
               (pick === FIXED_ITEM
                 ? !fixedCount.trim()
                 : pick === CUSTOM_ITEM
                 ? !customName.trim()
-                : !picked)
+                : !picked && !pickedPast)
             }
           >
             {saving ? "추가 중…" : "수동기록 추가"}
@@ -467,6 +720,8 @@ export default function ManualEntryManager({
           {manualEntries.map((e) => {
             const cnt = Math.max(1, Number(e.effectiveCount ?? 1));
             const busy = busyId === e.id;
+            const hasDate = manualEntryDateValue(e.donateTimeText) !== "";
+            const editing = dateEdit?.id === e.id;
             return (
               <li key={e.id} className={styles.ieCard}>
                 <div className={styles.ieCardHead}>
@@ -508,6 +763,56 @@ export default function ManualEntryManager({
                       삭제
                     </button>
                   </div>
+                </div>
+                <div className={styles.ieDateRow}>
+                  <span className={styles.ieFormHint}>후원 날짜: {manualEntryDateLabel(e.donateTimeText)}</span>
+                  {editing ? (
+                    <>
+                      <input
+                        type="date"
+                        className={`${styles.ieInput} ${styles.ieDateInput}`}
+                        value={dateEdit.value}
+                        max={today}
+                        onChange={(ev) => setDateEdit({ id: e.id, value: ev.target.value })}
+                        aria-label="후원 날짜"
+                      />
+                      <button
+                        type="button"
+                        className={styles.ieChipBtn}
+                        disabled={busy || !dateEdit.value.trim()}
+                        onClick={() => saveEntryDate(e.id, `${dateEdit.value.trim()} 12:00`)}
+                      >
+                        저장
+                      </button>
+                      {hasDate ? (
+                        <button
+                          type="button"
+                          className={styles.ieChipBtn}
+                          disabled={busy}
+                          onClick={() => saveEntryDate(e.id, "")}
+                        >
+                          지우기
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className={styles.ieChipBtn}
+                        disabled={busy}
+                        onClick={() => setDateEdit(null)}
+                      >
+                        취소
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className={styles.ieChipBtn}
+                      disabled={busy}
+                      onClick={() => setDateEdit({ id: e.id, value: manualEntryDateValue(e.donateTimeText) })}
+                    >
+                      {hasDate ? "날짜 바꾸기" : "날짜 붙이기"}
+                    </button>
+                  )}
                 </div>
               </li>
             );

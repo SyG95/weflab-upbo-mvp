@@ -195,11 +195,13 @@ export type DeliveryProgressItem = {
 export const DELIVERY_PROGRESS_TS_CUTOFF = "2026-08-26T20:45:00+09:00";
 
 // 후원 기록 시각의 출처 구분.
-//  donate  = 위플랩 원문 후원 시각(donateTimeText) — 진짜 후원 시각.
-//  manual  = 수동기록: 원문 시각이 없어 기록 생성 시각(createdAt)으로 대체.
-//  exchange= 교환으로 받은 기록: 교환된 시각(createdAt)이지 원 후원 시각이 아니다.
-//  created = 자동수집인데 원문 시각이 비거나 해석 불가 → 시트 반영 시각(createdAt)으로 대체.
-export type RecordedKind = "donate" | "manual" | "exchange" | "created";
+//  donate       = 위플랩 원문 후원 시각(donateTimeText) — 진짜 후원 시각.
+//  manual       = 수동기록: 원문 시각이 없어 기록 생성 시각(createdAt)으로 대체(옛 수동기록 전부 — 배송 기간·월별에서는 기타).
+//  manual_dated = 수동기록: 스트리머가 적은 후원 날짜(donateTimeText, 2026-09 부터) — 배송 기간·월별에 donate 와 같이 묶인다.
+//                 배지는 여전히 "수동"(위플랩 원문이 아니므로 "원문" 문구를 받지 않는다).
+//  exchange     = 교환으로 받은 기록: 교환된 시각(createdAt)이지 원 후원 시각이 아니다.
+//  created      = 자동수집인데 원문 시각이 비거나 해석 불가 → 시트 반영 시각(createdAt)으로 대체.
+export type RecordedKind = "donate" | "manual" | "manual_dated" | "exchange" | "created";
 
 // "YYYY-MM-DD HH:MM(:SS)" (위플랩 서버 표시, KST) → epoch ms. 실패 시 null.
 // donationEvents.parseDonateTime 의 자급자족 사본(저장소 관례: 레인 간 직접 import 금지,
@@ -224,7 +226,9 @@ export function entryRecordedAt(entry: {
 }): { ms: number | null; kind: RecordedKind | null } {
   const sourceKey = entry.sourceKey ?? "";
   const donateMs = parseDonateTimeMs(entry.donateTimeText);
-  if (donateMs !== null) return { ms: donateMs, kind: "donate" };
+  // 시각이 있는 수동기록은 스트리머가 적은 날짜(manual_dated) — 원문(donate)과 구분한다. 그 외 분기는 불변:
+  // donateTimeText 가 ""(옛 수동기록 전부)이면 아래 createdAt 폴백으로 내려가 kind "manual" 그대로.
+  if (donateMs !== null) return { ms: donateMs, kind: sourceKey.startsWith("manual:") ? "manual_dated" : "donate" };
   const createdMs = entry.createdAt ? Date.parse(entry.createdAt) : NaN;
   const fallback = Number.isNaN(createdMs) ? null : createdMs;
   if (sourceKey.startsWith("manual:")) return { ms: fallback, kind: fallback === null ? null : "manual" };
@@ -482,6 +486,8 @@ export type FanTabLabels = {
   order?: FanTabOrderItem[];
   fixedLabel?: string;
   otherLabel?: string;
+  // "지난 시즌 · L" 탭(팬 탭 되짚기, 2026-09-20) 표시 이름 — 금액대 라벨 L → 이름. 없으면 기본 이름.
+  pastLabels?: Record<string, string>;
 };
 
 // ── 위플랩 공개 링크(스트리머별 룰렛표 수집 소스) ─────────────────────────
@@ -675,6 +681,10 @@ export type HoldingItem = {
   itemName: string;
   probability: number;
   amountRangeLabel?: string;
+  // 원본 기록이 판정된 룰렛표 (버전, 그룹) — 팬 탭 되짚기(2026-09-20)용. 없으면 null(직접 입력 계열).
+  // 교환·양도로 조각이 쪼개져도 원본 entry 값을 그대로 물려받는다(표시 분류 전용, 판정과 무관).
+  catalogVersion: number | null;
+  catalogGroupIndex: number | null;
   // 원본 기록의 후원 유형(도전미션 별풍선 등). 배송관리 "미션" 배지 판별용 — 교환돼도 원본 유형 유지.
   donationType?: string;
   // 현재 남은 수량(양도/교환으로 빠져나간 분, 취소/완료된 분을 차감한 값).
@@ -891,6 +901,8 @@ function foldEntryHoldings(entry: UpboEntry, events: ItemEvent[]): HoldingItem[]
       itemName: lot.itemName,
       probability: lot.probability,
       amountRangeLabel: lot.amountRangeLabel,
+      catalogVersion: entry.catalogVersion ?? null,
+      catalogGroupIndex: entry.catalogGroupIndex ?? null,
       donationType: entry.donationType,
       quantity: lot.quantity,
       originalQuantity,

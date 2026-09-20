@@ -92,6 +92,18 @@ import { AdminCollapseProvider, CollapsibleCard } from "./AdminCollapse";
 import ShowcasePosterRail from "./ShowcasePosterRail";
 import { sheetAdminAccessState } from "../../lib/sheetAdminAuth";
 import { shouldShowRouletteTabs, splitProbabilityFamilies } from "../../lib/fanRouletteView";
+import {
+  OTHER_TAB_KEY,
+  insertPastAfterRoulettes,
+  isPastTabKey,
+  oldGroupKey,
+  pastLabelOfKey,
+  pastTabKey,
+  pastTabLabel,
+  resolvePastTabRid,
+  sortPastLabels,
+  type PastTabContext,
+} from "../../lib/fanPastTab";
 import { fixedPeriodDaysLeft } from "../../lib/fixedPricePeriod";
 import type { CSSProperties } from "react";
 
@@ -636,8 +648,11 @@ function ConnectionNotice({
 }
 
 // 팬 탭 시퀀스 한 칸 — 룰렛 탭 또는 정가/기타 자리. 팬 화면 탭 순서와 관리자 드래그 목록이 공유한다.
+// past = "지난 시즌 · L" 탭(팬 탭 되짚기, 2026-09-20). label 은 금액대 라벨 L 원문(표시 이름은 pastTabLabelOf).
+// 실제 기록이 있는 L 만 partition 시점에 동적으로 끼운다(룰렛 뒤 고정, 드래그 순서 불참).
 type FanTabSeqItem =
   | { kind: "roulette"; rid: string; label: string }
+  | { kind: "past"; rid: string; label: string }
   | { kind: "fixed" }
   | { kind: "other" };
 
@@ -665,6 +680,11 @@ type RouletteIndex = {
   // 정가/기타 탭 표시 이름(팬 탭 이름 오버레이 적용 결과. 기본 "정가"/"기타").
   fixedTabLabel: string;
   otherTabLabel: string;
+  // 팬 탭 되짚기(2026-09-20) 문맥 — 상품명이 최신 표에 없는 기록만 이걸로 (버전, 그룹)·금액대를 되짚는다.
+  // 옛 버전 그룹은 itemsByRid/itemRoulette 에 넣지 않는다(다른 소비자 결과 불변).
+  pastCtx: PastTabContext;
+  // "지난 시즌 · L" 탭 표시 이름(pastLabels 오버레이 > 기본).
+  pastTabLabelOf: (label: string) => string;
 };
 
 function buildRouletteIndex(state: StreamerState): RouletteIndex {
@@ -811,6 +831,39 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
   const fixedTabLabel = fanLabels?.fixedLabel || "정가";
   const otherTabLabel = fanLabels?.otherLabel || "기타";
 
+  // 팬 탭 되짚기 문맥(2026-09-20). 읽기만 — 색인(itemsByRid·itemRoulette)에는 아무것도 추가하지 않는다.
+  //  oldGroups: state.catalogs 전 버전(활성 포함)의 그룹 → `${version}:${groupIndex}` → {라벨, 상품명}.
+  //             옛 버전 행은 조회 다이어트로 items=[] 지만 groups 는 그대로 온다(새 쿼리 0).
+  //  labelRids: 활성 표 그룹 라벨 → 팬 탭으로 뜨는(비보관·상품 있음) rid 들, 중복 제거.
+  const oldGroups = new Map<string, { label: string; items: string[] }>();
+  for (const cat of catalogs) {
+    for (const g of cat.groups ?? []) {
+      oldGroups.set(oldGroupKey(cat.version, g.groupIndex), {
+        label: g.amountRangeLabel ? String(g.amountRangeLabel).trim() : "",
+        items: [...new Set((g.items ?? []).map((it) => it.itemName).filter(Boolean))],
+      });
+    }
+  }
+  const fanTabRids = new Set(baseRoulettes.map((r) => r.rid));
+  const labelRids = new Map<string, string[]>();
+  groups.forEach((g, i) => {
+    // 키는 trim 한 값으로 — resolvePastTabRid·catalog-items-at 가 같은 기준으로 비교한다
+    // (공백 섞인 라벨이 같은 금액대 탭 대신 past:L 로 빠지지 않게).
+    const label = g.amountRangeLabel ? String(g.amountRangeLabel).trim() : "";
+    if (!label) return;
+    const rid = ridOf(i);
+    if (!fanTabRids.has(rid)) return;
+    const list = labelRids.get(label) ?? [];
+    if (!list.includes(rid)) list.push(rid);
+    labelRids.set(label, list);
+  });
+  const pastCtx: PastTabContext = {
+    labelRids,
+    groupItemsByRid: new Map(Object.entries(groupsByRid)),
+    oldGroups,
+  };
+  const pastTabLabelOf = (label: string): string => pastTabLabel(label, fanLabels?.pastLabels);
+
   // 관리자 UI 데이터 — 실제 그룹 목록 + 스트리머가 만든 룰렛.
   const managerGroups: GroupForManager[] = groups.map((g, i) => ({
     index: g.groupIndex,
@@ -882,6 +935,8 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     fanTabManager,
     fixedTabLabel,
     otherTabLabel,
+    pastCtx,
+    pastTabLabelOf,
   };
 }
 
@@ -985,7 +1040,7 @@ function partitionHoldingsByRoulette(
   holdings: ViewerHolding[],
   index: RouletteIndex,
 ): Array<{ key: string; label: string; holdings: ViewerHolding[] }> {
-  const OTHER = "__other__";
+  const OTHER = OTHER_TAB_KEY; // "__other__" — resolvePastTabRid 가 돌려주는 기타 키와 같은 값.
   const FIXED = "__fixed__";
   // rid → (ownerKey → ViewerHolding)
   const byRid = new Map<string, Map<string, ViewerHolding>>();
@@ -995,7 +1050,9 @@ function partitionHoldingsByRoulette(
       const isFixed = it.amountRangeLabel === "정가";
       const info = isFixed ? undefined : index.itemRoulette.get(it.originalItemName);
       if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
-      const rid = isFixed ? FIXED : info?.rid ?? OTHER;
+      // 상품명이 최신 표에 있는 기록(info 있음)은 이전과 같은 경로(불변 조건 1). 없을 때만 되짚기(2026-09-20):
+      // (버전, 그룹)·금액대로 같은 금액대 탭 또는 "지난 시즌 · L"(past:L), 못 되짚으면 기존처럼 기타.
+      const rid = isFixed ? FIXED : info ? info.rid : resolvePastTabRid(it, index.pastCtx);
       let owners = byRid.get(rid);
       if (!owners) {
         owners = new Map();
@@ -1022,11 +1079,18 @@ function partitionHoldingsByRoulette(
   };
   // 탭 순서 = fanTabSequence(저장된 드래그 순서 반영). 정가/기타도 저장 위치에 놓이고,
   // 저장이 없으면 기존 기본(룰렛 가나다순 → 정가 → 기타) 그대로다.
+  // "지난 시즌 · L" 탭은 실제 기록이 있는 L 만, 마지막 룰렛 탭 뒤에 L 숫자순으로 끼운다(드래그 순서 불참).
+  const pastItems: FanTabSeqItem[] = sortPastLabels(
+    [...byRid.keys()].filter(isPastTabKey).map(pastLabelOfKey),
+  ).map((label) => ({ kind: "past", rid: pastTabKey(label), label }));
   const result: Array<{ key: string; label: string; holdings: ViewerHolding[] }> = [];
-  for (const seq of index.fanTabSequence) {
+  for (const seq of insertPastAfterRoulettes(index.fanTabSequence, pastItems)) {
     if (seq.kind === "roulette") {
       const list = finalize(seq.rid);
       if (list.length > 0) result.push({ key: seq.rid, label: seq.label, holdings: list });
+    } else if (seq.kind === "past") {
+      const list = finalize(seq.rid);
+      if (list.length > 0) result.push({ key: seq.rid, label: index.pastTabLabelOf(seq.label), holdings: list });
     } else if (seq.kind === "fixed") {
       const fixed = finalize(FIXED);
       if (fixed.length > 0) result.push({ key: FIXED, label: index.fixedTabLabel, holdings: fixed });
@@ -1686,7 +1750,7 @@ function HistoryTable({
             <th className={styles.nameCol}>닉네임</th>
             <th>상품</th>
             {showSet ? <th className={styles.probCol}>룰렛 세트</th> : null}
-            <th className={styles.donateCol} title="위플랩 표시시간 원문">
+            <th className={styles.donateCol} title="위플랩 표시시간 원문(수동기록은 스트리머가 적은 날짜)">
               후원 시간
             </th>
           </tr>
@@ -1716,7 +1780,12 @@ function HistoryTable({
                   {e.sourceKey.startsWith("fixed:") ? "—" : rouletteSetLabel(e) ?? "—"}
                 </td>
               ) : null}
-              <td className={styles.donateCell}>{e.donateTimeText}</td>
+              {/* 수동기록에 스트리머가 적은 날짜는 위플랩 원문이 아니다 — 원문처럼 보이지 않게 표시를 구분한다. */}
+              <td className={styles.donateCell}>
+                {e.sourceKey.startsWith("manual:") && e.donateTimeText
+                  ? `${e.donateTimeText.slice(0, 10).replaceAll("-", ".")} (수동)`
+                  : e.donateTimeText}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1803,10 +1872,15 @@ function AdminPanel({
   const fanTabByRid = new Map(fanTabManager.map((t) => [t.rid, t]));
   // 관리자 목록 = 팬 화면 탭 순서 그대로(정가/기타 자리 포함) — 드래그 편집의 초기 순서가 된다.
   // 정가/기타 탭은 팬 화면에 실제로 떴을 때만 이름칸을 보여준다(안 뜨는데 이름 받는 혼란 방지).
+  // "지난 시즌 · L" 탭도 떴을 때만 이름칸(정가/기타와 같은 규칙). 드래그 순서에는 참여하지 않는다(룰렛 뒤 고정).
   const fanNameRows: FanNameRow[] = fanTabGroups
     .map((g): FanNameRow | null => {
       if (g.key === "__fixed__") return { kind: "fixed" };
       if (g.key === "__other__") return { kind: "other" };
+      if (isPastTabKey(g.key)) {
+        const label = pastLabelOfKey(g.key);
+        return { kind: "past", label, currentName: state.fanTabLabels?.pastLabels?.[label] };
+      }
       const tab = fanTabByRid.get(g.key);
       return tab ? { kind: "tab", tab } : null;
     })
@@ -2096,6 +2170,13 @@ function AdminPanel({
             entries={entries}
             catalogItems={catalogItems}
             catalogVersion={activeCatalog?.version ?? state.currentCatalogVersion ?? null}
+            catalogCapturedAt={activeCatalog?.capturedAt ?? null}
+            currentItemTabs={Object.fromEntries(
+              [...rouletteIndex.itemRoulette].map(([name, info]) => [
+                name,
+                info.archived ? "" : info.label,
+              ]),
+            )}
             signatureCounts={state.signatureCounts ?? []}
           />
         </CollapsibleCard>
@@ -2150,6 +2231,7 @@ function AdminPanel({
                   fixedLabel={state.fanTabLabels?.fixedLabel ?? ""}
                   otherLabel={state.fanTabLabels?.otherLabel ?? ""}
                   existingEntries={state.fanTabLabels?.entries ?? []}
+                  existingPastLabels={state.fanTabLabels?.pastLabels ?? {}}
                 />
               </CollapsibleCard>
 

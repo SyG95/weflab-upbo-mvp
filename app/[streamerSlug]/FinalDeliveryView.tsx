@@ -20,6 +20,7 @@ type PeopleSort = 'overdue' | 'remaining' | 'name';
 // 시각 출처 배지 — 후원 원문 시각(donate)은 배지 없음.
 const KIND_BADGE: Record<string, { label: string; title: string } | undefined> = {
   manual: { label: '수동', title: '수동기록 — 원문 후원 시각이 없어 기록 생성 시각' },
+  manual_dated: { label: '수동', title: '수동기록 — 위플랩 원문이 아니라 스트리머가 적은 후원 날짜' },
   exchange: { label: '교환', title: '교환으로 받은 기록 — 교환된 시각이라 실제 대기 기간보다 짧아 보일 수 있어요' },
   created: { label: '반영', title: '원문 후원 시각을 해석하지 못해 시트 반영 시각' },
 };
