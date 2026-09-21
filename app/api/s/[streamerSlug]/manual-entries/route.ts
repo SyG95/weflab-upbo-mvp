@@ -4,9 +4,11 @@ import {
   getStreamerRowBySlug,
   updateManualEntryCount,
   updateManualEntryDate,
+  updateManualEntryTab,
 } from "@/lib/upboSupabase";
 import { parseDonateTimeMs } from "@/lib/api";
 import { isManualDonateTimeText } from "@/lib/manualEntryDate";
+import { cleanManualTabHint, type ManualTabHint } from "@/lib/manualTabHint";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 import { requireSheetAdmin } from "@/lib/sheetAdminAuth";
 
@@ -35,6 +37,14 @@ function cleanDonateTimeText(raw: unknown): string {
   return text;
 }
 
+// "직접 입력" 탭 힌트 정리: 없음/null = 힌트 없음(표에 없음). 모양이 아니면 400.
+function cleanTabHintInput(raw: unknown): ManualTabHint | null {
+  if (raw === undefined || raw === null) return null;
+  const hint = cleanManualTabHint(raw);
+  if (!hint) throw badRequest("탭 선택값이 올바르지 않아요. 탭을 다시 골라 주세요.");
+  return hint;
+}
+
 // 수동기록 추가. 관리자 로그인 세션 필요. 저장 실체는 upbo_entries(source_key manual:...).
 export async function POST(request: Request, context: RouteContext) {
   try {
@@ -51,6 +61,7 @@ export async function POST(request: Request, context: RouteContext) {
       catalogVersion?: number | null;
       count?: number;
       donateTimeText?: string;
+      tabHint?: unknown;
     }>(request);
 
     const fanId = String(body.fanId ?? "").trim();
@@ -58,6 +69,9 @@ export async function POST(request: Request, context: RouteContext) {
     if (!fanId) throw badRequest("계정ID를 적어 주세요.");
     if (!itemName) throw badRequest("상품을 골라 주세요.");
     const donateTimeText = cleanDonateTimeText(body.donateTimeText);
+    const catalogVersion = typeof body.catalogVersion === "number" ? body.catalogVersion : null;
+    // 탭 힌트는 "직접 입력"(표 버전 없음)에만 의미가 있다 — 표에서 고른 상품에 힌트가 딸려 와도 무시(불변 조건 1).
+    const tabHint = catalogVersion === null ? cleanTabHintInput(body.tabHint) : null;
 
     await createManualEntry(streamer, {
       fanId,
@@ -67,9 +81,10 @@ export async function POST(request: Request, context: RouteContext) {
       amountRangeLabel: typeof body.amountRangeLabel === "string" ? body.amountRangeLabel : "",
       catalogGroupIndex:
         typeof body.catalogGroupIndex === "number" ? body.catalogGroupIndex : null,
-      catalogVersion: typeof body.catalogVersion === "number" ? body.catalogVersion : null,
+      catalogVersion,
       count: Number(body.count) || 1,
       donateTimeText,
+      tabHint,
     });
     return jsonOk({ ok: true });
   } catch (error) {
@@ -77,22 +92,26 @@ export async function POST(request: Request, context: RouteContext) {
   }
 }
 
-// 수동기록 수정: {id, count} = 개수(기존 그대로), {id, donateTimeText} = 후원 날짜(""=지우기). 둘 다 오면 각각 처리.
+// 수동기록 수정: {id, count} = 개수, {id, donateTimeText} = 후원 날짜(""=지우기),
+// {id, tabHint} = 직접 입력 탭(null = 표에 없음). 여러 개가 같이 오면 각각 처리(검증은 전부 먼저).
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
-    const body = await readJson<{ id?: string; count?: number; donateTimeText?: string }>(request);
+    const body = await readJson<{ id?: string; count?: number; donateTimeText?: string; tabHint?: unknown }>(request);
     const id = String(body.id ?? "").trim();
     if (!id) throw badRequest("id가 필요합니다.");
     const hasCount = body.count !== undefined;
     const hasDate = body.donateTimeText !== undefined;
-    if (!hasCount && !hasDate) throw badRequest("count 또는 donateTimeText 가 필요합니다.");
-    // 검증을 먼저 전부 끝낸 뒤에 쓴다 — 날짜가 불량인데 개수만 바뀌어 있는 반쪽 반영을 막는다.
+    const hasTab = body.tabHint !== undefined;
+    if (!hasCount && !hasDate && !hasTab) throw badRequest("count, donateTimeText 또는 tabHint 가 필요합니다.");
+    // 검증을 먼저 전부 끝낸 뒤에 쓴다 — 날짜·탭이 불량인데 개수만 바뀌어 있는 반쪽 반영을 막는다.
     const nextDate = hasDate ? cleanDonateTimeText(body.donateTimeText) : null;
+    const nextTab = hasTab ? cleanTabHintInput(body.tabHint) : null;
     if (hasCount) await updateManualEntryCount(streamer, id, Number(body.count) || 1);
     if (nextDate !== null) await updateManualEntryDate(streamer, id, nextDate);
+    if (hasTab) await updateManualEntryTab(streamer, id, nextTab);
     return jsonOk({ ok: true });
   } catch (error) {
     return jsonError(error);

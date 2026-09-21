@@ -11,9 +11,11 @@ import {
   pastLabelOfKey,
   pastTabKey,
   pastTabLabel,
+  resolveHintedTabRid,
   resolvePastTabRid,
   sortPastLabels,
 } from "../lib/fanPastTab.ts";
+import { customNameOfKey, customTabKey, isCustomTabKey } from "../lib/manualTabHint.ts";
 
 // 현재 표(활성): 330 = named:0(곰인형·쿠션), 1000 = named:1(키링·스티커·포토카드)
 // 500 은 두 룰렛에 있음(rule 4 용): auto:2(텀블러·머그·엽서) · auto:3(모자·양말·장갑)
@@ -162,4 +164,80 @@ test("시퀀스 순서: 룰렛 → past(숫자순) → 정가 → 기타", () =>
   const same = insertPastAfterRoulettes(seq, []);
   assert.deepEqual(same, seq);
   assert.notEqual(same, seq);
+});
+
+// ── 수동기록 "직접 입력" 탭 힌트(2026-09-21) — resolveHintedTabRid ──
+// 호출측(page.tsx partition)이 catalogVersion == null && tabHint 일 때만 부른다. 여기서는 힌트 → rid 규칙만 본다.
+
+test("힌트 1: other → 기타(힌트 없는 직접 입력과 같은 자리)", () => {
+  assert.equal(resolveHintedTabRid({ kind: "other" }, ctx()), OTHER_TAB_KEY);
+});
+
+test("힌트 2: custom → custom:<이름> (이름 그대로, 표와 무관)", () => {
+  const c = ctx();
+  assert.equal(resolveHintedTabRid({ kind: "custom", name: "이벤트" }, c), "custom:이벤트");
+  // 표의 금액대와 같은 글자여도 custom 은 룰렛 탭으로 가지 않는다.
+  assert.equal(resolveHintedTabRid({ kind: "custom", name: "330" }, c), "custom:330");
+});
+
+test("힌트 3: label 이 활성 표 팬 탭 정확히 1개 → 그 rid(rid 힌트 유무·불일치와 무관)", () => {
+  const c = ctx();
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "330" }, c), "named:0");
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "330", rid: "named:0" }, c), "named:0");
+  // 표가 바뀌어 rid 가 달라졌어도 라벨로 찾는다.
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "330", rid: "auto:9" }, c), "named:0");
+  // 중복 rid 는 1개로 본다.
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "1000" }, c), "named:1");
+  // 라벨 공백은 trim.
+  assert.equal(resolveHintedTabRid({ kind: "label", label: " 330 " }, c), "named:0");
+});
+
+test("힌트 4: label 후보 2개 이상 + hint.rid 가 그중 하나 → hint.rid", () => {
+  const c = ctx();
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "500", rid: "auto:3" }, c), "auto:3");
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "500", rid: "auto:2" }, c), "auto:2");
+});
+
+test("힌트 5: label 후보 2개 이상인데 rid 없음/불일치 → past:L", () => {
+  const c = ctx();
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "500" }, c), "past:500");
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "500", rid: "named:0" }, c), "past:500");
+});
+
+test("힌트 6: label 후보 0개(단종 금액대·보관 룰렛만) → past:L, 빈 라벨은 기타", () => {
+  const c = ctx();
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "77" }, c), "past:77");
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "3000", rid: "named:9" }, c), "past:3000", "보관 룰렛 rid 를 줘도 labelRids 가 문");
+  assert.equal(resolveHintedTabRid({ kind: "label", label: "   " }, c), OTHER_TAB_KEY);
+});
+
+test("힌트: ctx 를 바꾸지 않는다", () => {
+  const c = ctx();
+  const before = JSON.stringify([...c.labelRids]);
+  resolveHintedTabRid({ kind: "label", label: "500", rid: "auto:3" }, c);
+  resolveHintedTabRid({ kind: "custom", name: "이벤트" }, c);
+  assert.equal(JSON.stringify([...c.labelRids]), before);
+});
+
+test("custom 탭 키 왕복 + past/other 키와 안 겹침", () => {
+  assert.equal(customNameOfKey(customTabKey("핀볼 보상")), "핀볼 보상");
+  assert.equal(isCustomTabKey("custom:이벤트"), true);
+  assert.equal(isCustomTabKey("custom:"), false);
+  assert.equal(isPastTabKey("custom:이벤트"), false);
+  assert.equal(isCustomTabKey("past:330"), false);
+  assert.equal(isCustomTabKey(OTHER_TAB_KEY), false);
+});
+
+test("시퀀스 순서: 룰렛 → past → custom(가나다순) → 정가 → 기타", () => {
+  const seq = [
+    { kind: "roulette", rid: "named:0", label: "330" },
+    { kind: "fixed" },
+    { kind: "other" },
+  ];
+  const past = [{ kind: "past", rid: pastTabKey("77"), label: "77" }];
+  const custom = ["핀볼", "이벤트"].sort((a, b) => a.localeCompare(b, "ko")).map((n) => ({ kind: "custom", rid: customTabKey(n), label: n }));
+  assert.deepEqual(
+    insertPastAfterRoulettes(seq, [...past, ...custom]).map((s) => s.rid ?? s.kind),
+    ["named:0", "past:77", "custom:이벤트", "custom:핀볼", "fixed", "other"],
+  );
 });

@@ -10,6 +10,8 @@
 //  - 옛 버전 그룹을 색인(itemsByRid)에 넣지 않는다 — 여기서는 rid 문자열만 고른다.
 //  - 새 저장 없음. 탭 이름 오버레이(pastLabels)는 기존 fan_tab_labels_updated 에 얹는다.
 
+import { customTabKey, type ManualTabHint } from "./manualTabHint";
+
 export const PAST_TAB_PREFIX = "past:";
 // partitionHoldingsByRoulette 의 "기타" 키와 같은 값이어야 한다(page.tsx OTHER).
 export const OTHER_TAB_KEY = "__other__";
@@ -104,6 +106,24 @@ export function resolvePastTabRid(item: PastTabItem, ctx: PastTabContext): strin
     }
   }
   return best !== undefined && bestScore >= 0.5 ? best : pastTabKey(label);
+}
+
+// 수동기록 "직접 입력" 탭 힌트(2026-09-21) → 팬 탭 rid. 호출측은 catalogVersion == null 이고 상품명이 최신 표에 없는
+// 기록에만 부른다(표 버전이 있는 기록은 힌트를 보지 않는다 — 불변 조건 1).
+//  other  → 기타(__other__)
+//  custom → custom:<이름> (partition 이 이름 그대로 탭을 만든다)
+//  label  → 활성 표에서 라벨 L 인 팬 탭 rid 가 정확히 1개면 그 rid,
+//           2개 이상이고 hint.rid 가 그중 하나면 hint.rid,
+//           그 외(0개 = 단종 금액대, 2개 이상인데 rid 불일치) → past:L
+export function resolveHintedTabRid(hint: ManualTabHint, ctx: PastTabContext): string {
+  if (hint.kind === "other") return OTHER_TAB_KEY;
+  if (hint.kind === "custom") return customTabKey(hint.name);
+  const label = hint.label.trim();
+  if (!label) return OTHER_TAB_KEY;
+  const rids = [...new Set(ctx.labelRids.get(label) ?? [])];
+  if (rids.length === 1) return rids[0];
+  if (rids.length >= 2 && hint.rid && rids.includes(hint.rid)) return hint.rid;
+  return pastTabKey(label);
 }
 
 // 팬 탭 시퀀스에 past 항목을 끼운다: 마지막 룰렛 항목 바로 뒤(룰렛이 없으면 맨 앞).

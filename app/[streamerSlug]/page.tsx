@@ -102,10 +102,12 @@ import {
   pastLabelOfKey,
   pastTabKey,
   pastTabLabel,
+  resolveHintedTabRid,
   resolvePastTabRid,
   sortPastLabels,
   type PastTabContext,
 } from "../../lib/fanPastTab";
+import { customNameOfKey, customTabKey, isCustomTabKey, sortCustomTabNames } from "../../lib/manualTabHint";
 import { fixedPeriodDaysLeft } from "../../lib/fixedPricePeriod";
 import type { CSSProperties } from "react";
 
@@ -652,9 +654,12 @@ function ConnectionNotice({
 // 팬 탭 시퀀스 한 칸 — 룰렛 탭 또는 정가/기타 자리. 팬 화면 탭 순서와 관리자 드래그 목록이 공유한다.
 // past = "이전 표 · L" 탭(팬 탭 되짚기, 2026-09-20). label 은 금액대 라벨 L 원문(표시 이름은 pastTabLabelOf).
 // 실제 기록이 있는 L 만 partition 시점에 동적으로 끼운다(룰렛 뒤 고정, 드래그 순서 불참).
+// custom = 수동기록 "직접 입력" 상품에 스트리머가 지은 탭(2026-09-21). rid = custom:<이름>, label = 이름 그대로.
+// past 와 같이 실제 기록이 있을 때만 partition 이 끼운다(past 뒤, 이름 가나다순). 이름이 곧 힌트라 개명은 기록 쪽에서.
 type FanTabSeqItem =
   | { kind: "roulette"; rid: string; label: string }
   | { kind: "past"; rid: string; label: string }
+  | { kind: "custom"; rid: string; label: string }
   | { kind: "fixed" }
   | { kind: "other" };
 
@@ -670,6 +675,9 @@ type RouletteIndex = {
   fanRouletteOrder: Array<{ rid: string; label: string }>;
   // 팬 탭 전체 시퀀스(룰렛 + 정가/기타 자리 포함) — 팬 화면 탭과 관리자 "팬 탭 이름" 목록 공용.
   fanTabSequence: FanTabSeqItem[];
+  // 수동기록 폼 "어느 탭에 넣을까요" 선택지(관리자 경로만) — 팬 탭 순서의 룰렛마다 표시 라벨 + 힌트용 금액대 라벨
+  // (그 rid 의 첫 금액대, 없으면 "" → 폼이 제외). 팬 화면은 이 라벨(+rid)로 탭을 되찾는다(resolveHintedTabRid).
+  tabChoices: Array<{ rid: string; label: string; hintLabel: string }>;
   // 관리자 "룰렛 관리" 탭 데이터
   managerGroups: GroupForManager[];
   managerRoulettes: NamedRouletteForManager[];
@@ -820,6 +828,12 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
   const fanRouletteOrder = fanTabSequence.filter(
     (s): s is Extract<FanTabSeqItem, { kind: "roulette" }> => s.kind === "roulette",
   ).map(({ rid, label }) => ({ rid, label }));
+  // 수동기록 폼 탭 선택지 — 힌트 라벨은 trim(labelRids 키와 같은 기준). 공백뿐인 라벨은 "" → 폼에서 제외.
+  const tabChoices = fanRouletteOrder.map(({ rid, label }) => ({
+    rid,
+    label,
+    hintLabel: ([...(amountsByRid[rid] ?? [])][0] ?? "").trim(),
+  }));
 
   // 관리자 "팬 탭 이름" 섹션 — 팬 탭과 같은 목록. 정가/기타 이름은 별도 필드(키 고정).
   const fanTabManager: FanTabForNaming[] = fanRouletteOrder.map(({ rid, label }) => ({
@@ -930,6 +944,7 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     itemRoulette,
     fanRouletteOrder,
     fanTabSequence,
+    tabChoices,
     managerGroups,
     managerRoulettes,
     thresholdGroups,
@@ -1054,7 +1069,16 @@ function partitionHoldingsByRoulette(
       if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
       // 상품명이 최신 표에 있는 기록(info 있음)은 이전과 같은 경로(불변 조건 1). 없을 때만 되짚기(2026-09-20):
       // (버전, 그룹)·금액대로 같은 금액대 탭 또는 "이전 표 · L"(past:L), 못 되짚으면 기존처럼 기타.
-      const rid = isFixed ? FIXED : info ? info.rid : resolvePastTabRid(it, index.pastCtx);
+      // 직접 입력 탭 힌트(2026-09-21)는 표 버전이 없는(catalogVersion == null) 조각에 힌트가 있을 때만 본다 —
+      // 표 버전이 있는 기록(자동수집·표에서 고른 수동)은 힌트가 있어도 되짚기 경로 그대로(불변 조건 1),
+      // 힌트 없는 직접 입력은 되짚기 규칙 1 로 지금처럼 기타(불변 조건 2).
+      const rid = isFixed
+        ? FIXED
+        : info
+          ? info.rid
+          : it.catalogVersion == null && it.tabHint
+            ? resolveHintedTabRid(it.tabHint, index.pastCtx)
+            : resolvePastTabRid(it, index.pastCtx);
       let owners = byRid.get(rid);
       if (!owners) {
         owners = new Map();
@@ -1085,14 +1109,21 @@ function partitionHoldingsByRoulette(
   const pastItems: FanTabSeqItem[] = sortPastLabels(
     [...byRid.keys()].filter(isPastTabKey).map(pastLabelOfKey),
   ).map((label) => ({ kind: "past", rid: pastTabKey(label), label }));
+  // 스트리머가 지은 탭(custom:<이름>)도 실제 기록이 있는 이름만, past 뒤에 가나다순으로(2026-09-21). 탭 라벨 = 이름 그대로.
+  const customItems: FanTabSeqItem[] = sortCustomTabNames(
+    [...byRid.keys()].filter(isCustomTabKey).map(customNameOfKey),
+  ).map((name) => ({ kind: "custom", rid: customTabKey(name), label: name }));
   const result: Array<{ key: string; label: string; holdings: ViewerHolding[] }> = [];
-  for (const seq of insertPastAfterRoulettes(index.fanTabSequence, pastItems)) {
+  for (const seq of insertPastAfterRoulettes(index.fanTabSequence, [...pastItems, ...customItems])) {
     if (seq.kind === "roulette") {
       const list = finalize(seq.rid);
       if (list.length > 0) result.push({ key: seq.rid, label: seq.label, holdings: list });
     } else if (seq.kind === "past") {
       const list = finalize(seq.rid);
       if (list.length > 0) result.push({ key: seq.rid, label: index.pastTabLabelOf(seq.label), holdings: list });
+    } else if (seq.kind === "custom") {
+      const list = finalize(seq.rid);
+      if (list.length > 0) result.push({ key: seq.rid, label: seq.label, holdings: list });
     } else if (seq.kind === "fixed") {
       const fixed = finalize(FIXED);
       if (fixed.length > 0) result.push({ key: FIXED, label: index.fixedTabLabel, holdings: fixed });
@@ -2225,6 +2256,7 @@ function AdminPanel({
                 info.archived ? "" : info.label,
               ]),
             )}
+            tabChoices={rouletteIndex.tabChoices}
             signatureCounts={state.signatureCounts ?? []}
           />
         </CollapsibleCard>

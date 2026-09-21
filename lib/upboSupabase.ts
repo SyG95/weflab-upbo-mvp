@@ -54,6 +54,7 @@ import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAl
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
+import { cleanManualTabHint, storableManualTabHint, type ManualTabHint } from "./manualTabHint";
 import {
   isFixedPeriodExpired,
   judgeFixedPeriod,
@@ -448,12 +449,15 @@ function mapBatch(row: BatchRow) {
 }
 
 function mapEntry(row: UpboEntryRow, streamerSlug: string) {
-  let metadata: { multiplier?: number; effectiveCount?: number; modifierSourceKeys?: string[] } = {};
+  let metadata: { multiplier?: number; effectiveCount?: number; modifierSourceKeys?: string[]; tabHint?: unknown } = {};
   try {
     metadata = row.admin_note ? JSON.parse(row.admin_note) : {};
   } catch {
     metadata = {};
   }
+  // 수동기록 "직접 입력" 탭 힌트(2026-09-21). 모양이 아니면 undefined(= 힌트 없음 = 표에 없음).
+  // 팬 화면은 catalogVersion == null 인 기록에서만 이 값을 본다(불변 조건 1).
+  const manualTabHint = cleanManualTabHint(metadata.tabHint) ?? undefined;
   return {
     id: row.id,
     streamerSlug,
@@ -478,6 +482,7 @@ function mapEntry(row: UpboEntryRow, streamerSlug: string) {
     multiplier: Number(metadata.multiplier ?? 1),
     effectiveCount: Number(metadata.effectiveCount ?? 1),
     modifierSourceKeys: Array.isArray(metadata.modifierSourceKeys) ? metadata.modifierSourceKeys : [],
+    manualTabHint,
     publicNote: row.public_note ?? "",
     adminNote: row.admin_note ?? "",
     createdAt: row.created_at,
@@ -2482,6 +2487,9 @@ export type ManualEntryInput = {
   count: number;
   // 스트리머가 적은 후원 날짜(KST "YYYY-MM-DD HH:MM", 검증은 route 에서). 없거나 "" 이면 옛 수동기록과 동일(날짜 모름).
   donateTimeText?: string;
+  // "직접 입력"(catalogVersion null) 상품을 넣을 팬 탭(2026-09-21). other/null 이면 admin_note 에 키를 넣지 않는다.
+  // 정제(cleanManualTabHint)·"표 버전이 있으면 무시"는 route 에서 끝내고 온다.
+  tabHint?: ManualTabHint | null;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2489,9 +2497,52 @@ function clampCount(n: unknown): number {
   return Math.max(1, Math.min(9999, Math.floor(Number(n) || 1)));
 }
 
+// 수동기록 admin_note(JSON 메타: effectiveCount·tabHint·exchangeGroupId …) 병합 — 순수.
+// 예전 updateManualEntryCount 는 `{effectiveCount}` 로 통째로 덮어써서 다른 키가 사라졌다(코덱스 2026-09-18 지적).
+// 기존 문자열이 JSON 이 아니거나 객체가 아니면 {} 에서 시작하고, patch 의 undefined 값은 그 키를 지운다.
+export function mergeManualAdminNote(existing: string | null, patch: Record<string, unknown>): string {
+  let base: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = existing ? JSON.parse(existing) : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) base = parsed as Record<string, unknown>;
+  } catch {
+    base = {};
+  }
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete out[key];
+    else out[key] = value;
+  }
+  return JSON.stringify(out);
+}
+
+// 수동기록(manual:*) 한 행의 admin_note 를 읽어 병합한 뒤 PATCH. 행이 없으면(다른 사람 기록·이미 삭제) 아무것도 안 한다 —
+// 예전 PATCH 도 0행 갱신으로 조용히 끝났다(동작 유지). 읽기→쓰기 사이의 동시 수정은 나중 쓰기가 이기지만
+// 각자 자기 키만 얹으므로 통째 덮어쓰기보다 잃는 범위가 좁다.
+async function patchManualAdminNote(
+  streamer: StreamerRow,
+  entryId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (!UUID_RE.test(entryId)) throw new Error("invalid entry id");
+  const filter = `/${tableName("upbo_entries")}?id=eq.${entryId}&streamer_id=eq.${streamer.id}&source_key=like.manual:*`;
+  const rows = await supabaseFetch<Array<Pick<UpboEntryRow, "admin_note">>>(`${filter}&select=admin_note&limit=1`);
+  const row = rows[0];
+  if (!row) return;
+  await supabaseFetch(filter, {
+    method: "PATCH",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      admin_note: mergeManualAdminNote(row.admin_note ?? null, patch),
+      updated_at: new Date().toISOString(),
+    }),
+  });
+}
+
 export async function createManualEntry(streamer: StreamerRow, input: ManualEntryInput): Promise<void> {
   const now = new Date().toISOString();
   const count = clampCount(input.count);
+  const tabHint = storableManualTabHint(input.tabHint);
   await supabaseFetch(`/${tableName("upbo_entries")}`, {
     method: "POST",
     headers: { prefer: "return=minimal" },
@@ -2514,8 +2565,8 @@ export async function createManualEntry(streamer: StreamerRow, input: ManualEntr
       roulette_total: 0,
       raw_text: "",
       public_note: "",
-      // effectiveCount 는 admin_note JSON 에서 읽는다(mapEntry 규칙과 동일).
-      admin_note: JSON.stringify({ effectiveCount: count }),
+      // effectiveCount 는 admin_note JSON 에서 읽는다(mapEntry 규칙과 동일). tabHint 는 직접 입력 탭 힌트(있을 때만).
+      admin_note: JSON.stringify(tabHint ? { effectiveCount: count, tabHint } : { effectiveCount: count }),
       raw_import_id: null,
       created_at: now,
       updated_at: now,
@@ -2524,19 +2575,20 @@ export async function createManualEntry(streamer: StreamerRow, input: ManualEntr
 }
 
 // 수동기록 개수 수정. source_key manual:* 만 대상(자동/원본 기록은 절대 안 건드림).
+// admin_note 는 통째로 덮지 않고 effectiveCount 키만 병합한다 — tabHint 등 다른 키가 살아남는다(2026-09-21).
 export async function updateManualEntryCount(streamer: StreamerRow, entryId: string, count: number): Promise<void> {
-  if (!UUID_RE.test(entryId)) throw new Error("invalid entry id");
-  await supabaseFetch(
-    `/${tableName("upbo_entries")}?id=eq.${entryId}&streamer_id=eq.${streamer.id}&source_key=like.manual:*`,
-    {
-      method: "PATCH",
-      headers: { prefer: "return=minimal" },
-      body: JSON.stringify({
-        admin_note: JSON.stringify({ effectiveCount: clampCount(count) }),
-        updated_at: new Date().toISOString(),
-      }),
-    },
-  );
+  await patchManualAdminNote(streamer, entryId, { effectiveCount: clampCount(count) });
+}
+
+// 수동기록 "직접 입력" 탭 바꾸기(2026-09-21). null/other = 키 삭제(= 표에 없음). source_key manual:* 만 대상,
+// effectiveCount 등 다른 키는 그대로. 팬 화면은 catalogVersion == null 인 기록에서만 이 값을 본다(불변 조건 1) —
+// 표 버전이 있는 행에 힌트가 와도 결과가 안 바뀌므로 여기서는 행 종류를 다시 검사하지 않는다(route 가 UI 와 같이 막는다).
+export async function updateManualEntryTab(
+  streamer: StreamerRow,
+  entryId: string,
+  hint: ManualTabHint | null,
+): Promise<void> {
+  await patchManualAdminNote(streamer, entryId, { tabHint: storableManualTabHint(hint) });
 }
 
 // 수동기록 후원 날짜 수정(붙이기/바꾸기/지우기=""). source_key manual:* 만 대상 — donate_time_text·updated_at 만

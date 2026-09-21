@@ -2,6 +2,8 @@
 // core/extension/server 로직은 절대 건드리지 않고, 로컬 검증 API state만 읽고
 // thresholdPercent 저장만 호출한다. (read + settings POST 한정)
 
+import type { ManualTabHint } from "./manualTabHint";
+
 export const API_BASE =
   process.env.UPBO_API_BASE ??
   (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://127.0.0.1:3000");
@@ -33,6 +35,9 @@ export type UpboEntry = {
   multiplier?: number;
   effectiveCount?: number;
   modifierSourceKeys?: string[];
+  // 수동기록 "직접 입력"(catalogVersion 없음) 상품을 넣을 팬 탭 힌트(admin_note JSON tabHint, 2026-09-21).
+  // 없거나 모양이 아니면 undefined = 지금처럼 "표에 없음". 표 버전이 있는 기록에서는 팬 화면이 이 값을 보지 않는다.
+  manualTabHint?: ManualTabHint;
   // 운영 레이어(양도/교환): 값이 원본과 다를 때만 화면에 "→ 현재" 로 노출한다.
   currentOwnerName?: string | null;
   currentOwnerId?: string | null;
@@ -704,6 +709,8 @@ export type HoldingItem = {
   // 교환·양도로 조각이 쪼개져도 원본 entry 값을 그대로 물려받는다(표시 분류 전용, 판정과 무관).
   catalogVersion: number | null;
   catalogGroupIndex: number | null;
+  // 직접 입력 수동기록의 탭 힌트(2026-09-21) — catalogVersion 이 null 인 조각에서만 팬 탭 결정에 쓴다. 없으면 null.
+  tabHint?: ManualTabHint | null;
   // 원본 기록의 후원 유형(도전미션 별풍선 등). 배송관리 "미션" 배지 판별용 — 교환돼도 원본 유형 유지.
   donationType?: string;
   // 현재 남은 수량(양도/교환으로 빠져나간 분, 취소/완료된 분을 차감한 값).
@@ -922,6 +929,7 @@ function foldEntryHoldings(entry: UpboEntry, events: ItemEvent[]): HoldingItem[]
       amountRangeLabel: lot.amountRangeLabel,
       catalogVersion: entry.catalogVersion ?? null,
       catalogGroupIndex: entry.catalogGroupIndex ?? null,
+      tabHint: entry.manualTabHint ?? null,
       donationType: entry.donationType,
       quantity: lot.quantity,
       originalQuantity,
