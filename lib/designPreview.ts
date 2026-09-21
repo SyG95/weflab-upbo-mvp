@@ -19,7 +19,7 @@ export const designConcepts = [
 ] as const;
 export type DesignId = typeof designConcepts[number]['id'];
 export function designId(value?:string):DesignId { return designConcepts.find(d=>d.id===value)?.id ?? 'c1'; }
-export const monthLabel = (m:string) => m==='all'?'전체 기간':m==='etc'?'기타':`${m.slice(0,4)}.${m.slice(5)}`;
+export const monthLabel = (m:string) => m==='all'?'전체 기간':m==='etc'?'날짜 없음':`${m.slice(0,4)}.${m.slice(5)}`;
 export type DesignRow = {id:string; ownerId:string; ownerName:string; item:string; group:string; month:string; date:string; timestamp:number|null; quantity:number; done:number};
 export function monthsForSelect(months:string[]){
  const newest=months[0];if(!newest)return months;

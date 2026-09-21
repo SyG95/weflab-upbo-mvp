@@ -9,9 +9,11 @@ import { normalizeSheetFont } from "./sheetFonts";
 import {
   jaccardStrings,
   normalizeAccountId,
+  normalizeFanAxisPrefs,
   normalizeFanDeliveryReflect,
   normalizeFanLayout,
   type CatalogGroup,
+  type FanAxisPrefs,
   type FanDeliveryReflect,
   type FanLayout,
   type RouletteConfigEntry,
@@ -922,6 +924,7 @@ const OVERLAY_LATEST_ACTIONS = [
   "weflab_link_updated",
   "sheet_font_updated",
   "threshold_overrides_updated",
+  "fan_axis_updated",
 ] as const;
 
 type OverlayLatestRow = { action: string; payload: Record<string, unknown> | null; created_at: string };
@@ -974,7 +977,7 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, sheetTitle, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, sheetTitle, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides, fanAxisPrefs] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
@@ -990,6 +993,7 @@ export async function getStreamerState(slug: string) {
     fanTabLabelsForStreamer(streamer.id, overlayPick("fan_tab_labels_updated")),
     weflabLinkForStreamer(streamer.id, overlayPick("weflab_link_updated")),
     latestThresholdOverrides(streamer.id, overlayPick("threshold_overrides_updated")),
+    fanAxisPrefsForStreamer(streamer.id, overlayPick("fan_axis_updated")),
   ]);
   const sheetFontKey = sheetFontKeyFromOverlay(overlayPick("sheet_font_updated"));
   const currentCatalogVersion = catalogs.reduce((max, row) => Math.max(max, row.version), 0) || null;
@@ -1028,6 +1032,7 @@ export async function getStreamerState(slug: string) {
     rouletteConfig,
     deliveryProgress,
     fanDeliveryReflect,
+    fanAxisPrefs,
     productColors,
     fanRevealEnabled,
     fanIdHidden,
@@ -3251,7 +3256,7 @@ export async function setRouletteConfig(
 // audit_logs 오버레이 최신 1건(action=fan_tab_labels_updated). 스키마 변경 없음.
 const FAN_TAB_LABELS_MAX = 100;
 const FAN_TAB_NAME_MAX = 30;
-// "지난 시즌 · L" 탭 이름(팬 탭 되짚기, 2026-09-20): 키 = 금액대 라벨 L(40자 이하), 값 = 이름. 최대 50키.
+// "이전 표 · L" 탭 이름(팬 탭 되짚기, 2026-09-20): 키 = 금액대 라벨 L(40자 이하), 값 = 이름. 최대 50키.
 const FAN_PAST_LABEL_KEY_MAX = 40;
 const FAN_PAST_LABELS_MAX = 50;
 
@@ -3439,6 +3444,32 @@ export async function setFanDeliveryReflect(
       action: "fan_display_updated",
       actor: "operator",
       payload: { deliveryReflect: clean },
+    }),
+  });
+  return clean;
+}
+
+// ---------- 팬 화면 구분 축(스트리머별, 2026-09-21) ----------
+// "언제"(월 레일)·"어느 룰렛"(룰렛 탭) 축을 팬 화면에 보일지. audit_logs 오버레이 최신 1건(fan_axis_updated,
+// payload.axis). OVERLAY_LATEST_ACTIONS 에 들어 있어 팬 페이지 쿼리 수 증가 0. 기본 둘 다 켬 = 종전과 동일.
+
+export async function fanAxisPrefsForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<FanAxisPrefs> {
+  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { axis?: unknown } | null }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_axis_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+  return normalizeFanAxisPrefs(rows[0]?.payload?.axis);
+}
+
+export async function setFanAxisPrefs(streamer: StreamerRow, prefs: unknown): Promise<FanAxisPrefs> {
+  const clean = normalizeFanAxisPrefs(prefs);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: "fan_axis_updated",
+      actor: "operator",
+      payload: { axis: clean },
     }),
   });
   return clean;

@@ -6,7 +6,7 @@
 //  - 새 캡처가 와도 상품이 비슷하면(자카드 ≥ 0.5) 따라온다. 절반 이상 바뀌면 자동으로 풀린다.
 // 정가/기타 탭은 지문이 없어 kind 로 순서에 참여한다. 저장 = audit_logs 오버레이 최신 1건(스키마 무변경).
 // 지금 화면에 없는 탭의 옛 이름은 보존한다(순서는 보이는 탭끼리만 저장).
-// "지난 시즌 · L" 탭(팬 탭 되짚기, 2026-09-20): 금액대 라벨 L 에 이름을 매단다(pastLabels[L]). 룰렛 탭 뒤
+// "이전 표 · L" 탭(팬 탭 되짚기, 2026-09-20): 금액대 라벨 L 에 이름을 매단다(pastLabels[L]). 룰렛 탭 뒤
 // 고정이라 드래그에 참여하지 않고(잠금 행), 팬 화면에 실제로 떴을 때만 이름칸이 보인다(정가/기타와 같은 규칙).
 
 import { useState, type DragEvent } from "react";
@@ -29,7 +29,7 @@ export type FanTabForNaming = {
 };
 
 // 관리자 목록 한 줄 — 팬 화면 탭 순서 그대로 내려온다(정가/기타 자리 포함).
-// past: "지난 시즌 · L" 탭. label = 금액대 라벨 L 원문, currentName = 저장된 이름(없으면 기본 이름 표시).
+// past: "이전 표 · L" 탭. label = 금액대 라벨 L 원문, currentName = 저장된 이름(없으면 기본 이름 표시).
 export type FanNameRow =
   | { kind: "tab"; tab: FanTabForNaming }
   | { kind: "past"; label: string; currentName?: string }
@@ -61,7 +61,7 @@ export default function FanTabNameManager({
   fixedLabel: string;
   otherLabel: string;
   existingEntries: FanTabLabelEntry[];
-  // 저장돼 있는 "지난 시즌" 탭 이름 전부(L → 이름). 지금 안 뜬 L 의 이름은 저장 시 보존한다.
+  // 저장돼 있는 "이전 표" 탭 이름 전부(L → 이름). 지금 안 뜬 L 의 이름은 저장 시 보존한다.
   existingPastLabels: Record<string, string>;
 }) {
   const tabs = rows.filter((r): r is Extract<FanNameRow, { kind: "tab" }> => r.kind === "tab");
@@ -73,7 +73,7 @@ export default function FanTabNameManager({
     for (const r of tabs) m[r.tab.rid] = r.tab.overlayName ?? "";
     return m;
   });
-  // "지난 시즌" 탭 이름(L → 입력값). 빈 값 = 기본 이름("지난 시즌 · L").
+  // "이전 표" 탭 이름(L → 입력값). 빈 값 = 기본 이름("이전 표 · L").
   const [pastNames, setPastNames] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
     for (const r of pastRows) m[r.label] = r.currentName ?? "";
@@ -147,7 +147,7 @@ export default function FanTabNameManager({
         .map((k) => rowByKey.get(k))
         .filter((r): r is Exclude<FanNameRow, { kind: "past" }> => Boolean(r) && r?.kind !== "past")
         .map((r) => (r.kind === "tab" ? { kind: "tab" as const, groups: r.tab.groups } : { kind: r.kind }));
-      // "지난 시즌" 탭 이름: 지금 안 뜬 L 의 저장값은 보존, 뜬 L 은 입력값으로(빈 값 = 지움 = 기본 이름).
+      // "이전 표" 탭 이름: 지금 안 뜬 L 의 저장값은 보존, 뜬 L 은 입력값으로(빈 값 = 지움 = 기본 이름).
       const shownPast = new Set(pastRows.map((r) => r.label));
       const pastLabels: Record<string, string> = {};
       for (const [label, name] of Object.entries(existingPastLabels)) {
@@ -225,7 +225,7 @@ export default function FanTabNameManager({
           {pastRows.length > 0 ? (
             <>
               {" "}
-              <b>지난 시즌</b> 탭(지금 룰렛표에 없는 옛 금액대 기록)은 룰렛 탭 뒤에 고정이라 드래그로
+              <b>이전 표</b> 탭(지금 룰렛표에 없는 옛 금액대 기록)은 룰렛 탭 뒤에 고정이라 드래그로
               옮길 수 없고, 이름만 바꿀 수 있어요.
             </>
           ) : null}
@@ -280,15 +280,15 @@ export default function FanTabNameManager({
                 <span className={styles.tabEditGrip} aria-hidden>
                   ⠿
                 </span>
-                <span className={styles.tabEditDefault}>기타</span>
+                <span className={styles.tabEditDefault}>표에 없음</span>
                 <input
                   className={styles.tabEditInput}
                   type="text"
                   value={otherName}
                   onChange={(e) => setOtherName(e.target.value.slice(0, 30))}
-                  placeholder="기타 (기본 이름)"
+                  placeholder="표에 없음 (기본 이름)"
                   maxLength={30}
-                  aria-label="기타 탭 이름"
+                  aria-label="표에 없음 탭 이름"
                 />
               </li>
             );
@@ -327,7 +327,7 @@ export default function FanTabNameManager({
       </div>
       {msg ? <p className={msg.ok ? styles.fieldOk : styles.fieldErr}>{msg.text}</p> : null}
       <p className={styles.fieldHint}>
-        비워두면 자동 이름(금액 나열)이 보여요. 정가·기타·지난 시즌 탭은 해당 기록이 있을 때만 팬 화면에 떠요.
+        비워두면 자동 이름(금액 나열)이 보여요. 정가·표에 없음·이전 표 탭은 해당 기록이 있을 때만 팬 화면에 떠요.
         룰렛 상품 구성이 절반 이상 바뀌면 이름·순서가 자동으로 풀립니다(다시 정하면 돼요).
       </p>
     </div>

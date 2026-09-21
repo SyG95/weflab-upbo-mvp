@@ -3,7 +3,7 @@
 // 배경: 팬 화면 룰렛 탭은 "최신 룰렛표 1장"의 상품명 색인(itemRoulette)으로만 기록을 나눈다.
 // 표가 바뀌어 상품명이 사라진 옛 기록은 전부 "기타"로 떨어졌다(수동 35%·채루 자동 72%가 기타행).
 // 이 모듈은 그 "기타로 가던 분기"에서만 기록의 (catalogVersion, catalogGroupIndex)와 금액대 라벨을
-// 되짚어 ① 지금 표의 같은 금액대 탭으로 보내거나 ② "지난 시즌 · L" 탭을 만든다.
+// 되짚어 ① 지금 표의 같은 금액대 탭으로 보내거나 ② "이전 표 · L" 탭을 만든다.
 //
 // 불변 조건(impl-spec-stage1-2.md):
 //  - 상품명이 최신 표에 있는 기록(info 있음)은 이 모듈을 거치지 않는다 — 호출측이 보장.
@@ -13,7 +13,7 @@
 export const PAST_TAB_PREFIX = "past:";
 // partitionHoldingsByRoulette 의 "기타" 키와 같은 값이어야 한다(page.tsx OTHER).
 export const OTHER_TAB_KEY = "__other__";
-export const PAST_TAB_DEFAULT_PREFIX = "지난 시즌 · ";
+export const PAST_TAB_DEFAULT_PREFIX = "이전 표 · ";
 
 export type PastTabItem = {
   catalogVersion?: number | null;
@@ -60,7 +60,7 @@ export function pastLabelOfKey(key: string): string {
   return isPastTabKey(key) ? key.slice(PAST_TAB_PREFIX.length) : "";
 }
 
-// 팬 화면 표시 이름: 관리자가 지은 이름(pastLabels[L]) > 기본 "지난 시즌 · L".
+// 팬 화면 표시 이름: 관리자가 지은 이름(pastLabels[L]) > 기본 "이전 표 · L".
 export function pastTabLabel(label: string, pastLabels?: Record<string, string> | null): string {
   const custom = pastLabels?.[label];
   return (typeof custom === "string" && custom.trim()) || PAST_TAB_DEFAULT_PREFIX + label;

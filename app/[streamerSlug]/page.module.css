@@ -1308,6 +1308,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 축 꼬리표 "어느 룰렛"(2026-09-21 B2) — 탭 스트립 첫 칸. 모바일에서도 숨기지 않는다. */
+.axisCaption {
+  align-self: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 골라 둔 달에 기록이 없는 탭(2026-09-21 B3) — 숨기지 않고 흐리게, 링크·숫자 0은 그대로. */
+.rouletteTabEmpty {
+  opacity: 0.45;
+}
+
+.rouletteTabEmptyActive {
+  opacity: 0.6;
+}
+
+.railRouletteItem[data-empty] {
+  opacity: 0.45;
+}
+
 /* 배송완료 표시(mark 모드) 배지 */
 .upboDelivered {
   padding: 1px 6px;
@@ -1941,7 +1964,7 @@
   flex: none;
 }
 
-/* 드래그 불참 행("지난 시즌 · L" 탭: 룰렛 뒤 고정) — 손잡이 대신 잠금 표시, 잡기 커서 없음 */
+/* 드래그 불참 행("이전 표 · L" 탭: 룰렛 뒤 고정) — 손잡이 대신 잠금 표시, 잡기 커서 없음 */
 .tabEditRowLocked {
   cursor: default;
 }

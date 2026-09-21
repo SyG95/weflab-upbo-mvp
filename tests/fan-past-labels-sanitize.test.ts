@@ -1,4 +1,4 @@
-// 팬 탭 이름 오버레이 정제 — pastLabels("지난 시즌 · L" 탭 이름) 추가분(2026-09-20).
+// 팬 탭 이름 오버레이 정제 — pastLabels("이전 표 · L" 탭 이름) 추가분(2026-09-20).
 // 기존 entries/order/fixedLabel/otherLabel 정제는 그대로이고, pastLabels 만 새로 정제한다.
 import test, { before } from "node:test";
 import assert from "node:assert/strict";

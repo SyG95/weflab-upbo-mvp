@@ -124,11 +124,11 @@ test("past 키·라벨 헬퍼", () => {
   assert.equal(isPastTabKey("__other__"), false);
   assert.equal(pastLabelOfKey("past:33~50"), "33~50");
   assert.equal(pastLabelOfKey("named:0"), "");
-  assert.equal(pastTabLabel("330"), "지난 시즌 · 330", "기본 이름");
-  assert.equal(pastTabLabel("330", undefined), "지난 시즌 · 330");
+  assert.equal(pastTabLabel("330"), "이전 표 · 330", "기본 이름");
+  assert.equal(pastTabLabel("330", undefined), "이전 표 · 330");
   assert.equal(pastTabLabel("330", { "330": "2025 여름" }), "2025 여름", "관리자 이름 우선");
-  assert.equal(pastTabLabel("330", { "330": "   " }), "지난 시즌 · 330", "공백 이름은 기본으로");
-  assert.equal(pastTabLabel("330", { "1000": "다른탭" }), "지난 시즌 · 330");
+  assert.equal(pastTabLabel("330", { "330": "   " }), "이전 표 · 330", "공백 이름은 기본으로");
+  assert.equal(pastTabLabel("330", { "1000": "다른탭" }), "이전 표 · 330");
 });
 
 test("past 라벨 숫자순 정렬(중복 제거)", () => {

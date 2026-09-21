@@ -233,7 +233,7 @@ export default function ManualEntryManager({
   const destination = (() => {
     let tab: string | null = null;
     if (pick === FIXED_ITEM) tab = "정가";
-    else if (pick === CUSTOM_ITEM) tab = "기타";
+    else if (pick === CUSTOM_ITEM) tab = "표에 없음";
     else if (picked) tab = picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
     else if (pickedPast) {
       // 팬 화면은 상품명으로 현재 표 탭을 먼저 찾는다 — 같은 이름이 현재 표에도 있으면 그 탭으로 간다.
@@ -241,14 +241,14 @@ export default function ManualEntryManager({
       const L = pickedPast.amountRangeLabel?.trim() ?? "";
       if (current) tab = current;
       else if (current === "") tab = "보관된 룰렛(팬 화면에 안 보임)";
-      else if (!L) tab = "기타";
-      else if (currentLabels.has(L)) tab = `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «지난 시즌 · ${L}»)`;
-      else tab = `지난 시즌 · ${L}`;
+      else if (!L) tab = "표에 없음";
+      else if (currentLabels.has(L)) tab = `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «이전 표 · ${L}»)`;
+      else tab = `이전 표 · ${L}`;
     }
     if (tab === null) return null;
     // "올해" 판단 기준도 state 의 오늘(렌더 중 Date.now() 없음).
     const nowMs = Date.parse(`${today}T00:00:00+09:00`);
-    const month = donateDate ? bucketLabel(`m:${donateDate.slice(0, 7)}`, MONTHLY, nowMs) : "기타(날짜 미확인)";
+    const month = donateDate ? bucketLabel(`m:${donateDate.slice(0, 7)}`, MONTHLY, nowMs) : "날짜 없음";
     return `→ 팬 화면: ${tab} · ${month}`;
   })();
 
@@ -308,7 +308,7 @@ export default function ManualEntryManager({
         catalogVersion: null,
       };
     } else if (pickedPast && pastTable.status === "ready") {
-      // 그날 표 상품: 그 버전·그룹으로 저장 → 팬 탭 되짚기(1단계)가 금액대 탭 또는 "지난 시즌 · L" 로 보낸다.
+      // 그날 표 상품: 그 버전·그룹으로 저장 → 팬 탭 되짚기(1단계)가 금액대 탭 또는 "이전 표 · L" 로 보낸다.
       itemPayload = {
         itemName: pickedPast.itemName,
         probability: pickedPast.probability,
@@ -580,7 +580,7 @@ export default function ManualEntryManager({
             </span>
           ) : pastTable.status === "ready" ? (
             <span className={styles.ieFormHint}>
-              «그날 표» 상품을 고르면 그 당시 금액대 탭(현재 표에 없으면 «지난 시즌 · 금액대» 탭)으로 들어가요.
+              «그날 표» 상품을 고르면 그 당시 금액대 탭(현재 표에 없으면 «이전 표 · 금액대» 탭)으로 들어가요.
             </span>
           ) : null}
         </label>
@@ -612,7 +612,7 @@ export default function ManualEntryManager({
           </div>
           <span className={styles.ieFormHint}>
             {dateMode === "unknown"
-              ? "날짜 없이 저장돼요 — 배송 기간·월별에서는 «기타»로 묶여요(옛 수동기록과 같음)."
+              ? "날짜 없이 저장돼요 — 배송 기간에서는 «기타», 팬 화면 월별에서는 «날짜 없음»으로 묶여요(옛 수동기록과 같음)."
               : "날짜가 있으면 배송 기간·월별 묶음에 자동수집분과 같이 들어가요. 어제·고른 날짜는 정오로 저장돼요."}
           </span>
           {destination ? <span className={styles.ieFormHint}>{destination}</span> : null}

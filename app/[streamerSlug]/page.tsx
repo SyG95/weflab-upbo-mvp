@@ -1,6 +1,6 @@
 import IntegratedDelivery from './IntegratedDelivery';
 import {selectVisibleFanTabs} from '../../lib/fanVisibleTabs';
-import { isRefinedDesign, designId, type DesignId, type DesignRow } from "../../lib/designPreview";
+import { isRefinedDesign, designId, monthLabel, type DesignId, type DesignRow } from "../../lib/designPreview";
 import { allocateFanMonthly, monthlyViewers, monthOf, normalizeMonth, summarizeMonth, type MonthlyStatus } from "../../lib/fanMonthly";
 import MonthPicker from "./MonthPicker";
 import styles from "./page.module.css";
@@ -23,6 +23,7 @@ import {
   matchGroupToConfig,
   normalizeAccountId,
   productColorById,
+  DEFAULT_FAN_AXIS_PREFS,
   type DeliveryAssignment,
   type FanLayoutBlock,
   type FanLayoutSlot,
@@ -74,6 +75,7 @@ import RouletteConfigManager, {
   type NamedRouletteForManager,
 } from "./RouletteConfigManager";
 import FanDeliveryModeForm from "./FanDeliveryModeForm";
+import FanAxisForm from "./FanAxisForm";
 import FanIdPrivacyForm from "./FanIdPrivacyForm";
 import CouponTabLabelForm from "./CouponTabLabelForm";
 import SheetTitleForm from "./SheetTitleForm";
@@ -648,7 +650,7 @@ function ConnectionNotice({
 }
 
 // 팬 탭 시퀀스 한 칸 — 룰렛 탭 또는 정가/기타 자리. 팬 화면 탭 순서와 관리자 드래그 목록이 공유한다.
-// past = "지난 시즌 · L" 탭(팬 탭 되짚기, 2026-09-20). label 은 금액대 라벨 L 원문(표시 이름은 pastTabLabelOf).
+// past = "이전 표 · L" 탭(팬 탭 되짚기, 2026-09-20). label 은 금액대 라벨 L 원문(표시 이름은 pastTabLabelOf).
 // 실제 기록이 있는 L 만 partition 시점에 동적으로 끼운다(룰렛 뒤 고정, 드래그 순서 불참).
 type FanTabSeqItem =
   | { kind: "roulette"; rid: string; label: string }
@@ -677,13 +679,13 @@ type RouletteIndex = {
   revealRoulettes: RevealRoulette[];
   // 관리자 "팬 탭 이름" 섹션 데이터 — 팬 탭 순서와 같은 목록(보관 제외) + 지문/현재 이름.
   fanTabManager: FanTabForNaming[];
-  // 정가/기타 탭 표시 이름(팬 탭 이름 오버레이 적용 결과. 기본 "정가"/"기타").
+  // 정가/기타 탭 표시 이름(팬 탭 이름 오버레이 적용 결과. 기본 "정가"/"표에 없음" — 2026-09-21 B1).
   fixedTabLabel: string;
   otherTabLabel: string;
   // 팬 탭 되짚기(2026-09-20) 문맥 — 상품명이 최신 표에 없는 기록만 이걸로 (버전, 그룹)·금액대를 되짚는다.
   // 옛 버전 그룹은 itemsByRid/itemRoulette 에 넣지 않는다(다른 소비자 결과 불변).
   pastCtx: PastTabContext;
-  // "지난 시즌 · L" 탭 표시 이름(pastLabels 오버레이 > 기본).
+  // "이전 표 · L" 탭 표시 이름(pastLabels 오버레이 > 기본).
   pastTabLabelOf: (label: string) => string;
 };
 
@@ -829,7 +831,7 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
     groups: groupsByRid[rid] ?? [],
   }));
   const fixedTabLabel = fanLabels?.fixedLabel || "정가";
-  const otherTabLabel = fanLabels?.otherLabel || "기타";
+  const otherTabLabel = fanLabels?.otherLabel || "표에 없음";
 
   // 팬 탭 되짚기 문맥(2026-09-20). 읽기만 — 색인(itemsByRid·itemRoulette)에는 아무것도 추가하지 않는다.
   //  oldGroups: state.catalogs 전 버전(활성 포함)의 그룹 → `${version}:${groupIndex}` → {라벨, 상품명}.
@@ -1051,7 +1053,7 @@ function partitionHoldingsByRoulette(
       const info = isFixed ? undefined : index.itemRoulette.get(it.originalItemName);
       if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
       // 상품명이 최신 표에 있는 기록(info 있음)은 이전과 같은 경로(불변 조건 1). 없을 때만 되짚기(2026-09-20):
-      // (버전, 그룹)·금액대로 같은 금액대 탭 또는 "지난 시즌 · L"(past:L), 못 되짚으면 기존처럼 기타.
+      // (버전, 그룹)·금액대로 같은 금액대 탭 또는 "이전 표 · L"(past:L), 못 되짚으면 기존처럼 기타.
       const rid = isFixed ? FIXED : info ? info.rid : resolvePastTabRid(it, index.pastCtx);
       let owners = byRid.get(rid);
       if (!owners) {
@@ -1079,7 +1081,7 @@ function partitionHoldingsByRoulette(
   };
   // 탭 순서 = fanTabSequence(저장된 드래그 순서 반영). 정가/기타도 저장 위치에 놓이고,
   // 저장이 없으면 기존 기본(룰렛 가나다순 → 정가 → 기타) 그대로다.
-  // "지난 시즌 · L" 탭은 실제 기록이 있는 L 만, 마지막 룰렛 탭 뒤에 L 숫자순으로 끼운다(드래그 순서 불참).
+  // "이전 표 · L" 탭은 실제 기록이 있는 L 만, 마지막 룰렛 탭 뒤에 L 숫자순으로 끼운다(드래그 순서 불참).
   const pastItems: FanTabSeqItem[] = sortPastLabels(
     [...byRid.keys()].filter(isPastTabKey).map(pastLabelOfKey),
   ).map((label) => ({ kind: "past", rid: pastTabKey(label), label }));
@@ -1128,6 +1130,13 @@ function flattenGroups(
 // 정가/기타가 함께 있으면 서로 섞이지 않도록 별도 탭을 보여준다.
 // computeHoldings가 취소/완료/무효 항목을 이미 제외한다. 보관 시청자는 숨기되 보관 시각 이후 새 당첨은
 // 다시 보인다. 룰렛표 off 상품 기록도 숨긴다(정가·수동은 항상 표시). 전부 표시 계산 — 원본 불변.
+// 2026-09-21 두 축 정리:
+//  - groups[].anyViewers = 월 필터 없이("all") 봤을 때 이 탭에 표시 행이 있는지. 월을 골랐을 때 빈 탭을
+//    숨기지 않고 흐리게 남기는 근거(selectVisibleFanTabs keepEmpty). month === "all"이면 추가 계산 없이
+//    viewers.length > 0 과 같다(전체 기간 결과 바이트 동일 — 불변 조건 1).
+//  - forceFlat(스트리머가 "룰렛 탭" 축을 끈 경우): 정가(__fixed__) 외 파트를 "전체" 하나로 합친다.
+//    정가가 있으면 "전체 | 정가" 두 탭, 없으면 탭 없음(기존 평면 경로 그대로).
+type FanRouletteGroup = { key: string; label: string; viewers: ViewerSummary[]; anyViewers: boolean };
 function computeFanRouletteTabs(
   state: StreamerState,
   index: RouletteIndex,
@@ -1135,12 +1144,13 @@ function computeFanRouletteTabs(
   month = "all",
   status: MonthlyStatus = "all",
   assignments: DeliveryAssignment[] | null = [],
+  forceFlat = false,
 ): {
   previewRows: DesignRow[];
   monthlyHoldings: ViewerHolding[];
   allocated: ReturnType<typeof allocateFanMonthly>;
   showRouletteTabs: boolean;
-  groups: Array<{ key: string; label: string; viewers: ViewerSummary[] }>;
+  groups: FanRouletteGroup[];
   allEntries: UpboEntry[];
   deliveryMode: FanDeliveryReflect;
 } {
@@ -1166,11 +1176,21 @@ function computeFanRouletteTabs(
   const parts = partitionHoldingsByRoulette(holdings, index);
   const monthlyHoldings = flattenGroups(parts);
   const toViewers = (h: ViewerHolding[]) => monthlyViewers(h, allocated, month, deliveryMode, status);
-  const showRouletteTabs = shouldShowRouletteTabs(parts);
-  const groups = showRouletteTabs
-    ? parts.map(p => ({ key: p.key, label: p.label, viewers: toViewers(p.holdings) }))
-    : [{ key: "__all__", label: "전체", viewers: toViewers(monthlyHoldings) }];
-  const previewRows: DesignRow[] = parts.flatMap(p => p.holdings.flatMap(owner => owner.items.map((item,i) => ({id:`${p.key}:${owner.key}:${item.entryId}:${i}`,ownerId:owner.key,ownerName:owner.ownerName,item:item.itemName,group:p.label,month:monthOf(item),date:monthOf(item)!=="etc" && item.recordedAtMs ? new Intl.DateTimeFormat("ko-KR",{timeZone:"Asia/Seoul",year:"2-digit",month:"2-digit",day:"2-digit"}).format(item.recordedAtMs) : "기타",timestamp:item.recordedAtMs,quantity:item.quantity,done:allocated.get(item)??0}))));
+  const toGroup = (key: string, label: string, h: ViewerHolding[]): FanRouletteGroup => {
+    const viewers = toViewers(h);
+    const anyViewers = month === "all" ? viewers.length > 0 : monthlyViewers(h, allocated, "all", deliveryMode, status).length > 0;
+    return { key, label, viewers, anyViewers };
+  };
+  // 룰렛 탭 축 끔: 정가 파트는 유지, 나머지는 "전체" 하나로. 정가만 있거나 룰렛만 있으면 기존 평면 경로.
+  const nonFixed = parts.filter(p => p.key !== "__fixed__");
+  const flatParts = forceFlat && nonFixed.length > 0 && nonFixed.length < parts.length
+    ? [{ key: "__all__", label: "전체", holdings: flattenGroups(nonFixed) }, ...parts.filter(p => p.key === "__fixed__")]
+    : parts;
+  const showRouletteTabs = forceFlat ? flatParts.length >= 2 && flatParts.some(p => p.key === "__all__") : shouldShowRouletteTabs(parts);
+  const groups: FanRouletteGroup[] = showRouletteTabs
+    ? flatParts.map(p => toGroup(p.key, p.label, p.holdings))
+    : [toGroup("__all__", "전체", monthlyHoldings)];
+  const previewRows: DesignRow[] = parts.flatMap(p => p.holdings.flatMap(owner => owner.items.map((item,i) => ({id:`${p.key}:${owner.key}:${item.entryId}:${i}`,ownerId:owner.key,ownerName:owner.ownerName,item:item.itemName,group:p.label,month:monthOf(item),date:monthOf(item)!=="etc" && item.recordedAtMs ? new Intl.DateTimeFormat("ko-KR",{timeZone:"Asia/Seoul",year:"2-digit",month:"2-digit",day:"2-digit"}).format(item.recordedAtMs) : "날짜 없음",timestamp:item.recordedAtMs,quantity:item.quantity,done:allocated.get(item)??0}))));
   return { showRouletteTabs, groups, allEntries, deliveryMode, monthlyHoldings, allocated, previewRows };
 }
 
@@ -1323,20 +1343,34 @@ function FanView({
   stationLink?: string | null;
 }) {
   const rouletteIndex = buildRouletteIndex(state);
+  // 팬 화면 두 축 설정(스트리머별, 2026-09-21 A). 기본 둘 다 켬 = 지금과 동일.
+  //  - monthRail 끔: 월 쿼리를 무시하고 항상 전체 기간(effectiveMonth="all"), 월 레일 자체를 안 그린다.
+  //  - rouletteTabs 끔: 룰렛 구분 없이 한 목록(forceFlat), 정가만 따로.
+  const axis = state.fanAxisPrefs ?? DEFAULT_FAN_AXIS_PREFS;
+  const effectiveMonth = axis.monthRail ? activeMonth : "all";
+  // 룰렛 탭 계산에 실제로 넣는 월(옛 시안 l3/l4/h4 는 종전대로 전체). keepEmpty 는 이 값이 월일 때만.
+  const tabMonth = activeTab === "ledger" && !["l3","l4","h4"].includes(design) ? effectiveMonth : "all";
   const { showRouletteTabs, groups: computedRouletteGroups, allEntries, deliveryMode, monthlyHoldings, allocated, previewRows } =
-    computeFanRouletteTabs(state, rouletteIndex, excludedNames, activeTab === "ledger" && !["l3","l4","h4"].includes(design) ? activeMonth : "all", activeTab === "ledger" ? monthlyStatus : "all", monthlyAssignments);
+    computeFanRouletteTabs(state, rouletteIndex, excludedNames, tabMonth, activeTab === "ledger" ? monthlyStatus : "all", monthlyAssignments, !axis.rouletteTabs);
   const months = [...new Set(monthlyHoldings.flatMap(v => v.items.map(monthOf)))].filter(m => m !== "etc").sort().reverse();
-  const monthlyTotal = summarizeMonth(monthlyHoldings, allocated, activeMonth);
+  const monthlyTotal = summarizeMonth(monthlyHoldings, allocated, effectiveMonth);
   const etcTotal = summarizeMonth(monthlyHoldings, allocated, "etc");
-  const monthSuffix = `&design=${design}${design === "h4" && activeMonths ? `&multi=${encodeURIComponent(activeMonths)}` : ""}${design === "h2" && activeProduct ? `&product=${encodeURIComponent(activeProduct)}` : ""}${activeMonth !== "all" ? `&month=${encodeURIComponent(activeMonth)}` : ""}${deliveryMode !== "off" && monthlyStatus !== "all" ? `&status=${monthlyStatus}` : ""}`;
+  const monthSuffix = `&design=${design}${design === "h4" && activeMonths ? `&multi=${encodeURIComponent(activeMonths)}` : ""}${design === "h2" && activeProduct ? `&product=${encodeURIComponent(activeProduct)}` : ""}${effectiveMonth !== "all" ? `&month=${encodeURIComponent(effectiveMonth)}` : ""}${deliveryMode !== "off" && monthlyStatus !== "all" ? `&status=${monthlyStatus}` : ""}`;
   // 쿠폰 탭 이름(스트리머별, 표시 전용) — 기본 "쿠폰", 꾸폰·마일리지처럼 바꿔 부를 수 있다.
   const couponLabel = state.couponTabLabel?.trim() || "쿠폰";
   // 쿠폰 탭: 잔액을 시청자 단위로 묶고 검색어로 거른다(0=사용완료도 표시). null=조회 실패(빈 장부와 구분).
   const couponLoadFailed = activeTab === "coupon" && coupons === null;
   const couponViewersAll = activeTab === "coupon" && coupons ? groupFanCoupons(coupons) : [];
   const couponViewersShown = filterFanCoupons(couponViewersAll, searchQuery);
-  const {visibleGroups:rouletteGroups,activeGroup}=selectVisibleFanTabs(computedRouletteGroups,activeRoulette);
+  // 월을 골랐을 때만 빈 탭을 흐리게 남긴다(B3). 전체 기간이면 keepEmpty=false = 종전과 바이트 동일.
+  const keepEmptyTabs = activeTab === "ledger" && tabMonth !== "all";
+  const {visibleGroups:rouletteGroups,activeGroup}=selectVisibleFanTabs(computedRouletteGroups,activeRoulette,keepEmptyTabs);
   const rtabKey = activeGroup?.key;
+  // 골라 둔 달에 이 탭 기록이 없을 때의 빈 상태 문구(탭 스트립이 떠 있을 때만 — "전체 기록이 없어요"는 안 만든다).
+  const emptyTabMessage =
+    keepEmptyTabs && showRouletteTabs && activeGroup && activeGroup.viewers.length === 0
+      ? `${monthLabel(tabMonth)}에는 ${activeGroup.label} 기록이 없어요.`
+      : undefined;
   const activeViewers = activeGroup?.viewers ?? [];
   // 정가 탭 유형 구분(시그니처/이벤트/서버, sy 2026-08-09). subtabs 모드면 하위 탭으로 걸러 보여준다.
   const sigDetails = state.signatureDetails ?? [];
@@ -1381,7 +1415,7 @@ function FanView({
           ? `${history.length} / ${allEntries.length}건`
           : `${allEntries.length}건`;
 
-  const monthPicker = <MonthPicker products={productOptions} product={activeProduct} design={design} slug={slug} months={months} selected={activeMonth} reflect={deliveryMode !== "off"} total={monthlyTotal} etcCount={etcTotal.quantity} unavailable={monthlyAssignments === null} query={{ q: searchQuery, rtab: activeRoulette, sfk: activeSigKind, layout: layoutB ? "b" : "" }} />;
+  const monthPicker = !axis.monthRail ? null : <MonthPicker products={productOptions} product={activeProduct} design={design} slug={slug} months={months} selected={effectiveMonth} reflect={deliveryMode !== "off"} total={monthlyTotal} etcCount={etcTotal.quantity} unavailable={monthlyAssignments === null} query={{ q: searchQuery, rtab: activeRoulette, sfk: activeSigKind, layout: layoutB ? "b" : "" }} />;
 
   return (
     <div className={styles.fanLayout} data-layout-b={layoutB ? "" : undefined}>
@@ -1410,6 +1444,7 @@ function FanView({
                 <a
                   key={g.key}
                   className={styles.railRouletteItem}
+                  data-empty={g.viewers.length === 0 ? "" : undefined}
                   href={`/${slug}?layout=b&rtab=${encodeURIComponent(g.key)}${monthSuffix}`}
                 >
                   <span>{g.label}</span>
@@ -1434,7 +1469,7 @@ function FanView({
         </div>
         <div className={design === "h1" ? styles.searchWithMonth : undefined}>
         <form className={styles.searchRow} action={`/${slug}`} method="get">
-          {activeMonth !== "all" ? <input type="hidden" name="month" value={activeMonth} /> : null}
+          {effectiveMonth !== "all" ? <input type="hidden" name="month" value={effectiveMonth} /> : null}
           <input type="hidden" name="design" value={design} />
           {design === "h4" && activeMonths ? <input type="hidden" name="multi" value={activeMonths} /> : null}
           {design === "h2" && activeProduct ? <input type="hidden" name="product" value={activeProduct} /> : null}
@@ -1518,10 +1553,17 @@ function FanView({
 
         {activeTab === "ledger" && showRouletteTabs && rouletteGroups.length > 0 ? (
           <div className={styles.rouletteTabs} role="tablist" aria-label="룰렛 구분">
+            <span className={styles.axisCaption}>어느 룰렛</span>
             {rouletteGroups.map((g) => (
               <a
                 key={g.key}
-                className={g.key === rtabKey ? styles.rouletteTabActive : styles.rouletteTab}
+                className={
+                  g.viewers.length === 0
+                    ? g.key === rtabKey
+                      ? `${styles.rouletteTabActive} ${styles.rouletteTabEmptyActive}`
+                      : `${styles.rouletteTab} ${styles.rouletteTabEmpty}`
+                    : g.key === rtabKey ? styles.rouletteTabActive : styles.rouletteTab
+                }
                 href={`/${slug}?rtab=${encodeURIComponent(g.key)}${
                   searchQuery ? `&q=${encodeURIComponent(searchQuery)}` : ""
                 }${monthSuffix}`}
@@ -1566,6 +1608,7 @@ function FanView({
             colors={state.productColors}
             sigByCount={onFixedTab ? sigByCount : undefined}
             hideIds={state.fanIdHidden === true}
+            emptyMessage={emptyTabMessage}
           />
         ) : activeTab === "coupon" ? (
           <FanCouponTable
@@ -1615,6 +1658,7 @@ function LedgerTable({
   colors,
   sigByCount,
   hideIds,
+  emptyMessage,
 }: {
   viewers: ViewerSummary[];
   searchQuery: string;
@@ -1623,15 +1667,19 @@ function LedgerTable({
   sigByCount?: Map<number, SignatureDetail>;
   // 팬 화면 계정ID 숨기기(스트리머별 설정). 열 자체를 뺀다. 검색은 원문 기준 그대로.
   hideIds?: boolean;
+  // 골라 둔 달에 이 탭 기록이 없을 때의 문구(B3). 없으면 기존 문구.
+  emptyMessage?: string;
 }) {
   if (viewers.length === 0) {
     return (
       <div className={styles.emptyState}>
         <span className={`${styles.stamp} ${styles.stampGhost}`}>대기</span>
         <p>
-          {searchQuery
-            ? `'${searchQuery}'에 해당하는 시청자가 없어요.`
-            : "아직 기록된 업보가 없어요."}
+          {emptyMessage
+            ? emptyMessage
+            : searchQuery
+              ? `'${searchQuery}'에 해당하는 시청자가 없어요.`
+              : "아직 기록된 업보가 없어요."}
         </p>
       </div>
     );
@@ -1872,7 +1920,7 @@ function AdminPanel({
   const fanTabByRid = new Map(fanTabManager.map((t) => [t.rid, t]));
   // 관리자 목록 = 팬 화면 탭 순서 그대로(정가/기타 자리 포함) — 드래그 편집의 초기 순서가 된다.
   // 정가/기타 탭은 팬 화면에 실제로 떴을 때만 이름칸을 보여준다(안 뜨는데 이름 받는 혼란 방지).
-  // "지난 시즌 · L" 탭도 떴을 때만 이름칸(정가/기타와 같은 규칙). 드래그 순서에는 참여하지 않는다(룰렛 뒤 고정).
+  // "이전 표 · L" 탭도 떴을 때만 이름칸(정가/기타와 같은 규칙). 드래그 순서에는 참여하지 않는다(룰렛 뒤 고정).
   const fanNameRows: FanNameRow[] = fanTabGroups
     .map((g): FanNameRow | null => {
       if (g.key === "__fixed__") return { kind: "fixed" };
@@ -2394,6 +2442,16 @@ function AdminPanel({
               적용됩니다. 기본은 &quot;반영 안 함&quot;이라, 바꾸지 않으면 지금 그대로예요.
             </p>
             <FanDeliveryModeForm slug={state.slug} initial={state.fanDeliveryReflect ?? "off"} />
+          </CollapsibleCard>
+
+          {/* 팬 화면 구분 축(언제 / 어느 룰렛) 켜고 끄기 */}
+          <CollapsibleCard sectionKey="fan-axis" title="팬 화면 구분 축">
+            <p className={styles.fieldHint}>
+              팬 화면에는 기록을 나누는 축이 둘 있어요 — &quot;언제&quot;(월별 보기)와 &quot;어느 룰렛&quot;(룰렛 탭).
+              쓰지 않는 축은 꺼 둘 수 있어요. 기본은 둘 다 켬이라, 바꾸지 않으면 지금 그대로예요. 이
+              스트리머에게만 적용됩니다.
+            </p>
+            <FanAxisForm slug={state.slug} initial={state.fanAxisPrefs ?? DEFAULT_FAN_AXIS_PREFS} />
           </CollapsibleCard>
 
           {/* 팬 화면 계정ID 숨기기 */}

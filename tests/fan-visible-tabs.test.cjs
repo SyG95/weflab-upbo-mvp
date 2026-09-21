@@ -49,4 +49,29 @@ assert.equal(JSON.stringify([augustOnly, septemberOnly]), before);
 const searchResult = mixed.activeGroup.viewers.filter(v => v.fanNickname.includes('없는닉네임'));
 assert.equal(searchResult.length, 0);
 assert.deepEqual(keys(mixed), ['current']);
-console.log('fan-visible-tabs: empty month, completion modes, fallback, and search independence passed');
+
+// keepEmpty (2026-09-21 B3): 월을 골랐을 때 빈 탭을 흐리게 남기고, 요청 탭이 비어도 튕기지 않는다.
+const withAny = (g, anyViewers) => ({ ...g, anyViewers });
+// (1) 이 달에는 비었지만 전체 기간에는 기록이 있는 탭은 남는다(순서 유지). keepEmpty=false 면 종전대로 숨김.
+const keptBoth = selectVisibleFanTabs([withAny(augustOnly, true), withAny(septemberOnly, true)], 'current', true);
+assert.deepEqual(keys(keptBoth), ['old', 'current']);
+assert.equal(keptBoth.activeGroup.key, 'current');
+assert.deepEqual(keys(selectVisibleFanTabs([withAny(augustOnly, true), withAny(septemberOnly, true)], 'current')), ['current'], 'keepEmpty 기본값은 종전 동작');
+// (2) 요청한 탭이 이 달에 비어 있어도 그 탭이 활성으로 남는다(첫 탭으로 튕기지 않음). 요청 탭이 없으면 기록 있는 탭 우선.
+const stayEmpty = selectVisibleFanTabs([withAny(augustOnly, true), withAny(septemberOnly, true)], 'old', true);
+assert.equal(stayEmpty.activeGroup.key, 'old');
+assert.equal(stayEmpty.activeGroup.viewers.length, 0);
+const noRequest = selectVisibleFanTabs([withAny(augustOnly, true), withAny(septemberOnly, true)], undefined, true);
+assert.equal(noRequest.activeGroup.key, 'current', '요청 없음 → 기록 있는 첫 탭');
+const allEmpty = selectVisibleFanTabs([withAny(augustOnly, true), withAny(group('other-old', [august], '2026-09'), true)], 'missing', true);
+assert.equal(allEmpty.activeGroup.key, 'old', '전부 비면 첫 탭');
+// (3) anyViewers=false(전체 기간에도 없음)·누락은 keepEmpty 여도 숨긴다.
+assert.deepEqual(keys(selectVisibleFanTabs([withAny(augustOnly, false), withAny(septemberOnly, true)], 'old', true)), ['current']);
+assert.deepEqual(keys(selectVisibleFanTabs([augustOnly, septemberOnly], 'old', true)), ['current'], 'anyViewers 누락 = 숨김');
+assert.deepEqual(keys(selectVisibleFanTabs([{ key: 'invalid', viewers: [{ items: [] }], anyViewers: false }], 'invalid', true)), []);
+assert.deepEqual(selectVisibleFanTabs([withAny(group('done', [august], '2026-08'), false)], 'done', true), { visibleGroups: [], activeGroup: undefined });
+// keepEmpty 도 입력 불변.
+const beforeKeep = JSON.stringify([augustOnly, septemberOnly]);
+selectVisibleFanTabs([withAny(augustOnly, true), withAny(septemberOnly, true)], 'old', true);
+assert.equal(JSON.stringify([augustOnly, septemberOnly]), beforeKeep);
+console.log('fan-visible-tabs: empty month, completion modes, fallback, search independence, and keepEmpty passed');

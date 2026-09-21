@@ -371,6 +371,8 @@ export type StreamerState = {
   deliveryProgress?: DeliveryProgressItem[];
   // 팬 화면 배송 반영 방식(스트리머별). 기본 off. remaining=남은 개수, mark=배송완료 표시.
   fanDeliveryReflect?: FanDeliveryReflect;
+  // 팬 화면 구분 축(스트리머별). 기본 둘 다 켬. 없으면 DEFAULT_FAN_AXIS_PREFS.
+  fanAxisPrefs?: FanAxisPrefs;
   // 상품별 색상(스트리머별). 상품명 → 팔레트 id("c1"~"c20"). 없으면 기본색.
   productColors?: Record<string, string>;
   // 팬 화면 룰렛 확률표 공개 마스터 스위치. off면 확률표 카드 자체가 안 뜬다(개별 revealed 무시).
@@ -403,6 +405,23 @@ export type FanDeliveryReflect = "off" | "remaining" | "remaining_done" | "mark"
 
 export function normalizeFanDeliveryReflect(raw: unknown): FanDeliveryReflect {
   return raw === "remaining" || raw === "remaining_done" || raw === "mark" ? raw : "off";
+}
+
+// ── 팬 화면 구분 축(스트리머별, 2026-09-21) ───────────────────────────────
+// monthRail    : "언제" 축(월별 보기 레일). 끄면 월 쿼리를 무시하고 항상 전체 기간, 월별 잔여 수치도 안 보인다.
+// rouletteTabs : "어느 룰렛" 축(룰렛 탭). 끄면 룰렛 구분 없이 한 목록, 정가만 따로("전체 | 정가").
+// 기본 둘 다 켬 = 종전 화면과 동일. 저장은 audit_logs 오버레이 최신 1건(fan_axis_updated, payload.axis).
+export type FanAxisPrefs = { monthRail: boolean; rouletteTabs: boolean };
+
+export const DEFAULT_FAN_AXIS_PREFS: FanAxisPrefs = { monthRail: true, rouletteTabs: true };
+
+// 불리언이 아닌 값(누락·문자열·null 등)은 그 항목만 기본값으로. 객체가 아니면 전부 기본값.
+export function normalizeFanAxisPrefs(raw: unknown): FanAxisPrefs {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return {
+    monthRail: typeof o.monthRail === "boolean" ? o.monthRail : DEFAULT_FAN_AXIS_PREFS.monthRail,
+    rouletteTabs: typeof o.rouletteTabs === "boolean" ? o.rouletteTabs : DEFAULT_FAN_AXIS_PREFS.rouletteTabs,
+  };
 }
 
 // ── 팬 화면 블록 배치(스트리머별) ──────────────────────────────────────────
@@ -486,7 +505,7 @@ export type FanTabLabels = {
   order?: FanTabOrderItem[];
   fixedLabel?: string;
   otherLabel?: string;
-  // "지난 시즌 · L" 탭(팬 탭 되짚기, 2026-09-20) 표시 이름 — 금액대 라벨 L → 이름. 없으면 기본 이름.
+  // "이전 표 · L" 탭(팬 탭 되짚기, 2026-09-20) 표시 이름 — 금액대 라벨 L → 이름. 없으면 기본 이름.
   pastLabels?: Record<string, string>;
 };
 

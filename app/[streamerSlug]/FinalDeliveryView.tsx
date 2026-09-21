@@ -1,7 +1,9 @@
 'use client';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { AggItem, ViewerSummary } from '../../lib/api';
-import { monthLabel } from '../../lib/designPreview';
+import { monthLabel as fanMonthLabel } from '../../lib/designPreview';
+// 배송관리(관리자)의 월 이름은 그대로 "기타" — 팬 화면 월 축만 "날짜 없음"으로 바뀌었다(2026-09-21 B1, 불변 조건 4).
+const monthLabel = (m: string) => (m === 'etc' ? '기타' : fanMonthLabel(m));
 import { resolveBucketId } from '../../lib/deliveryPeriod';
 import { AGE_OLD_DAYS, ageDaysFrom } from '../../lib/deliveryAge';
 import { soopStationUrl } from '../../lib/soopStation';
