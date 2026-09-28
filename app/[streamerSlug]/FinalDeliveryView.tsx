@@ -6,6 +6,7 @@ import { monthLabel as fanMonthLabel } from '../../lib/designPreview';
 const monthLabel = (m: string) => (m === 'etc' ? '기타' : fanMonthLabel(m));
 import { resolveBucketId } from '../../lib/deliveryPeriod';
 import { AGE_OLD_DAYS, ageDaysFrom } from '../../lib/deliveryAge';
+import { splitMonthGroups, summarizeProducts } from '../../lib/deliverySummary';
 import { soopStationUrl } from '../../lib/soopStation';
 import s from './FinalDelivery.module.css';
 
@@ -104,6 +105,8 @@ export default function FinalDeliveryView({
   const [review, setReview] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [unreviewed, setUnreviewed] = useState(false);
+  // 완료된 달(잔여 0) 버튼은 기본 숨김(포로미 2026-09-22). 토글로 펼침 — 저장값 없이 이번 화면에서만.
+  const [showDoneMonths, setShowDoneMonths] = useState(false);
   // 경과일 기준 시각 — 세션 고정(DeliveryManager 와 동일 관례).
   const [nowMs] = useState(() => Date.now());
   const currentYear = new Date(nowMs + 9 * 3600000).getUTCFullYear();
@@ -114,6 +117,8 @@ export default function FinalDeliveryView({
     () => groups(rows, monthOf).sort(([a], [b]) => (a === 'etc' ? 1 : b === 'etc' ? -1 : compareText(a, b))),
     [rows],
   );
+  // 잔여 0 달은 hidden — 단 지금 보고 있는 달은 절대 숨기지 않는다(마지막 건 완료·저장 순간 버튼이 사라지지 않게).
+  const { shown: shownMonths, hidden: hiddenMonths } = useMemo(() => splitMonthGroups(monthGroups, month), [monthGroups, month]);
   const monthRows = useMemo(() => rows.filter((r) => month === 'all' || monthOf(r) === month), [rows, month]);
   const filtered = useMemo(
     () =>
@@ -165,6 +170,9 @@ export default function FinalDeliveryView({
   const selected = viewers.find((p) => p.id === viewer) ?? viewers[0];
   // 옛 시청자별 목록의 "방송국 ↗" 와 같은 링크. 계정ID가 없으면 null → 그리지 않는다.
   const stationUrl = selected ? soopStationUrl(selected.rs[0].v.fanId) : null;
+  // 선택한 시청자의 상품별 요약(여올 2026-09-24) — 아래 표에 보이는 줄(selected.rs)을 그대로 합산하므로
+  // 달·검색·상태 필터와 항상 같이 움직인다. 미완료 보기면 잔여, 완료 보기면 완료 수량을 앞에 세운다.
+  const productChips = useMemo(() => (selected ? summarizeProducts(selected.rs) : []), [selected]);
   // 선택한 시청자가 목록에서 사라지면(필터·검색·저장) 선택을 비워 첫 시청자로 돌아간다.
   // 폴백(viewers[0])을 state 에 확정하지는 않는다 — 운영 저장값 로딩 전 임시 목록의 1번을 굳혀 버리는 경합 방지.
   useEffect(() => {
@@ -340,8 +348,19 @@ export default function FinalDeliveryView({
       </nav>
       <nav className={s.months} aria-label="발생 월 선택">
         {monthButton('all', rows)}
-        {monthGroups.map(([m, rs]) => monthButton(m, rs))}
+        {(showDoneMonths ? monthGroups : shownMonths).map(([m, rs]) => monthButton(m, rs))}
         {month !== 'all' && !monthGroups.some(([m]) => m === month) && monthButton(month, [])}
+        {hiddenMonths.length > 0 && (
+          <button
+            type="button"
+            className={s.monthsMore}
+            aria-pressed={showDoneMonths}
+            title="남은 배송이 0인 달은 기본으로 숨겨요. 기록은 그대로 있어요."
+            onClick={() => setShowDoneMonths((v) => !v)}
+          >
+            {showDoneMonths ? '완료된 달 접기' : `완료된 달 ${hiddenMonths.length}개 보기`}
+          </button>
+        )}
       </nav>
       <div className={s.toolbar}>
         <input
@@ -438,6 +457,20 @@ export default function FinalDeliveryView({
                     )}
                   </div>
                 </header>
+                {productChips.length > 0 && (
+                  <ul
+                    className={s.chips}
+                    aria-label={`${selected.rs[0].v.fanNickname || selected.rs[0].v.fanId} 상품별 ${status === 'done' ? '완료' : '남은'} 수량 — 아래 표 기준`}
+                  >
+                    {productChips.map((c) => (
+                      <li key={c.key} className={s.chip} title={`총 ${c.total} · 완료 ${c.done} · 잔여 ${c.remain}`}>
+                        <span>{c.name}</span>
+                        {c.isFixed && <span className={s.chipTag}>정가</span>}
+                        <b>{status === 'done' ? c.done : c.remain}</b>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {table(selected.rs, false)}
               </>
             )}

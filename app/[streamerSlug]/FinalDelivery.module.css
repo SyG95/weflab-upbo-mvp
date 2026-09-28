@@ -83,3 +83,11 @@
 .personActions{display:flex;align-items:center;gap:6px;flex:none}
 .personHead a{display:inline-flex;align-items:center;background:var(--surface);border:1px solid var(--paper-line);border-radius:5px;padding:5px 10px;font-size:11px;color:inherit;text-decoration:none;white-space:nowrap;line-height:normal}
 .personHead a:hover{border-color:var(--stamp,#be547f);color:var(--stamp,#be547f)}
+.chips{list-style:none;margin:0;padding:0 15px 12px;display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--paper-line);background:var(--surface);border-radius:6px;padding:4px 9px;font-size:12px;white-space:nowrap;max-width:100%}
+.chip span{overflow:hidden;text-overflow:ellipsis}
+.chip b{color:var(--stamp,#be547f);font-variant-numeric:tabular-nums}
+.chipTag{font-size:10px;color:var(--muted);border:1px solid var(--paper-line);border-radius:4px;padding:0 4px;line-height:1.5}
+.months .monthsMore{border-style:dashed;background:none;color:var(--muted)}
+.months .monthsMore[aria-pressed=true]{border-style:dashed;background:none;border-color:var(--stamp,#be547f);color:var(--stamp,#be547f)}
+.root[data-refinement^="ref-"] .chips{padding:0 10px 10px}
