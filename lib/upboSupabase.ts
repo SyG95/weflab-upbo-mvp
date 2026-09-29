@@ -55,6 +55,7 @@ import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
 import { cleanManualTabHint, storableManualTabHint, type ManualTabHint } from "./manualTabHint";
+import { planCouponViewerMerge, type CouponMergeMove } from "./couponMerge";
 import {
   isFixedPeriodExpired,
   judgeFixedPeriod,
@@ -4819,6 +4820,79 @@ export async function saveCouponChanges(
     couponLedgerForStreamer(streamer.id),
   ]);
   return { items, ...ledger, appliedCount: eventRows.length };
+}
+
+// ---------- 쿠폰 시청자 합치기(닉네임 줄 → 계정 ID 줄) ----------
+// 닉네임만 있는 줄에 계정 ID를 붙이면 그 순간 ID 줄로 잔액을 옮기고 닉네임 줄은 지운다.
+// (꾸야 건의 2026-09-29 / sy 결정: 닉네임-only 는 임시 상태, ID 를 알게 되는 순간 ID 계정으로 합침)
+// 계획은 lib/couponMerge.ts 순수 함수가 세우고, 여기서는 그대로 실행만 한다.
+// 순서: 대상 줄 upsert → 이력 insert → 닉네임 줄 delete(id 지정). 트랜잭션은 없으므로 delete 가
+// 실패하면 닉네임 줄이 남는다 — 그 경우 화면에 두 줄이 그대로 보여 재시도 전에 눈으로 확인 가능하다.
+// 옛 coupon_events 의 viewer_key(닉네임)는 손대지 않는다(이력은 그대로, 합침 조정 2건만 추가).
+export async function mergeCouponViewerIntoAccount(
+  slug: string,
+  nicknameRaw: string,
+  accountIdRaw: string,
+): Promise<Omit<CouponState, "sourceMap"> & { moves: CouponMergeMove[]; movedTotal: number }> {
+  const streamer = await requireStreamer(slug);
+  const accountId = normalizeAccountId(accountIdRaw).slice(0, 80);
+  const nickname = String(nicknameRaw ?? "").trim().slice(0, 80);
+
+  const existing = await supabaseFetch<CouponBalanceRow[]>(
+    `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&select=*&limit=5000`,
+  );
+  const plan = planCouponViewerMerge(
+    existing.map((row) => ({
+      id: row.id,
+      viewerKey: row.viewer_key,
+      nickname: row.nickname ?? "",
+      accountId: normalizeAccountId(row.account_id),
+      itemKey: row.item_key,
+      itemName: row.item_name,
+      balance: row.balance,
+    })),
+    nickname,
+    accountId,
+    COUPON_MAX_BALANCE,
+  );
+  // id 는 DB 가 준 값이지만 PostgREST `in.(...)` 필터에 그대로 들어가므로 구분자(쉼표·괄호·공백)가
+  // 섞일 수 없게만 막는다. (운영은 uuid, 미러 레인은 자체 id 형식 — 둘 다 이 문자 집합 안이다.)
+  for (const id of plan.deleteIds) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error("invalid balance row id");
+  }
+
+  const now = new Date().toISOString();
+  if (plan.upserts.length > 0) {
+    await supabaseFetch(
+      `/${tableName("coupon_balances")}?on_conflict=streamer_id,viewer_key,item_key`,
+      {
+        method: "POST",
+        headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(plan.upserts.map((v) => ({ streamer_id: streamer.id, ...v, updated_at: now }))),
+      },
+    );
+  }
+  if (plan.events.length > 0) {
+    await supabaseFetch(`/${tableName("coupon_events")}`, {
+      method: "POST",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify(
+        plan.events.map((ev) => ({ streamer_id: streamer.id, ...ev, created_by: "streamer_admin", created_at: now })),
+      ),
+    });
+  }
+  if (plan.deleteIds.length > 0) {
+    await supabaseFetch(
+      `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&id=in.(${plan.deleteIds.join(",")})`,
+      { method: "DELETE", headers: { prefer: "return=minimal" } },
+    );
+  }
+
+  const [items, ledger] = await Promise.all([
+    couponItemsForStreamer(streamer.id),
+    couponLedgerForStreamer(streamer.id),
+  ]);
+  return { items, ...ledger, moves: plan.moves, movedTotal: plan.movedTotal };
 }
 
 // ---------- 쿠폰 자동 적립 연결 (2단계 조각 1: 매핑 설정만) ----------

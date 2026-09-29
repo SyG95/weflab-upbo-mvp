@@ -92,6 +92,12 @@ export default function CouponManager({
   const [savingChange, setSavingChange] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
+  // 닉네임 줄 → 계정 ID 줄 합치기(꾸야 건의 2026-09-29). 잔액 현황에서 "계정 ID 붙이기"를 누르면 열린다.
+  // 규칙(sy 결정): 닉네임만 있는 줄은 임시 상태 — ID 를 알게 되는 순간 그 ID 계정으로 합친다.
+  const [mergeDraft, setMergeDraft] = useState<{ nickname: string; accountId: string } | null>(null);
+  const [merging, setMerging] = useState(false);
+  const [mergeMsg, setMergeMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
   // ── 쿠폰 종류 정의 ────────────────────────────────────────────────────
   function onAddItem() {
     // 키는 내부 식별자(이름을 바꿔도 잔액이 따라오게 고정) — 핸들러에서만 생성.
@@ -382,6 +388,85 @@ export default function CouponManager({
     setAccountId(b.accountId);
     setItemKey(b.itemKey);
   }
+
+  // ── 닉네임 줄 → 계정 ID 줄 합치기 ───────────────────────────────────
+  // 닉네임만 있는 줄(ID 없음)을 닉네임별로 모아 둔다 — 합치기 패널 요약·기록 폼 안내에 쓴다.
+  const nicknameOnlyRows = useMemo(() => {
+    const map = new Map<string, CouponBalance[]>();
+    for (const b of balances) {
+      if (b.accountId || !b.nickname) continue;
+      const list = map.get(b.nickname) ?? [];
+      list.push(b);
+      map.set(b.nickname, list);
+    }
+    return map;
+  }, [balances]);
+
+  // 기록 폼의 "ID 비우면 자동 찾기"와 같은 규칙으로 닉네임에 맞는 ID 후보를 고른다(없으면 빈 문자열).
+  function suggestAccountId(nick: string): string {
+    return (
+      viewerSuggestions.find((v) => v.fanNickname === nick)?.fanId ||
+      balances.find((b) => b.nickname === nick && b.accountId)?.accountId ||
+      ""
+    );
+  }
+
+  function startMerge(b: CouponBalance) {
+    setMergeMsg(null);
+    setMergeDraft({ nickname: b.nickname, accountId: suggestAccountId(b.nickname) });
+  }
+
+  async function submitMerge() {
+    if (!mergeDraft) return;
+    const nick = mergeDraft.nickname;
+    const id = mergeDraft.accountId.trim();
+    if (!id) {
+      setMergeMsg({ kind: "err", text: "붙일 계정 ID를 입력해 주세요." });
+      return;
+    }
+    const rows = nicknameOnlyRows.get(nick) ?? [];
+    const total = rows.reduce((s, r) => s + r.balance, 0);
+    if (
+      !window.confirm(
+        `'${nick}' 줄(쿠폰 ${rows.length}종, 잔액 합계 ${total})을 계정 ID ${id} 줄로 합칠까요?\n합치면 이 닉네임 줄은 사라지고 잔액은 ID 줄에 더해져요. 이력은 그대로 남습니다.`,
+      )
+    ) {
+      return;
+    }
+    setMerging(true);
+    setMergeMsg(null);
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/coupon-merge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nickname: nick, accountId: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setMergeMsg({ kind: "err", text: data?.error || "합치지 못했어요 — 다시 시도해 주세요." });
+      } else {
+        if (Array.isArray(data?.balances)) setBalances(data.balances);
+        if (Array.isArray(data?.events)) setEvents(data.events);
+        if (Array.isArray(data?.items) && data.items.length > 0) setItems(data.items);
+        setMergeDraft(null);
+        const moved = Number(data?.movedTotal) || 0;
+        setMsg({ kind: "ok", text: `'${nick}' 줄을 계정 ID ${id} 줄로 합쳤어요(옮긴 잔액 ${moved}).` });
+      }
+    } catch {
+      setMergeMsg({ kind: "err", text: "네트워크 오류로 합치지 못했어요." });
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  const mergeRows = mergeDraft ? (nicknameOnlyRows.get(mergeDraft.nickname) ?? []) : [];
+  const mergeTotal = mergeRows.reduce((s, r) => s + r.balance, 0);
+  const mergeListId = `coupon-merge-ids-${slug}`;
+
+  // 기록 폼 안내: 적은 닉네임에 "닉네임만 있는 줄"이 따로 있고 기록은 ID 줄로 갈 때(꾸야가 겪은 상황).
+  const formNick = nickname.trim();
+  const formNickOnlyRows = formNick ? nicknameOnlyRows.get(formNick) : undefined;
+  const formResolvedId = accountId.trim() || (formNick ? suggestAccountId(formNick) : "");
 
   const sortedBalances = [...balances].sort(
     (a, b) => a.nickname.localeCompare(b.nickname, "ko") || a.itemName.localeCompare(b.itemName, "ko"),
@@ -802,6 +887,13 @@ export default function CouponManager({
           같은 닉네임이 여러 명일 수 있어 계정 ID로 구분해요. ID를 비우면 업보 기록에서 닉네임이 정확히
           일치하는 시청자의 ID를 자동으로 찾아 씁니다.
         </p>
+        {formNickOnlyRows && formResolvedId ? (
+          <p className={styles.previewWarn}>
+            &lsquo;{formNick}&rsquo;은 닉네임만 있는 줄이 따로 있어요(잔액{" "}
+            {formNickOnlyRows.reduce((s, r) => s + r.balance, 0)}). 이 기록은 계정 ID {formResolvedId} 줄에
+            남아요. 두 줄을 하나로 만들려면 아래 잔액 현황에서 <b>계정 ID 붙이기</b>를 누르세요.
+          </p>
+        ) : null}
         {msg ? <p className={msg.kind === "ok" ? styles.ok : styles.err}>{msg.text}</p> : null}
       </div>
 
@@ -812,6 +904,52 @@ export default function CouponManager({
           <p className={styles.empty}>아직 쿠폰을 가진 시청자가 없어요. 위에서 첫 지급을 기록해 보세요.</p>
         ) : (
           <>
+            {mergeDraft ? (
+              <div className={styles.mergePanel}>
+                <p className={styles.previewTotal}>&lsquo;{mergeDraft.nickname}&rsquo; 줄에 계정 ID 붙이기</p>
+                <p className={styles.previewMuted}>
+                  닉네임만 적어 둔 줄(쿠폰 {mergeRows.length}종, 잔액 합계 {mergeTotal})을 계정 ID 줄로
+                  합쳐요. 합친 뒤 이 닉네임 줄은 사라지고 잔액은 ID 줄에 더해지며, 이력엔 조정 기록이
+                  남아요. 같은 닉네임의 다른 사람이 아닌지 ID를 한 번 확인해 주세요.
+                </p>
+                <div className={styles.mergeActions}>
+                  <div className={styles.field}>
+                    <span className={styles.fieldLabel}>계정 ID</span>
+                    <input
+                      className={styles.idInput}
+                      type="text"
+                      list={mergeListId}
+                      value={mergeDraft.accountId}
+                      placeholder="예: abcd1234"
+                      onChange={(e) => setMergeDraft({ nickname: mergeDraft.nickname, accountId: e.target.value })}
+                    />
+                    <datalist id={mergeListId}>
+                      {viewerSuggestions
+                        .filter((v) => v.fanId)
+                        .map((v) => (
+                          <option key={`${v.fanId}@@${v.fanNickname}`} value={v.fanId}>
+                            {v.fanNickname}
+                          </option>
+                        ))}
+                    </datalist>
+                  </div>
+                  <button type="button" className={styles.saveBtn} onClick={submitMerge} disabled={merging}>
+                    {merging ? "합치는 중…" : "이 ID로 합치기"}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.pickBtn}
+                    onClick={() => setMergeDraft(null)}
+                    disabled={merging}
+                  >
+                    취소
+                  </button>
+                </div>
+                {mergeMsg ? (
+                  <p className={mergeMsg.kind === "ok" ? styles.ok : styles.err}>{mergeMsg.text}</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
@@ -842,9 +980,21 @@ export default function CouponManager({
                         <td className={styles.splitVal}>{split.auto.toLocaleString()}</td>
                         <td className={styles.eventTime}>{fmtKst(b.updatedAt)}</td>
                         <td>
-                          <button type="button" className={styles.pickBtn} onClick={() => pickRow(b)}>
-                            이 시청자로 입력
-                          </button>
+                          <div className={styles.rowActions}>
+                            <button type="button" className={styles.pickBtn} onClick={() => pickRow(b)}>
+                              이 시청자로 입력
+                            </button>
+                            {!b.accountId ? (
+                              <button
+                                type="button"
+                                className={styles.mergeBtn}
+                                onClick={() => startMerge(b)}
+                                title="닉네임만 있는 줄이에요. 계정 ID를 붙이면 그 ID 줄로 합쳐져요."
+                              >
+                                계정 ID 붙이기
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     );

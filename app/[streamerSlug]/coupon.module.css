@@ -470,3 +470,29 @@
   color: var(--muted);
   line-height: 1.6;
 }
+
+/* 닉네임 줄 → 계정 ID 줄 합치기 (꾸야 건의 2026-09-29) */
+.rowActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mergeBtn {
+  composes: pickBtn;
+  color: var(--stamp);
+  border-color: var(--stamp);
+}
+
+.mergePanel {
+  composes: previewBox;
+  margin: 0 0 12px;
+}
+
+.mergeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
