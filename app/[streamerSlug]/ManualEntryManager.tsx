@@ -40,6 +40,8 @@ type TabChoice = { rid: string; label: string; hintLabel: string };
 // 탭 select 값: "" = 표에 없음(기본), "rid:<rid>" = 룰렛 탭, "custom:<이름>" = 이미 있는 내 탭, NEW_TAB = 새 탭 이름 쓰기.
 const NEW_TAB = "__new__";
 const TAB_RID_PREFIX = "rid:";
+// 여러 건 탭 바꾸기 요청 1회 크기 — 서버 BULK_TAB_MAX(100)와 같다.
+const BULK_CHUNK = 100;
 
 // select 값 + 새 이름 → 저장할 힌트(null = 표에 없음). 이름이 비면 error.
 function hintOfTabPick(
@@ -394,7 +396,13 @@ export default function ManualEntryManager({
       if (current === undefined) return "표에 없음";
       return current || "보관된 룰렛(팬 화면에 안 보임)";
     }
-    if (picked) return picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
+    if (picked) {
+      // 목록·팬 화면과 같은 이름(currentItemTabs = 팬 탭 표시명)을 우선 쓰고, 없을 때만 금액 나열 라벨로.
+      const current = currentItemTabs[picked.itemName];
+      if (current) return current;
+      if (current === "") return "보관된 룰렛(팬 화면에 안 보임)";
+      return picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
+    }
     if (pickedPast) {
       // 팬 화면은 상품명으로 현재 표 탭을 먼저 찾는다 — 같은 이름이 현재 표에도 있으면 그 탭으로 간다.
       const current = currentItemTabs[pickedPast.itemName];
@@ -430,7 +438,8 @@ export default function ManualEntryManager({
     [entries],
   );
 
-  // 목록 줄에서 힌트가 없을 때 상품이 정하는 탭(표시용) — 팬 화면 규칙과 같은 순서: 현재 표 상품명 → 되짚기 → 표에 없음.
+  // 목록 줄에서 힌트가 없을 때 상품이 정하는 탭(표시용 근사) — 현재 표 상품명(팬 탭 표시명과 동일) → 되짚기 → 표에 없음.
+  // 되짚기 부분은 팬 화면(resolvePastTabRid)의 상품 겹침·후보 2개 이상 규칙까지는 흉내 내지 않는다(금액대 라벨 기준).
   function productTabOfEntry(e: UpboEntry): string {
     const current = currentItemTabs[e.itemName];
     if (current !== undefined) return current || "보관된 룰렛(팬 화면에 안 보임)";
@@ -441,6 +450,8 @@ export default function ManualEntryManager({
 
   // 여러 건 한 번에 탭 바꾸기(2026-09-29) — 정가는 대상이 아니다.
   const selectableIds = manualEntries.filter((e) => e.amountRangeLabel !== "정가").map((e) => e.id);
+  // 화면에 지금 있는 줄 중 체크된 것만(삭제·새로고침으로 사라진 id 는 셈에서 빠진다).
+  const validSelected = selectableIds.filter((id) => selected.has(id));
   function toggleSelected(id: string) {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -450,10 +461,10 @@ export default function ManualEntryManager({
     });
   }
   function selectAll() {
-    setSelected((prev) => (prev.size === selectableIds.length ? new Set() : new Set(selectableIds)));
+    setSelected(validSelected.length === selectableIds.length ? new Set() : new Set(selectableIds));
   }
   async function applyBulkTab() {
-    const ids = [...selected].filter((id) => selectableIds.includes(id));
+    const ids = validSelected;
     if (ids.length === 0) return;
     const pickedHint = hintOfTabPick(bulkPick, bulkNewName, tabChoices);
     if ("error" in pickedHint) {
@@ -470,24 +481,32 @@ export default function ManualEntryManager({
     }
     setBulkSaving(true);
     setMsg(null);
+    let done = 0;
     try {
-      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/manual-entries`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids, tabHint: pickedHint.hint }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
-      const n = Number(data?.updated);
-      setMsg({ type: "ok", text: `${Number.isFinite(n) ? n : ids.length}건의 탭을 «${targetName}»(으)로 바꿨어요.` });
+      // 서버 한도(BULK_TAB_MAX=100)에 맞춰 나눠 보낸다 — "전체 선택"이 100건을 넘어도 막히지 않는다.
+      for (let i = 0; i < ids.length; i += BULK_CHUNK) {
+        const chunk = ids.slice(i, i + BULK_CHUNK);
+        const res = await fetch(`/api/s/${encodeURIComponent(slug)}/manual-entries`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids: chunk, tabHint: pickedHint.hint }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
+        const n = Number(data?.updated);
+        done += Number.isFinite(n) ? n : chunk.length;
+      }
+      setMsg({ type: "ok", text: `${done}건의 탭을 «${targetName}»(으)로 바꿨어요.` });
       setSelected(new Set());
       setBulkPick("");
       setBulkNewName("");
-      router.refresh();
     } catch (e) {
-      setMsg({ type: "err", text: e instanceof Error && e.message ? e.message : "탭 저장에 실패했어요." });
+      // 중간에 끊겼으면 앞 묶음은 이미 바뀌었다 — 몇 건까지 됐는지 알려 주고 목록을 새로 읽어 화면을 맞춘다.
+      const reason = e instanceof Error && e.message ? e.message : "탭 저장에 실패했어요.";
+      setMsg({ type: "err", text: done > 0 ? `${done}건은 바꿨고 그 뒤에서 실패했어요: ${reason}` : reason });
     } finally {
       setBulkSaving(false);
+      router.refresh();
     }
   }
 
@@ -507,7 +526,9 @@ export default function ManualEntryManager({
     };
     // 탭 힌트(2026-09-29: 정가 빼고 모든 상품에서 고를 수 있다). 기본("")이면 payload 에서 생략 = 상품이 탭을 정한다.
     let tabHint: ManualTabHint | null = null;
-    if (canPickFormTab && tabPick !== "") {
+    // 상품 자기 룰렛 탭을 굳이 고른 경우는 힌트를 안 남긴다 — 남기면 표가 바뀔 때 «이전 표 · L»에 묶여 상품을 따라가지 못한다.
+    const ownTabPicked = Boolean(picked?.rouletteId) && tabPick === TAB_RID_PREFIX + (picked?.rouletteId ?? "");
+    if (canPickFormTab && tabPick !== "" && !ownTabPicked) {
       if ("error" in formTabPick) {
         setMsg({ type: "err", text: formTabPick.error });
         return;
@@ -1011,15 +1032,17 @@ export default function ManualEntryManager({
         {selectableIds.length > 0 ? (
           <>
             <button type="button" className={styles.ieChipBtn} onClick={selectAll} disabled={bulkSaving}>
-              {selected.size > 0 && selected.size === selectableIds.length ? "전체 해제" : "전체 선택"}
+              {validSelected.length > 0 && validSelected.length === selectableIds.length ? "전체 해제" : "전체 선택"}
             </button>
-            <span className={styles.ieFormHint}>선택 {selected.size}건 — 체크한 기록을 한 번에 다른 탭으로 옮길 수 있어요</span>
+            <span className={styles.ieFormHint}>
+              선택 {validSelected.length}건 — 체크한 기록을 한 번에 다른 탭으로 옮길 수 있어요
+            </span>
           </>
         ) : null}
       </div>
-      {selected.size > 0 ? (
+      {validSelected.length > 0 ? (
         <div className={styles.ieDateRow}>
-          <span className={styles.ieFormHint}>선택한 {selected.size}건을 옮길 탭:</span>
+          <span className={styles.ieFormHint}>선택한 {validSelected.length}건을 옮길 탭:</span>
           <TabHintSelect
             compact
             value={bulkPick}
@@ -1037,7 +1060,7 @@ export default function ManualEntryManager({
             disabled={bulkSaving || (bulkPick === NEW_TAB && !cleanCustomTabName(bulkNewName))}
             onClick={applyBulkTab}
           >
-            {bulkSaving ? "옮기는 중…" : `${selected.size}건 탭 바꾸기`}
+            {bulkSaving ? "옮기는 중…" : `${validSelected.length}건 탭 바꾸기`}
           </button>
           <button
             type="button"

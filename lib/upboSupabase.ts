@@ -2488,8 +2488,8 @@ export type ManualEntryInput = {
   count: number;
   // 스트리머가 적은 후원 날짜(KST "YYYY-MM-DD HH:MM", 검증은 route 에서). 없거나 "" 이면 옛 수동기록과 동일(날짜 모름).
   donateTimeText?: string;
-  // "직접 입력"(catalogVersion null) 상품을 넣을 팬 탭(2026-09-21). other/null 이면 admin_note 에 키를 넣지 않는다.
-  // 정제(cleanManualTabHint)·"표 버전이 있으면 무시"는 route 에서 끝내고 온다.
+  // 상품을 넣을 팬 탭 힌트(2026-09-21 직접 입력 → 2026-09-29 표 상품 포함). other/null 이면 admin_note 에 키를 넣지 않는다
+  // (= 상품이 정한 탭). 정제(cleanManualTabHint)는 route 에서 끝내고 온다.
   tabHint?: ManualTabHint | null;
 };
 
@@ -2593,8 +2593,10 @@ export async function updateManualEntryTab(
 }
 
 // 여러 수동기록의 탭을 한 번에(2026-09-29, 루빗 "추석 한정 탭으로 몰린 10건"). admin_note 는 행마다 다르므로
-// (effectiveCount 등) 한 번 읽어 각 행에 tabHint 만 병합해 PATCH 한다 — 읽기 1회 + 행 수만큼 PATCH.
-// manual:* 이 아닌 id·다른 스트리머 id 는 읽기 필터에서 빠져 건너뛴다. 돌려주는 값 = 실제 갱신한 행 수.
+// (effectiveCount 등) 한 번 읽어 각 행에 tabHint 만 병합해 PATCH 한다 — 읽기 1회 + 행 수만큼 PATCH(동시 5개).
+// manual:* 이 아닌 id·다른 스트리머 id·정가 줄은 읽기 필터에서 빠져 건너뛴다. 돌려주는 값 = 실제 갱신한 행 수.
+// 중간에 하나가 실패하면 앞선 행은 이미 바뀐 상태로 오류가 난다 — 같은 값을 다시 쓰는 재시도는 안전하다(멱등).
+const BULK_TAB_CONCURRENCY = 5;
 export async function updateManualEntriesTab(
   streamer: StreamerRow,
   entryIds: string[],
@@ -2605,23 +2607,30 @@ export async function updateManualEntriesTab(
     if (!UUID_RE.test(id)) throw new Error("invalid entry id");
   }
   if (ids.length === 0) return 0;
-  const base = `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&source_key=like.manual:*`;
+  const base =
+    `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&source_key=like.manual:*` +
+    `&amount_range_label=neq.${encodeURIComponent("정가")}`;
   const rows = await supabaseFetch<Array<Pick<UpboEntryRow, "id" | "admin_note">>>(
     `${base}&id=in.(${ids.join(",")})&select=id,admin_note&limit=${ids.length}`,
   );
   const stored = storableManualTabHint(hint);
   const now = new Date().toISOString();
   let updated = 0;
-  for (const row of rows) {
-    await supabaseFetch(`${base}&id=eq.${row.id}`, {
-      method: "PATCH",
-      headers: { prefer: "return=minimal" },
-      body: JSON.stringify({
-        admin_note: mergeManualAdminNote(row.admin_note ?? null, { tabHint: stored }),
-        updated_at: now,
-      }),
-    });
-    updated += 1;
+  for (let i = 0; i < rows.length; i += BULK_TAB_CONCURRENCY) {
+    const chunk = rows.slice(i, i + BULK_TAB_CONCURRENCY);
+    await Promise.all(
+      chunk.map((row) =>
+        supabaseFetch(`${base}&id=eq.${row.id}`, {
+          method: "PATCH",
+          headers: { prefer: "return=minimal" },
+          body: JSON.stringify({
+            admin_note: mergeManualAdminNote(row.admin_note ?? null, { tabHint: stored }),
+            updated_at: now,
+          }),
+        }),
+      ),
+    );
+    updated += chunk.length;
   }
   return updated;
 }

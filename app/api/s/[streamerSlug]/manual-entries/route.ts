@@ -14,6 +14,8 @@ import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 import { requireSheetAdmin } from "@/lib/sheetAdminAuth";
 
 export const runtime = "nodejs";
+// 여러 건 탭 바꾸기는 행 수만큼 PATCH 를 보낸다(동시 5개) — 기본 함수 시한(10~15초)에 걸리지 않게 여유를 둔다.
+export const maxDuration = 60;
 
 type RouteContext = { params: Promise<{ streamerSlug: string }> };
 
@@ -46,8 +48,9 @@ function cleanTabHintInput(raw: unknown): ManualTabHint | null {
   return hint;
 }
 
-// 여러 건 탭 바꾸기 한 번에 받을 수 있는 최대 건수(수동기록 목록 한 화면 분량보다 넉넉하게).
-const BULK_TAB_MAX = 200;
+// 여러 건 탭 바꾸기 한 번에 받을 수 있는 최대 건수. 100 uuid ≈ 3.7KB 라 읽기 요청 URL(8KB 한도)에 여유가 있다.
+// 화면은 이 크기로 나눠 보내므로(ManualEntryManager BULK_CHUNK) "전체 선택"이 100건을 넘어도 막히지 않는다.
+const BULK_TAB_MAX = 100;
 
 // 수동기록 추가. 관리자 로그인 세션 필요. 저장 실체는 upbo_entries(source_key manual:...).
 export async function POST(request: Request, context: RouteContext) {

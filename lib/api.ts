@@ -35,8 +35,8 @@ export type UpboEntry = {
   multiplier?: number;
   effectiveCount?: number;
   modifierSourceKeys?: string[];
-  // 수동기록 "직접 입력"(catalogVersion 없음) 상품을 넣을 팬 탭 힌트(admin_note JSON tabHint, 2026-09-21).
-  // 없거나 모양이 아니면 undefined = 지금처럼 "표에 없음". 표 버전이 있는 기록에서는 팬 화면이 이 값을 보지 않는다.
+  // 수동기록 상품을 넣을 팬 탭 힌트(admin_note JSON tabHint, 2026-09-21 직접 입력 → 2026-09-29 표 상품 포함).
+  // 없거나 모양이 아니면 undefined = 상품이 정한 탭(표에 없는 상품은 "표에 없음"). 있으면 팬 화면이 먼저 본다.
   manualTabHint?: ManualTabHint;
   // 운영 레이어(양도/교환): 값이 원본과 다를 때만 화면에 "→ 현재" 로 노출한다.
   currentOwnerName?: string | null;

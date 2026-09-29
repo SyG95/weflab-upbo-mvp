@@ -6,7 +6,8 @@
 // 되짚어 ① 지금 표의 같은 금액대 탭으로 보내거나 ② "이전 표 · L" 탭을 만든다.
 //
 // 불변 조건(impl-spec-stage1-2.md):
-//  - 상품명이 최신 표에 있는 기록(info 있음)은 이 모듈을 거치지 않는다 — 호출측이 보장.
+//  - 상품명이 최신 표에 있는 기록(info 있음)은 되짚기(resolvePastTabRid)를 거치지 않는다 — resolveHoldingTabRid 가 보장.
+//    (2026-09-29: 수동기록이 직접 정한 탭 힌트만 그보다 먼저 본다 — 아래 resolveHoldingTabRid 참고.)
 //  - 옛 버전 그룹을 색인(itemsByRid)에 넣지 않는다 — 여기서는 rid 문자열만 고른다.
 //  - 새 저장 없음. 탭 이름 오버레이(pastLabels)는 기존 fan_tab_labels_updated 에 얹는다.
 
@@ -127,18 +128,21 @@ export function resolveHintedTabRid(hint: ManualTabHint, ctx: PastTabContext): s
 }
 
 // 기록 한 조각이 갈 팬 탭 rid — 수동기록 탭 힌트 전면 개방(2026-09-29, sy 승인 / 루빗 건의 9-23).
-// 순서: ① 스트리머가 수동기록에 직접 정한 탭(힌트)이 있으면 무조건 그 탭
-//       ② 없으면 상품명이 지금 표에 있을 때 그 룰렛 탭(productRid) — 자동수집·힌트 없는 수동기록의 기존 경로
+// 순서: ① 스트리머가 수동기록에 직접 정한 탭(힌트)이 있으면 무조건 그 탭(상품의 룰렛이 보관돼도 힌트 탭에 보인다)
+//       ② 없으면 상품명이 지금 표에 있을 때 그 룰렛 탭(product.rid) — 단, 그 룰렛이 보관(archived)이면 팬 화면에서
+//          숨김(null) — 자동수집·힌트 없는 수동기록의 기존 경로 그대로
 //       ③ 둘 다 없으면 되짚기(resolvePastTabRid: 같은 금액대 탭 / «이전 표 · L» / 기타).
 // 9/21 규칙("표 버전이 있는 기록은 힌트를 보지 않는다")을 "수동기록이 직접 정한 경우에만" 푼 것이다. 힌트는
 // 수동기록(manual:*)에만 저장되므로 자동수집 기록의 경로는 이 함수로도 바뀌지 않는다. 정가(FIXED)는 호출측이 먼저 뺀다.
+export type HoldingTabProduct = { rid: string; archived?: boolean };
+
 export function resolveHoldingTabRid(
   item: PastTabItem & { tabHint?: ManualTabHint | null },
-  productRid: string | undefined,
+  product: HoldingTabProduct | undefined,
   ctx: PastTabContext,
-): string {
+): string | null {
   if (item.tabHint) return resolveHintedTabRid(item.tabHint, ctx);
-  if (productRid) return productRid;
+  if (product) return product.archived ? null : product.rid;
   return resolvePastTabRid(item, ctx);
 }
 

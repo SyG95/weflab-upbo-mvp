@@ -1065,13 +1065,13 @@ function partitionHoldingsByRoulette(
       // 정가(시그니처) 기록은 룰렛과 무관 — "기타"에 섞지 않고 전용 "정가" 탭으로(sy 2026-07-07).
       const isFixed = it.amountRangeLabel === "정가";
       const info = isFixed ? undefined : index.itemRoulette.get(it.originalItemName);
-      if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
       // 탭 결정(resolveHoldingTabRid, 2026-09-29 루빗 건의 반영): ① 수동기록에 스트리머가 직접 정한 탭(힌트)이
-      // 있으면 그 탭 — 표에 있는 상품이어도(9/21 "표 버전 있으면 힌트 무시" 규칙을 수동+명시 힌트에만 푼 것)
-      // ② 없으면 상품명이 최신 표에 있을 때 그 룰렛 탭(자동수집·힌트 없는 수동 = 이전과 동일 경로)
+      // 있으면 그 탭 — 표에 있는 상품이어도, 그 룰렛이 보관돼도(9/21 "표 버전 있으면 힌트 무시"를 수동+명시 힌트에만 푼 것)
+      // ② 없으면 상품명이 최신 표에 있을 때 그 룰렛 탭, 보관 룰렛이면 숨김(null) — 자동수집·힌트 없는 수동 = 이전과 동일
       // ③ 둘 다 없으면 되짚기(2026-09-20): 같은 금액대 탭 / "이전 표 · L" / 기타.
       // 힌트는 수동기록(manual:*)에만 저장되므로 자동수집 기록은 이 변경으로 한 건도 움직이지 않는다.
-      const rid = isFixed ? FIXED : resolveHoldingTabRid(it, info?.rid, index.pastCtx);
+      const rid = isFixed ? FIXED : resolveHoldingTabRid(it, info, index.pastCtx);
+      if (rid === null) continue; // 보관 룰렛 상품(힌트 없음)은 팬 화면에서 숨김 — 기존 동작.
       let owners = byRid.get(rid);
       if (!owners) {
         owners = new Map();
