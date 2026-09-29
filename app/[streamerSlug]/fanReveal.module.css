@@ -102,3 +102,27 @@
   color: var(--stamp);
   font-variant-numeric: tabular-nums;
 }
+
+/* 공개 범위 = 전체 확률표(2026-09-29): 비대상 행은 흐리게, 표가 길어지므로 카드 안에서 스크롤 */
+.legend {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.legend b {
+  color: var(--ink);
+}
+
+.oddsScroll {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.rowMuted .name,
+.rowMuted .prob {
+  color: var(--muted);
+  font-weight: 500;
+}

@@ -958,9 +958,11 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
 
 // 팬 화면 확률표 카드 데이터: fanRevealEnabled 마스터 on + 공개(revealed) 룰렛만.
 // 업보 탭용 룰렛 묶음은 유지하되, 묶음 안에서 전체 상품명+확률표가 다른 그룹은 실제 확률군별로 분리한다.
-// 목록은 "기록되는 상품"만(기록 on + 업보 기준 이하 = 팬 칩으로 뜰 수 있는 것). 확률 높은순.
+// 목록: 공개 범위(fanRevealScope, 2026-09-29) target(기본) = "기록되는 상품"만(기록 on + 업보 기준 이하 = 팬 칩으로
+// 뜰 수 있는 것) / all = 룰렛표 전체(기준 위·기록 off 포함)를 보여주되 기록되는 행만 target=true 로 표시. 확률 높은순.
 function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
   if (!state.fanRevealEnabled) return [];
+  const scope = state.fanRevealScope ?? "target";
   const config = state.rouletteConfig ?? [];
   const revealedIdx = config.map((c, i) => (c.revealed ? i : -1)).filter((i) => i >= 0);
   if (revealedIdx.length === 0) return [];
@@ -999,24 +1001,27 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
     const familyTables: Array<{
       key: string;
       suffix: string;
-      items: Array<{ name: string; prob: number }>;
+      items: Array<{ name: string; prob: number; target: boolean }>;
     }> = [];
 
     families.forEach((family, familyIndex) => {
       // 같은 실제 확률군 안에서는 (상품, 확률) 중복을 한 줄로 합치고 금액 라벨만 모은다.
-      const rows: Array<{ name: string; prob: number; amounts: Set<string> }> = [];
-      const byKey = new Map<string, { name: string; prob: number; amounts: Set<string> }>();
+      // target = 이 줄 중 하나라도 업보로 기록되는 상품인가(all 범위에서 진하게 표시할 기준).
+      const rows: Array<{ name: string; prob: number; amounts: Set<string>; target: boolean }> = [];
+      const byKey = new Map<string, { name: string; prob: number; amounts: Set<string>; target: boolean }>();
       family.groups.forEach((g) => {
         (g.items ?? []).forEach((it, idx) => {
           if (!it.itemName) return;
-          if (!recorded(g, it, idx)) return;
+          const isTarget = recorded(g, it, idx);
+          if (scope === "target" && !isTarget) return;
           const key = `${it.itemName} ${it.probability}`;
           let entry = byKey.get(key);
           if (!entry) {
-            entry = { name: it.itemName, prob: it.probability, amounts: new Set() };
+            entry = { name: it.itemName, prob: it.probability, amounts: new Set(), target: false };
             byKey.set(key, entry);
             rows.push(entry);
           }
+          if (isTarget) entry.target = true;
           if (g.amountRangeLabel) entry.amounts.add(String(g.amountRangeLabel));
         });
       });
@@ -1031,6 +1036,7 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
               ? `${row.name} (${[...row.amounts].join("·")})`
               : row.name,
           prob: row.prob,
+          target: row.target,
         }))
         .sort((a, b) => b.prob - a.prob);
       familyTables.push({
@@ -2281,6 +2287,7 @@ function AdminPanel({
                 slug={state.slug}
                 roulettes={revealRoulettes}
                 master={state.fanRevealEnabled ?? false}
+                scope={state.fanRevealScope ?? "target"}
                 existingConfig={state.rouletteConfig ?? []}
               />
             </CollapsibleCard>

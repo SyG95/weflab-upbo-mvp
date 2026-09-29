@@ -3,6 +3,7 @@
 // thresholdPercent 저장만 호출한다. (read + settings POST 한정)
 
 import type { ManualTabHint } from "./manualTabHint";
+import type { FanRevealScope } from "./fanRevealScope";
 
 export const API_BASE =
   process.env.UPBO_API_BASE ??
@@ -382,6 +383,8 @@ export type StreamerState = {
   productColors?: Record<string, string>;
   // 팬 화면 룰렛 확률표 공개 마스터 스위치. off면 확률표 카드 자체가 안 뜬다(개별 revealed 무시).
   fanRevealEnabled?: boolean;
+  // 확률표 공개 범위(2026-09-29): target=업보 대상 품목만(기본, 지금까지와 동일) / all=전체 확률표(대상 행 강조).
+  fanRevealScope?: FanRevealScope;
   // 팬 화면 계정ID 숨기기(스트리머별). 켜면 팬 화면 표에서 계정ID 열이 통째로 빠진다. 기본 off.
   fanIdHidden?: boolean;
   // 팬 쿠폰 탭 이름(스트리머별, 표시 전용). ""=기본 "쿠폰". 예: 꾸폰, 마일리지.

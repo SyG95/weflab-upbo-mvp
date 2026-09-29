@@ -55,6 +55,7 @@ import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
 import { parseDonateTime } from "./donationEvents";
 import { cleanManualTabHint, storableManualTabHint, type ManualTabHint } from "./manualTabHint";
+import { normalizeFanRevealScope, type FanRevealScope } from "./fanRevealScope";
 import { planCouponViewerMerge, type CouponMergeMove } from "./couponMerge";
 import {
   isFixedPeriodExpired,
@@ -983,14 +984,14 @@ export async function getStreamerState(slug: string) {
     const r = overlayLatest.get(action);
     return r ? [{ payload: r.payload, created_at: r.created_at }] : [];
   };
-  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanRevealEnabled, fanIdHidden, couponTabLabel, sheetTitle, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides, fanAxisPrefs] = await Promise.all([
+  const [signatureCounts, signatureDetails, fanFixedTabMode, rouletteConfig, fanDeliveryReflect, productColors, fanReveal, fanIdHidden, couponTabLabel, sheetTitle, fanLayout, adminUiPrefs, fanTabLabels, weflabLink, thresholdOverrides, fanAxisPrefs] = await Promise.all([
     latestSignatureCounts(streamer.id, overlayPick("signature_counts_updated")),
     latestSignatureDetails(streamer.id, overlayPick("signature_counts_updated")),
     latestFanFixedTabMode(streamer.id, overlayPick("signature_counts_updated")),
     rouletteConfigForStreamer(streamer.id, overlayPick("roulette_config_updated")),
     fanDeliveryReflectForStreamer(streamer.id, overlayPick("fan_display_updated")),
     productColorsForStreamer(streamer.id, overlayPick("product_colors_updated")),
-    fanRevealEnabledForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
+    fanRevealConfigForStreamer(streamer.id, overlayPick("fan_reveal_updated")),
     fanIdHiddenForStreamer(streamer.id, overlayPick("fan_id_privacy_updated")),
     couponTabLabelForStreamer(streamer.id, overlayPick("coupon_tab_label_updated")),
     sheetTitleForStreamer(streamer.id, overlayPick("sheet_title_updated")),
@@ -1040,7 +1041,8 @@ export async function getStreamerState(slug: string) {
     fanDeliveryReflect,
     fanAxisPrefs,
     productColors,
-    fanRevealEnabled,
+    fanRevealEnabled: fanReveal.enabled,
+    fanRevealScope: fanReveal.scope,
     fanIdHidden,
     couponTabLabel,
     sheetTitle,
@@ -3648,17 +3650,46 @@ export async function setSheetFont(streamer: StreamerRow, fontKey: unknown): Pro
   return clean;
 }
 
-// ---------- 팬 화면 룰렛 확률표 공개 마스터 스위치 ----------
-// 개별 룰렛 공개 여부는 roulette_config 의 revealed 플래그. 이건 전체 on/off 마스터다.
-export async function fanRevealEnabledForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<boolean> {
-  const rows = prefetched ?? await supabaseFetch<Array<{ payload: { enabled?: unknown } | null }>>(
-    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_reveal_updated&select=payload&order=created_at.desc&limit=1`,
-  );
-  return rows[0]?.payload?.enabled === true;
+// ---------- 팬 화면 룰렛 확률표 공개 마스터 스위치 + 공개 범위 ----------
+// 개별 룰렛 공개 여부는 roulette_config 의 revealed 플래그. 이건 전체 on/off 마스터 + 범위(target/all)다.
+// 같은 fan_reveal_updated 오버레이 payload 에 {enabled, scope} 를 함께 둔다(2026-09-29 scope 추가, 없으면 target).
+export type FanRevealConfig = { enabled: boolean; scope: FanRevealScope };
+
+type FanRevealPayloadRow = { payload: Record<string, unknown> | null };
+
+function fanRevealConfigOfRows(rows: FanRevealPayloadRow[]): FanRevealConfig {
+  const payload = rows[0]?.payload;
+  return { enabled: payload?.["enabled"] === true, scope: normalizeFanRevealScope(payload?.["scope"]) };
 }
 
-export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolean): Promise<boolean> {
-  const clean = enabled === true;
+async function fanRevealRows(streamerId: string): Promise<FanRevealPayloadRow[]> {
+  return supabaseFetch<FanRevealPayloadRow[]>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.fan_reveal_updated&select=payload&order=created_at.desc&limit=1`,
+  );
+}
+
+export async function fanRevealConfigForStreamer(
+  streamerId: string,
+  prefetched?: OverlayPrefetch,
+): Promise<FanRevealConfig> {
+  const rows: FanRevealPayloadRow[] = prefetched ?? (await fanRevealRows(streamerId));
+  return fanRevealConfigOfRows(rows);
+}
+
+export async function fanRevealEnabledForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<boolean> {
+  return (await fanRevealConfigForStreamer(streamerId, prefetched)).enabled;
+}
+
+// 마스터·범위 중 온 것만 바꾸고 나머지는 최신 값을 유지해 한 줄로 다시 적는다(둘 다 같은 payload 에 살기 때문).
+export async function setFanRevealConfig(
+  streamer: StreamerRow,
+  patch: { enabled?: boolean; scope?: FanRevealScope },
+): Promise<FanRevealConfig> {
+  const current = fanRevealConfigOfRows(await fanRevealRows(streamer.id));
+  const next: FanRevealConfig = {
+    enabled: patch.enabled === undefined ? current.enabled : patch.enabled === true,
+    scope: patch.scope === undefined ? current.scope : normalizeFanRevealScope(patch.scope),
+  };
   await supabaseFetch(`/${tableName("audit_logs")}`, {
     method: "POST",
     headers: { prefer: "return=minimal" },
@@ -3666,10 +3697,14 @@ export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolea
       streamer_id: streamer.id,
       action: "fan_reveal_updated",
       actor: "operator",
-      payload: { enabled: clean },
+      payload: next,
     }),
   });
-  return clean;
+  return next;
+}
+
+export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolean): Promise<boolean> {
+  return (await setFanRevealConfig(streamer, { enabled })).enabled;
 }
 
 // ---------- 팬 화면 계정ID 숨기기 (스트리머별 선택) ----------
