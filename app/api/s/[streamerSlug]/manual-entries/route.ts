@@ -5,6 +5,7 @@ import {
   updateManualEntryCount,
   updateManualEntryDate,
   updateManualEntryTab,
+  updateManualEntriesTab,
 } from "@/lib/upboSupabase";
 import { parseDonateTimeMs } from "@/lib/api";
 import { isManualDonateTimeText } from "@/lib/manualEntryDate";
@@ -37,13 +38,16 @@ function cleanDonateTimeText(raw: unknown): string {
   return text;
 }
 
-// "직접 입력" 탭 힌트 정리: 없음/null = 힌트 없음(표에 없음). 모양이 아니면 400.
+// 탭 힌트 정리: 없음/null = 힌트 없음(상품이 탭을 정함 / 표에 없는 상품은 "표에 없음"). 모양이 아니면 400.
 function cleanTabHintInput(raw: unknown): ManualTabHint | null {
   if (raw === undefined || raw === null) return null;
   const hint = cleanManualTabHint(raw);
   if (!hint) throw badRequest("탭 선택값이 올바르지 않아요. 탭을 다시 골라 주세요.");
   return hint;
 }
+
+// 여러 건 탭 바꾸기 한 번에 받을 수 있는 최대 건수(수동기록 목록 한 화면 분량보다 넉넉하게).
+const BULK_TAB_MAX = 200;
 
 // 수동기록 추가. 관리자 로그인 세션 필요. 저장 실체는 upbo_entries(source_key manual:...).
 export async function POST(request: Request, context: RouteContext) {
@@ -70,8 +74,9 @@ export async function POST(request: Request, context: RouteContext) {
     if (!itemName) throw badRequest("상품을 골라 주세요.");
     const donateTimeText = cleanDonateTimeText(body.donateTimeText);
     const catalogVersion = typeof body.catalogVersion === "number" ? body.catalogVersion : null;
-    // 탭 힌트는 "직접 입력"(표 버전 없음)에만 의미가 있다 — 표에서 고른 상품에 힌트가 딸려 와도 무시(불변 조건 1).
-    const tabHint = catalogVersion === null ? cleanTabHintInput(body.tabHint) : null;
+    // 탭 힌트(2026-09-29, 루빗 건의): 표에서 고른 상품도 스트리머가 탭을 정할 수 있다. 팬 화면은 힌트가 있으면
+    // 힌트를 먼저 본다(resolveHoldingTabRid). 없으면 지금처럼 상품이 탭을 정한다. 정가는 UI 에 선택지가 없다.
+    const tabHint = cleanTabHintInput(body.tabHint);
 
     await createManualEntry(streamer, {
       fanId,
@@ -93,13 +98,32 @@ export async function POST(request: Request, context: RouteContext) {
 }
 
 // 수동기록 수정: {id, count} = 개수, {id, donateTimeText} = 후원 날짜(""=지우기),
-// {id, tabHint} = 직접 입력 탭(null = 표에 없음). 여러 개가 같이 오면 각각 처리(검증은 전부 먼저).
+// {id, tabHint} = 탭(null = 힌트 지움 → 상품이 정한 탭). 여러 개가 같이 오면 각각 처리(검증은 전부 먼저).
+// {ids: [...], tabHint} = 여러 건 탭을 한 번에(2026-09-29). 정가 줄이 섞여 와도 힌트는 저장만 되고 팬 화면은 정가 탭 고정.
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
-    const body = await readJson<{ id?: string; count?: number; donateTimeText?: string; tabHint?: unknown }>(request);
+    const body = await readJson<{
+      id?: string;
+      ids?: unknown;
+      count?: number;
+      donateTimeText?: string;
+      tabHint?: unknown;
+    }>(request);
+
+    if (body.ids !== undefined) {
+      if (!Array.isArray(body.ids) || body.ids.length === 0) throw badRequest("ids 가 비어 있어요.");
+      if (body.ids.length > BULK_TAB_MAX) throw badRequest(`한 번에 ${BULK_TAB_MAX}건까지만 바꿀 수 있어요.`);
+      if (body.tabHint === undefined) throw badRequest("tabHint 가 필요합니다.");
+      const ids = [...new Set(body.ids.map((v) => String(v ?? "").trim()).filter(Boolean))];
+      if (ids.length === 0) throw badRequest("ids 가 비어 있어요.");
+      const hint = cleanTabHintInput(body.tabHint);
+      const updated = await updateManualEntriesTab(streamer, ids, hint);
+      return jsonOk({ ok: true, updated });
+    }
+
     const id = String(body.id ?? "").trim();
     if (!id) throw badRequest("id가 필요합니다.");
     const hasCount = body.count !== undefined;

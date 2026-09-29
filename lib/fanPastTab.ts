@@ -126,6 +126,22 @@ export function resolveHintedTabRid(hint: ManualTabHint, ctx: PastTabContext): s
   return pastTabKey(label);
 }
 
+// 기록 한 조각이 갈 팬 탭 rid — 수동기록 탭 힌트 전면 개방(2026-09-29, sy 승인 / 루빗 건의 9-23).
+// 순서: ① 스트리머가 수동기록에 직접 정한 탭(힌트)이 있으면 무조건 그 탭
+//       ② 없으면 상품명이 지금 표에 있을 때 그 룰렛 탭(productRid) — 자동수집·힌트 없는 수동기록의 기존 경로
+//       ③ 둘 다 없으면 되짚기(resolvePastTabRid: 같은 금액대 탭 / «이전 표 · L» / 기타).
+// 9/21 규칙("표 버전이 있는 기록은 힌트를 보지 않는다")을 "수동기록이 직접 정한 경우에만" 푼 것이다. 힌트는
+// 수동기록(manual:*)에만 저장되므로 자동수집 기록의 경로는 이 함수로도 바뀌지 않는다. 정가(FIXED)는 호출측이 먼저 뺀다.
+export function resolveHoldingTabRid(
+  item: PastTabItem & { tabHint?: ManualTabHint | null },
+  productRid: string | undefined,
+  ctx: PastTabContext,
+): string {
+  if (item.tabHint) return resolveHintedTabRid(item.tabHint, ctx);
+  if (productRid) return productRid;
+  return resolvePastTabRid(item, ctx);
+}
+
 // 팬 탭 시퀀스에 past 항목을 끼운다: 마지막 룰렛 항목 바로 뒤(룰렛이 없으면 맨 앞).
 // 저장된 드래그 순서가 기본(룰렛 → 정가 → 기타)이면 결과는 룰렛 → past → 정가 → 기타.
 // past 항목은 드래그 순서에 참여하지 않는다(항상 룰렛 뒤 고정).

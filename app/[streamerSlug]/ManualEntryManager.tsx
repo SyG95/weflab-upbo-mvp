@@ -2,11 +2,13 @@
 
 // 수동기록 관리 화면. 위플랩에 안 잡히는 룰렛 결과·정가 시그니처를 스트리머가 직접 넣는 "입력/보관 창구".
 // 저장 실체는 upbo_entries(source_key manual:...) 라서, 배송·양도교환·팬화면은 자동수집분과 동등하게 다룬다.
-// 여기서는 추가 / 목록 / 개수 수정 / 후원 날짜 붙이기·바꾸기 / 직접 입력 탭 바꾸기 / 삭제(수동분만)만 한다.
+// 여기서는 추가 / 목록 / 개수 수정 / 후원 날짜 붙이기·바꾸기 / 탭 바꾸기(한 건·여러 건) / 삭제(수동분만)만 한다.
 // 후원 날짜(2026-09-20): 앞으로 넣는 수동기록은 날짜(기본 오늘)가 같이 저장돼 배송 기간·월별·팬 탭이 잡힌다.
 // 옛 수동기록은 목록의 [날짜 붙이기] 를 눌러야만 바뀐다(자동 소급 없음 — sy 결정).
-// 직접 입력 탭(2026-09-21): 표에 없는 상품(catalogVersion 없음)만 "어느 탭에 넣을까요"를 고른다 — 룰렛 탭 / 내가 만든 탭 /
-// 새 탭 이름. 저장은 admin_note JSON 의 tabHint(스키마 0). 표에서 고른 상품·정가에는 이 UI 가 없다(탭은 상품이 정한다).
+// 탭 고르기(2026-09-21 직접 입력만 → 2026-09-29 표 상품 포함, 루빗 건의): 정가 빼고 모든 수동기록이 "어느 탭에
+// 넣을까요"를 고를 수 있다 — 룰렛 탭 / 내가 만든 탭 / 새 탭 이름. 기본("")은 상품이 정한 탭(표에 없는 상품은 "표에 없음").
+// 저장은 admin_note JSON 의 tabHint(스키마 0). 팬 화면은 힌트가 있으면 힌트를 먼저 본다(page.tsx resolveHoldingTabRid).
+// 목록에서는 한 건씩 [탭 바꾸기] 또는 체크해서 여러 건을 한 번에 옮긴다(PATCH {ids, tabHint}).
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -93,6 +95,7 @@ function TabHintSelect({
   customNames,
   disabled,
   compact,
+  defaultLabel,
 }: {
   value: string;
   newName: string;
@@ -103,6 +106,8 @@ function TabHintSelect({
   disabled?: boolean;
   // 목록 줄 안(인라인)에서는 날짜 입력과 같은 36px 높이.
   compact?: boolean;
+  // "" 선택지 문구. 표에 있는 상품은 "상품이 정한 탭", 표에 없는 상품은 "표에 없음"이 기본이라 문구가 다르다(2026-09-29).
+  defaultLabel?: string;
 }) {
   const roulettes = tabChoices.filter((t) => t.hintLabel);
   return (
@@ -114,7 +119,7 @@ function TabHintSelect({
         disabled={disabled}
         aria-label="어느 탭에 넣을까요"
       >
-        <option value="">표에 없음 (기본)</option>
+        <option value="">{defaultLabel ?? "표에 없음 (기본)"}</option>
         {roulettes.length > 0 ? (
           <optgroup label="룰렛 탭">
             {roulettes.map((t) => (
@@ -228,8 +233,13 @@ export default function ManualEntryManager({
   const [busyId, setBusyId] = useState<string | null>(null);
   // 목록 줄의 날짜 편집(한 번에 한 줄).
   const [dateEdit, setDateEdit] = useState<{ id: string; value: string } | null>(null);
-  // 목록 줄의 탭 편집(직접 입력 줄만, 한 번에 한 줄).
+  // 목록 줄의 탭 편집(정가 빼고 모든 수동기록, 한 번에 한 줄).
   const [tabEdit, setTabEdit] = useState<{ id: string; value: string; newName: string } | null>(null);
+  // 여러 건 한 번에 탭 바꾸기(2026-09-29, 루빗 건의): 체크한 수동기록 id 들과 일괄 select 값.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkPick, setBulkPick] = useState("");
+  const [bulkNewName, setBulkNewName] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
   const idRef = useRef<HTMLInputElement>(null);
 
   // 이미 쓰고 있는 "내가 만든 탭" 이름(가나다순, 중복 제거) — 폼·목록 select 의 «내가 만든 탭» 묶음.
@@ -372,33 +382,38 @@ export default function ManualEntryManager({
     void syncPastTable(date, manualDonateTimeText("pick", value) || null);
   }
 
-  // 직접 입력 상품이 갈 탭(폼 select 기준). 새 탭 이름이 아직 비어 있으면 안내 문구.
+  // 폼 select 기준으로 고른 탭(힌트). 새 탭 이름이 아직 비어 있으면 안내 문구.
   const formTabPick = hintOfTabPick(tabPick, newTabName, tabChoices);
   const formTabName = "hint" in formTabPick ? tabNameOfHint(formTabPick.hint, tabChoices) : "새 탭 (이름을 적어 주세요)";
-  // 직접 입력한 이름이 지금 표 상품명과 같으면 팬 화면은 상품명으로 탭을 먼저 찾는다(힌트 무시).
-  // 그 경우 탭 고르기 줄을 감추고 실제 도착 탭을 보여준다(관리자 표시 = 팬 화면 결과).
-  const directCurrentTab = pick === CUSTOM_ITEM ? currentItemTabs[customName.trim()] : undefined;
-  const directFollowsProduct = directCurrentTab !== undefined;
-
-  // 도착지 미리보기: → 팬 화면: {탭} · {월}. 상품을 골랐을 때만 그린다.
-  const destination = (() => {
-    let tab: string | null = null;
-    if (pick === FIXED_ITEM) tab = "정가";
-    else if (pick === CUSTOM_ITEM)
-      tab = directFollowsProduct
-        ? directCurrentTab || "보관된 룰렛(팬 화면에 안 보임)"
-        : formTabName;
-    else if (picked) tab = picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
-    else if (pickedPast) {
+  // 상품이 정하는 탭 = 탭을 안 골랐을 때 팬 화면이 보내는 곳. 2026-09-29(루빗 건의): 표에서 고른 상품도 탭을 고를 수
+  // 있고, 골랐으면 팬 화면이 힌트를 먼저 본다(resolveHoldingTabRid). 정가만 탭 고르기 대상이 아니다.
+  const productTab: string | null = (() => {
+    if (pick === FIXED_ITEM) return "정가";
+    if (pick === CUSTOM_ITEM) {
+      const current = currentItemTabs[customName.trim()];
+      if (current === undefined) return "표에 없음";
+      return current || "보관된 룰렛(팬 화면에 안 보임)";
+    }
+    if (picked) return picked.rouletteLabel ? `룰렛 ${picked.rouletteLabel}` : "룰렛";
+    if (pickedPast) {
       // 팬 화면은 상품명으로 현재 표 탭을 먼저 찾는다 — 같은 이름이 현재 표에도 있으면 그 탭으로 간다.
       const current = currentItemTabs[pickedPast.itemName];
       const L = pickedPast.amountRangeLabel?.trim() ?? "";
-      if (current) tab = current;
-      else if (current === "") tab = "보관된 룰렛(팬 화면에 안 보임)";
-      else if (!L) tab = "표에 없음";
-      else if (currentLabels.has(L)) tab = `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «이전 표 · ${L}»)`;
-      else tab = `이전 표 · ${L}`;
+      if (current) return current;
+      if (current === "") return "보관된 룰렛(팬 화면에 안 보임)";
+      if (!L) return "표에 없음";
+      if (currentLabels.has(L)) return `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «이전 표 · ${L}»)`;
+      return `이전 표 · ${L}`;
     }
+    return null;
+  })();
+  const canPickFormTab = productTab !== null && pick !== FIXED_ITEM;
+  const formDefaultTabLabel = productTab ? `${productTab} (기본 — 상품이 정한 탭)` : "표에 없음 (기본)";
+
+  // 도착지 미리보기: → 팬 화면: {탭} · {월}. 상품을 골랐을 때만 그린다. 탭을 골랐으면 그 탭, 아니면 상품이 정한 탭.
+  const destination = (() => {
+    const tab: string | null =
+      productTab === null ? null : canPickFormTab && tabPick !== "" ? formTabName : productTab;
     if (tab === null) return null;
     // "올해" 판단 기준도 state 의 오늘(렌더 중 Date.now() 없음).
     const nowMs = Date.parse(`${today}T00:00:00+09:00`);
@@ -415,6 +430,67 @@ export default function ManualEntryManager({
     [entries],
   );
 
+  // 목록 줄에서 힌트가 없을 때 상품이 정하는 탭(표시용) — 팬 화면 규칙과 같은 순서: 현재 표 상품명 → 되짚기 → 표에 없음.
+  function productTabOfEntry(e: UpboEntry): string {
+    const current = currentItemTabs[e.itemName];
+    if (current !== undefined) return current || "보관된 룰렛(팬 화면에 안 보임)";
+    const L = e.amountRangeLabel?.trim() ?? "";
+    if (e.catalogVersion == null || !L) return "표에 없음";
+    return currentLabels.has(L) ? `룰렛 ${L}` : `이전 표 · ${L}`;
+  }
+
+  // 여러 건 한 번에 탭 바꾸기(2026-09-29) — 정가는 대상이 아니다.
+  const selectableIds = manualEntries.filter((e) => e.amountRangeLabel !== "정가").map((e) => e.id);
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  }
+  function selectAll() {
+    setSelected((prev) => (prev.size === selectableIds.length ? new Set() : new Set(selectableIds)));
+  }
+  async function applyBulkTab() {
+    const ids = [...selected].filter((id) => selectableIds.includes(id));
+    if (ids.length === 0) return;
+    const pickedHint = hintOfTabPick(bulkPick, bulkNewName, tabChoices);
+    if ("error" in pickedHint) {
+      setMsg({ type: "err", text: pickedHint.error });
+      return;
+    }
+    const targetName = pickedHint.hint ? tabNameOfHint(pickedHint.hint, tabChoices) : "상품이 정한 탭";
+    if (
+      !window.confirm(
+        `선택한 ${ids.length}건을 «${targetName}»(으)로 옮길까요?\n팬 화면 탭이 바로 바뀌어요. 다시 골라서 되돌릴 수 있어요.`,
+      )
+    ) {
+      return;
+    }
+    setBulkSaving(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/manual-entries`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, tabHint: pickedHint.hint }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
+      const n = Number(data?.updated);
+      setMsg({ type: "ok", text: `${Number.isFinite(n) ? n : ids.length}건의 탭을 «${targetName}»(으)로 바꿨어요.` });
+      setSelected(new Set());
+      setBulkPick("");
+      setBulkNewName("");
+      router.refresh();
+    } catch (e) {
+      setMsg({ type: "err", text: e instanceof Error && e.message ? e.message : "탭 저장에 실패했어요." });
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
   async function addEntry() {
     const id = ownerId.trim();
     if (!id) {
@@ -429,8 +505,15 @@ export default function ManualEntryManager({
       catalogGroupIndex: number | null;
       catalogVersion: number | null;
     };
-    // 직접 입력 상품의 탭 힌트(표에 없음이면 payload 에서 생략). 표에서 고른 상품·정가는 항상 없음.
+    // 탭 힌트(2026-09-29: 정가 빼고 모든 상품에서 고를 수 있다). 기본("")이면 payload 에서 생략 = 상품이 탭을 정한다.
     let tabHint: ManualTabHint | null = null;
+    if (canPickFormTab && tabPick !== "") {
+      if ("error" in formTabPick) {
+        setMsg({ type: "err", text: formTabPick.error });
+        return;
+      }
+      tabHint = formTabPick.hint;
+    }
     if (pick === FIXED_ITEM) {
       // 정가 시그니처: 자동 정가기록(recordFixedPriceEntries)과 동일 지문으로 저장 — 정가 탭에서 합산.
       const n = Number(fixedCount.trim());
@@ -455,14 +538,6 @@ export default function ManualEntryManager({
       if (p !== "" && !Number.isFinite(Number(p))) {
         setMsg({ type: "err", text: "확률은 숫자로 적어 주세요. (예: 5)" });
         return;
-      }
-      // 지금 표 상품명과 같은 이름이면 팬 화면이 상품명으로 탭을 정하므로 힌트를 보내지 않는다.
-      if (!directFollowsProduct) {
-        if ("error" in formTabPick) {
-          setMsg({ type: "err", text: formTabPick.error });
-          return;
-        }
-        tabHint = formTabPick.hint;
       }
       itemPayload = {
         itemName: name,
@@ -824,29 +899,26 @@ export default function ManualEntryManager({
                 placeholder="예: 5"
               />
             </label>
-            {directFollowsProduct ? (
-              <span className={styles.ieFormHint}>
-                «{customName.trim()}»은 지금 표에 있는 상품이라 팬 화면에서{" "}
-                {directCurrentTab ? `«${directCurrentTab}» 탭` : "보관된 룰렛"}으로 가요. 탭을 직접 고르려면 이름을
-                바꾸거나 위에서 표 상품을 고르세요.
-              </span>
-            ) : (
-              <div className={styles.ieField}>
-                <span className={styles.ieLabel}>어느 탭에 넣을까요</span>
-                <TabHintSelect
-                  value={tabPick}
-                  newName={newTabName}
-                  onChange={setTabPick}
-                  onNewName={setNewTabName}
-                  tabChoices={tabChoices}
-                  customNames={customNames}
-                />
-                <span className={styles.ieFormHint}>
-                  표에 없는 상품은 원하는 탭에 넣을 수 있어요. 새 탭 이름은 팬 화면 «어느 룰렛» 줄에 그대로 떠요.
-                </span>
-              </div>
-            )}
           </>
+        ) : null}
+
+        {canPickFormTab ? (
+          <div className={styles.ieField}>
+            <span className={styles.ieLabel}>어느 탭에 넣을까요</span>
+            <TabHintSelect
+              value={tabPick}
+              newName={newTabName}
+              onChange={setTabPick}
+              onNewName={setNewTabName}
+              tabChoices={tabChoices}
+              customNames={customNames}
+              defaultLabel={formDefaultTabLabel}
+            />
+            <span className={styles.ieFormHint}>
+              기본은 상품이 정한 탭이에요. 다른 탭에 두고 싶으면 여기서 고르세요(표에 있는 상품도 돼요). 새 탭 이름은 팬
+              화면 «어느 룰렛» 줄에 그대로 떠요.
+            </span>
+          </div>
         ) : null}
 
         <div className={styles.ieField}>
@@ -916,8 +988,9 @@ export default function ManualEntryManager({
               (pick === FIXED_ITEM
                 ? !fixedCount.trim()
                 : pick === CUSTOM_ITEM
-                ? !customName.trim() || (!directFollowsProduct && tabPick === NEW_TAB && !cleanCustomTabName(newTabName))
-                : !picked && !pickedPast)
+                  ? !customName.trim()
+                  : !picked && !pickedPast) ||
+              (canPickFormTab && tabPick === NEW_TAB && !cleanCustomTabName(newTabName))
             }
           >
             {saving ? "추가 중…" : "수동기록 추가"}
@@ -928,7 +1001,47 @@ export default function ManualEntryManager({
       {/* 목록 */}
       <div className={styles.ieSummary}>
         <span className={styles.tag}>수동기록 {manualEntries.length}건</span>
+        {selectableIds.length > 0 ? (
+          <>
+            <button type="button" className={styles.ieChipBtn} onClick={selectAll} disabled={bulkSaving}>
+              {selected.size > 0 && selected.size === selectableIds.length ? "전체 해제" : "전체 선택"}
+            </button>
+            <span className={styles.ieFormHint}>선택 {selected.size}건 — 체크한 기록을 한 번에 다른 탭으로 옮길 수 있어요</span>
+          </>
+        ) : null}
       </div>
+      {selected.size > 0 ? (
+        <div className={styles.ieDateRow}>
+          <span className={styles.ieFormHint}>선택한 {selected.size}건을 옮길 탭:</span>
+          <TabHintSelect
+            compact
+            value={bulkPick}
+            newName={bulkNewName}
+            onChange={setBulkPick}
+            onNewName={setBulkNewName}
+            tabChoices={tabChoices}
+            customNames={customNames}
+            disabled={bulkSaving}
+            defaultLabel="상품이 정한 탭으로 되돌리기 (기본)"
+          />
+          <button
+            type="button"
+            className={styles.ieChipBtn}
+            disabled={bulkSaving || (bulkPick === NEW_TAB && !cleanCustomTabName(bulkNewName))}
+            onClick={applyBulkTab}
+          >
+            {bulkSaving ? "옮기는 중…" : `${selected.size}건 탭 바꾸기`}
+          </button>
+          <button
+            type="button"
+            className={styles.ieChipBtn}
+            disabled={bulkSaving}
+            onClick={() => setSelected(new Set())}
+          >
+            선택 해제
+          </button>
+        </div>
+      ) : null}
       {manualEntries.length === 0 ? (
         <p className={styles.fieldHint}>아직 수동기록이 없어요.</p>
       ) : (
@@ -938,17 +1051,29 @@ export default function ManualEntryManager({
             const busy = busyId === e.id;
             const hasDate = manualEntryDateValue(e.donateTimeText) !== "";
             const editing = dateEdit?.id === e.id;
-            // 직접 입력 줄(표 버전 없음 + 정가 아님)만 탭을 고를 수 있다. 표에서 고른 줄은 상품이 탭을 정한다.
-            const isDirect = e.catalogVersion == null && e.amountRangeLabel !== "정가";
-            // 직접 입력이라도 이름이 지금 표 상품명과 같으면 팬 화면은 상품명으로 탭을 정한다(힌트 무시).
-            // 그 줄은 "탭 바꾸기"를 감추고 실제 도착 탭을 보여준다.
-            const directCurrent = isDirect ? currentItemTabs[e.itemName] : undefined;
-            const canPickTab = isDirect && directCurrent === undefined;
+            // 정가 빼고 모든 수동기록이 탭을 고를 수 있다(2026-09-29). 힌트가 없으면 상품이 탭을 정한다(팬 화면과 동일).
+            const canPickTab = e.amountRangeLabel !== "정가";
+            const productTabOfRow = productTabOfEntry(e);
+            // 힌트 없음: 표 상품은 "(상품이 정한 탭)", 표에 없는 상품은 "(기본)" — 둘 다 팬 화면이 실제로 보내는 곳.
+            const rowTabName = e.manualTabHint
+              ? tabNameOfHint(e.manualTabHint, tabChoices)
+              : `${productTabOfRow} (${e.catalogVersion == null ? "기본" : "상품이 정한 탭"})`;
             const tabEditing = tabEdit?.id === e.id;
+            const checked = selected.has(e.id);
             return (
               <li key={e.id} className={styles.ieCard}>
                 <div className={styles.ieCardHead}>
                   <div className={styles.ieIdentity}>
+                    {canPickTab ? (
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelected(e.id)}
+                        disabled={bulkSaving}
+                        aria-label="탭 바꾸기 대상으로 선택"
+                        style={{ width: 16, height: 16, marginRight: 4, cursor: "pointer" }}
+                      />
+                    ) : null}
                     <span className={styles.ieName}>{e.fanNickname || "(이름 없음)"}</span>
                     {e.fanId ? <span className={styles.ieId}>{e.fanId}</span> : null}
                     <span className={styles.dmItemName}>
@@ -1037,20 +1162,14 @@ export default function ManualEntryManager({
                     </button>
                   )}
                 </div>
-                {isDirect && !canPickTab ? (
-                  <div className={styles.ieDateRow}>
-                    <span className={styles.ieFormHint}>
-                      탭: {directCurrent || "보관된 룰렛(팬 화면에 안 보임)"} (지금 표 상품명과 같아 상품이 탭을 정해요)
-                    </span>
-                  </div>
-                ) : null}
                 {canPickTab ? (
                   <div className={styles.ieDateRow}>
-                    <span className={styles.ieFormHint}>탭: {tabNameOfHint(e.manualTabHint, tabChoices)}</span>
+                    <span className={styles.ieFormHint}>탭: {rowTabName}</span>
                     {tabEditing && tabEdit ? (
                       <>
                         <TabHintSelect
                           compact
+                          defaultLabel={`${productTabOfRow} (기본 — 상품이 정한 탭)`}
                           value={tabEdit.value}
                           newName={tabEdit.newName}
                           onChange={(v) => setTabEdit({ id: e.id, value: v, newName: tabEdit.newName })}

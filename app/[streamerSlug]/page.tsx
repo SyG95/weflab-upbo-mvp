@@ -102,8 +102,7 @@ import {
   pastLabelOfKey,
   pastTabKey,
   pastTabLabel,
-  resolveHintedTabRid,
-  resolvePastTabRid,
+  resolveHoldingTabRid,
   sortPastLabels,
   type PastTabContext,
 } from "../../lib/fanPastTab";
@@ -1067,18 +1066,12 @@ function partitionHoldingsByRoulette(
       const isFixed = it.amountRangeLabel === "정가";
       const info = isFixed ? undefined : index.itemRoulette.get(it.originalItemName);
       if (info?.archived) continue; // 보관 룰렛은 팬 화면에서 숨김.
-      // 상품명이 최신 표에 있는 기록(info 있음)은 이전과 같은 경로(불변 조건 1). 없을 때만 되짚기(2026-09-20):
-      // (버전, 그룹)·금액대로 같은 금액대 탭 또는 "이전 표 · L"(past:L), 못 되짚으면 기존처럼 기타.
-      // 직접 입력 탭 힌트(2026-09-21)는 표 버전이 없는(catalogVersion == null) 조각에 힌트가 있을 때만 본다 —
-      // 표 버전이 있는 기록(자동수집·표에서 고른 수동)은 힌트가 있어도 되짚기 경로 그대로(불변 조건 1),
-      // 힌트 없는 직접 입력은 되짚기 규칙 1 로 지금처럼 기타(불변 조건 2).
-      const rid = isFixed
-        ? FIXED
-        : info
-          ? info.rid
-          : it.catalogVersion == null && it.tabHint
-            ? resolveHintedTabRid(it.tabHint, index.pastCtx)
-            : resolvePastTabRid(it, index.pastCtx);
+      // 탭 결정(resolveHoldingTabRid, 2026-09-29 루빗 건의 반영): ① 수동기록에 스트리머가 직접 정한 탭(힌트)이
+      // 있으면 그 탭 — 표에 있는 상품이어도(9/21 "표 버전 있으면 힌트 무시" 규칙을 수동+명시 힌트에만 푼 것)
+      // ② 없으면 상품명이 최신 표에 있을 때 그 룰렛 탭(자동수집·힌트 없는 수동 = 이전과 동일 경로)
+      // ③ 둘 다 없으면 되짚기(2026-09-20): 같은 금액대 탭 / "이전 표 · L" / 기타.
+      // 힌트는 수동기록(manual:*)에만 저장되므로 자동수집 기록은 이 변경으로 한 건도 움직이지 않는다.
+      const rid = isFixed ? FIXED : resolveHoldingTabRid(it, info?.rid, index.pastCtx);
       let owners = byRid.get(rid);
       if (!owners) {
         owners = new Map();

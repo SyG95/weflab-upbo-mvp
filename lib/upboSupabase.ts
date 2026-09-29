@@ -456,8 +456,8 @@ function mapEntry(row: UpboEntryRow, streamerSlug: string) {
   } catch {
     metadata = {};
   }
-  // 수동기록 "직접 입력" 탭 힌트(2026-09-21). 모양이 아니면 undefined(= 힌트 없음 = 표에 없음).
-  // 팬 화면은 catalogVersion == null 인 기록에서만 이 값을 본다(불변 조건 1).
+  // 수동기록 탭 힌트(2026-09-21 직접 입력 → 2026-09-29 표 상품 포함). 모양이 아니면 undefined(= 힌트 없음).
+  // 팬 화면은 힌트가 있으면 표 버전과 무관하게 먼저 본다(resolveHoldingTabRid). 자동수집 행엔 이 키가 없다.
   const manualTabHint = cleanManualTabHint(metadata.tabHint) ?? undefined;
   return {
     id: row.id,
@@ -2581,15 +2581,49 @@ export async function updateManualEntryCount(streamer: StreamerRow, entryId: str
   await patchManualAdminNote(streamer, entryId, { effectiveCount: clampCount(count) });
 }
 
-// 수동기록 "직접 입력" 탭 바꾸기(2026-09-21). null/other = 키 삭제(= 표에 없음). source_key manual:* 만 대상,
-// effectiveCount 등 다른 키는 그대로. 팬 화면은 catalogVersion == null 인 기록에서만 이 값을 본다(불변 조건 1) —
-// 표 버전이 있는 행에 힌트가 와도 결과가 안 바뀌므로 여기서는 행 종류를 다시 검사하지 않는다(route 가 UI 와 같이 막는다).
+// 수동기록 탭 바꾸기(2026-09-21 직접 입력 → 2026-09-29 표 상품 포함 전면 개방). null/other = 키 삭제
+// (= 힌트 없음: 표 상품은 상품이 정한 탭, 표에 없는 상품은 "표에 없음"). source_key manual:* 만 대상,
+// effectiveCount 등 다른 키는 그대로. 팬 화면은 힌트가 있으면 표 버전과 무관하게 힌트를 먼저 본다(resolveHoldingTabRid).
 export async function updateManualEntryTab(
   streamer: StreamerRow,
   entryId: string,
   hint: ManualTabHint | null,
 ): Promise<void> {
   await patchManualAdminNote(streamer, entryId, { tabHint: storableManualTabHint(hint) });
+}
+
+// 여러 수동기록의 탭을 한 번에(2026-09-29, 루빗 "추석 한정 탭으로 몰린 10건"). admin_note 는 행마다 다르므로
+// (effectiveCount 등) 한 번 읽어 각 행에 tabHint 만 병합해 PATCH 한다 — 읽기 1회 + 행 수만큼 PATCH.
+// manual:* 이 아닌 id·다른 스트리머 id 는 읽기 필터에서 빠져 건너뛴다. 돌려주는 값 = 실제 갱신한 행 수.
+export async function updateManualEntriesTab(
+  streamer: StreamerRow,
+  entryIds: string[],
+  hint: ManualTabHint | null,
+): Promise<number> {
+  const ids = [...new Set(entryIds)];
+  for (const id of ids) {
+    if (!UUID_RE.test(id)) throw new Error("invalid entry id");
+  }
+  if (ids.length === 0) return 0;
+  const base = `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&source_key=like.manual:*`;
+  const rows = await supabaseFetch<Array<Pick<UpboEntryRow, "id" | "admin_note">>>(
+    `${base}&id=in.(${ids.join(",")})&select=id,admin_note&limit=${ids.length}`,
+  );
+  const stored = storableManualTabHint(hint);
+  const now = new Date().toISOString();
+  let updated = 0;
+  for (const row of rows) {
+    await supabaseFetch(`${base}&id=eq.${row.id}`, {
+      method: "PATCH",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify({
+        admin_note: mergeManualAdminNote(row.admin_note ?? null, { tabHint: stored }),
+        updated_at: now,
+      }),
+    });
+    updated += 1;
+  }
+  return updated;
 }
 
 // 수동기록 후원 날짜 수정(붙이기/바꾸기/지우기=""). source_key manual:* 만 대상 — donate_time_text·updated_at 만
