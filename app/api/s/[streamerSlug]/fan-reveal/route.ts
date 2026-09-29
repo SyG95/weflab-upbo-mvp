@@ -1,5 +1,4 @@
 import { getStreamerRowBySlug, setFanRevealConfig } from "@/lib/upboSupabase";
-import { normalizeFanRevealScope } from "@/lib/fanRevealScope";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 import { requireSheetAdmin } from "@/lib/sheetAdminAuth";
 
@@ -24,7 +23,7 @@ export async function POST(request: Request, context: RouteContext) {
         (error as Error & { status?: number }).status = 400;
         throw error;
       }
-      patch.scope = normalizeFanRevealScope(body.scope);
+      patch.scope = body.scope;
     }
     if (patch.enabled === undefined && patch.scope === undefined) {
       const error = new Error("enabled 또는 scope 가 필요합니다.");

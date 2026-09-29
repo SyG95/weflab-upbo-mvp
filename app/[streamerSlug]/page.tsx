@@ -81,6 +81,7 @@ import CouponTabLabelForm from "./CouponTabLabelForm";
 import SheetTitleForm from "./SheetTitleForm";
 import { effectiveThresholdForLabel } from "@/lib/upboCore";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
+import { FAN_REVEAL_SCOPE_DEFAULT } from "@/lib/fanRevealScope";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
 import FanTabNameManager, { type FanNameRow, type FanTabForNaming } from "./FanTabNameManager";
@@ -962,7 +963,7 @@ function buildRouletteIndex(state: StreamerState): RouletteIndex {
 // 뜰 수 있는 것) / all = 룰렛표 전체(기준 위·기록 off 포함)를 보여주되 기록되는 행만 target=true 로 표시. 확률 높은순.
 function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
   if (!state.fanRevealEnabled) return [];
-  const scope = state.fanRevealScope ?? "target";
+  const scope = state.fanRevealScope ?? FAN_REVEAL_SCOPE_DEFAULT;
   const config = state.rouletteConfig ?? [];
   const revealedIdx = config.map((c, i) => (c.revealed ? i : -1)).filter((i) => i >= 0);
   if (revealedIdx.length === 0) return [];
@@ -1007,21 +1008,29 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
     families.forEach((family, familyIndex) => {
       // 같은 실제 확률군 안에서는 (상품, 확률) 중복을 한 줄로 합치고 금액 라벨만 모은다.
       // target = 이 줄 중 하나라도 업보로 기록되는 상품인가(all 범위에서 진하게 표시할 기준).
-      const rows: Array<{ name: string; prob: number; amounts: Set<string>; target: boolean }> = [];
-      const byKey = new Map<string, { name: string; prob: number; amounts: Set<string>; target: boolean }>();
+      // targetAmounts = 그중 실제로 기록되는 금액대(일부만 기록되면 all 범위에서 "(…만 기록)" 꼬리표).
+      type RevealRow = { name: string; prob: number; amounts: Set<string>; target: boolean; targetAmounts: Set<string> };
+      const rows: RevealRow[] = [];
+      const byKey = new Map<string, RevealRow>();
       family.groups.forEach((g) => {
         (g.items ?? []).forEach((it, idx) => {
           if (!it.itemName) return;
           const isTarget = recorded(g, it, idx);
           if (scope === "target" && !isTarget) return;
+          // all 범위 = "룰렛에 실제로 있는 상품 전체". 위플랩 캡처에서 꺼진 칸(그룹·상품 enabled=false)은 돌지 않으므로 뺀다.
+          // (기록 on/off 오버라이드는 우리 쪽 기록 여부라 표에는 그대로 두고 target 만 갈린다.)
+          if (scope === "all" && (it.enabled === false || g.enabled === false)) return;
           const key = `${it.itemName} ${it.probability}`;
           let entry = byKey.get(key);
           if (!entry) {
-            entry = { name: it.itemName, prob: it.probability, amounts: new Set(), target: false };
+            entry = { name: it.itemName, prob: it.probability, amounts: new Set(), target: false, targetAmounts: new Set() };
             byKey.set(key, entry);
             rows.push(entry);
           }
-          if (isTarget) entry.target = true;
+          if (isTarget) {
+            entry.target = true;
+            if (g.amountRangeLabel) entry.targetAmounts.add(String(g.amountRangeLabel));
+          }
           if (g.amountRangeLabel) entry.amounts.add(String(g.amountRangeLabel));
         });
       });
@@ -1030,14 +1039,17 @@ function buildFanRevealTables(state: StreamerState): FanRevealTable[] {
       const probCount = new Map<string, number>();
       for (const row of rows) probCount.set(row.name, (probCount.get(row.name) ?? 0) + 1);
       const items = rows
-        .map((row) => ({
-          name:
+        .map((row) => {
+          let name =
             (probCount.get(row.name) ?? 0) > 1 && row.amounts.size > 0
               ? `${row.name} (${[...row.amounts].join("·")})`
-              : row.name,
-          prob: row.prob,
-          target: row.target,
-        }))
+              : row.name;
+          // all 범위에서만: 일부 금액대에서만 기록되는 상품은 어느 금액대인지 밝힌다(범례 "진한 글씨 = 기록됨"이 틀리지 않게).
+          if (scope === "all" && row.target && row.targetAmounts.size > 0 && row.targetAmounts.size < row.amounts.size) {
+            name = `${name} (${[...row.targetAmounts].join("·")}만 기록)`;
+          }
+          return { name, prob: row.prob, target: row.target };
+        })
         .sort((a, b) => b.prob - a.prob);
       familyTables.push({
         key: `named:${k}:family:${familyIndex}`,
@@ -2287,7 +2299,7 @@ function AdminPanel({
                 slug={state.slug}
                 roulettes={revealRoulettes}
                 master={state.fanRevealEnabled ?? false}
-                scope={state.fanRevealScope ?? "target"}
+                scope={state.fanRevealScope ?? FAN_REVEAL_SCOPE_DEFAULT}
                 existingConfig={state.rouletteConfig ?? []}
               />
             </CollapsibleCard>

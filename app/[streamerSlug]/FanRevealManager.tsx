@@ -55,13 +55,15 @@ export default function FanRevealManager({
   }
 
   async function saveMaster(next: boolean) {
+    if (masterSaving || scopeSaving) return;
     setEnabled(next);
     setMasterSaving(true);
     try {
+      // 마스터·범위는 같은 저장 줄에 살아서 항상 둘 다 보낸다 — 한 키만 보내면 잇단 저장이 서로를 덮을 수 있다.
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/fan-reveal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ enabled: next, scope }),
       });
       if (!res.ok) setEnabled(!next);
       else router.refresh();
@@ -74,6 +76,8 @@ export default function FanRevealManager({
 
   // 공개 범위 저장 — 마스터 스위치와 같은 오버레이(fan_reveal_updated)에 scope 만 바꿔 쓴다.
   async function saveScope(next: FanRevealScope) {
+    // 저장 중엔 무시(라디오를 disabled 로 막으면 키보드 포커스가 날아가서 핸들러에서 거른다).
+    if (masterSaving || scopeSaving || next === scope) return;
     const prev = scope;
     setScope(next);
     setScopeSaving(true);
@@ -82,14 +86,18 @@ export default function FanRevealManager({
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/fan-reveal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: next }),
+        body: JSON.stringify({ scope: next, enabled }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
         setScope(prev);
         setScopeMsg(data?.error || "공개 범위를 저장하지 못했어요 — 다시 시도해 주세요.");
       } else {
-        setScopeMsg(`공개 범위: ${FAN_REVEAL_SCOPE_LABEL[next]} — 팬 화면 확률표에 바로 반영됩니다.`);
+        setScopeMsg(
+          enabled
+            ? `공개 범위: ${FAN_REVEAL_SCOPE_LABEL[next]} — 팬 화면 확률표에 바로 반영됩니다.`
+            : `공개 범위: ${FAN_REVEAL_SCOPE_LABEL[next]} — 지금은 확률표 공개가 꺼져 있어 팬 화면엔 안 보여요. 켜면 이 범위로 나옵니다.`,
+        );
         router.refresh();
       }
     } catch {
@@ -156,7 +164,7 @@ export default function FanRevealManager({
         <input
           type="checkbox"
           checked={enabled}
-          disabled={masterSaving}
+          disabled={masterSaving || scopeSaving}
           onChange={(e) => saveMaster(e.target.checked)}
         />
         <b>팬 화면에 확률표 공개 (on/off)</b>
@@ -184,7 +192,7 @@ export default function FanRevealManager({
                 name={`fan-reveal-scope-${slug}`}
                 value={value}
                 checked={scope === value}
-                disabled={scopeSaving}
+                aria-busy={scopeSaving || undefined}
                 onChange={() => saveScope(value)}
               />
               <b>{FAN_REVEAL_SCOPE_LABEL[value]}</b>
@@ -194,11 +202,9 @@ export default function FanRevealManager({
             </label>
           ))}
         </div>
-        {scopeMsg ? (
-          <p className={styles.hint} style={{ margin: "8px 0 0" }}>
-            {scopeMsg}
-          </p>
-        ) : null}
+        <p className={styles.hint} style={{ margin: "8px 0 0" }} role="status">
+          {scopeMsg ?? (enabled ? "" : "확률표 공개가 꺼져 있어요. 범위는 켠 뒤에 팬 화면에 적용됩니다.")}
+        </p>
       </fieldset>
 
       {roulettes.length === 0 ? (

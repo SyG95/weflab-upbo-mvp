@@ -3676,11 +3676,8 @@ export async function fanRevealConfigForStreamer(
   return fanRevealConfigOfRows(rows);
 }
 
-export async function fanRevealEnabledForStreamer(streamerId: string, prefetched?: OverlayPrefetch): Promise<boolean> {
-  return (await fanRevealConfigForStreamer(streamerId, prefetched)).enabled;
-}
-
 // 마스터·범위 중 온 것만 바꾸고 나머지는 최신 값을 유지해 한 줄로 다시 적는다(둘 다 같은 payload 에 살기 때문).
+// 화면(FanRevealManager)은 잇단 저장이 서로를 덮지 않게 항상 둘 다 보낸다 — 한 키만 오는 경우는 직접 호출용.
 export async function setFanRevealConfig(
   streamer: StreamerRow,
   patch: { enabled?: boolean; scope?: FanRevealScope },
@@ -3701,10 +3698,6 @@ export async function setFanRevealConfig(
     }),
   });
   return next;
-}
-
-export async function setFanRevealEnabled(streamer: StreamerRow, enabled: boolean): Promise<boolean> {
-  return (await setFanRevealConfig(streamer, { enabled })).enabled;
 }
 
 // ---------- 팬 화면 계정ID 숨기기 (스트리머별 선택) ----------

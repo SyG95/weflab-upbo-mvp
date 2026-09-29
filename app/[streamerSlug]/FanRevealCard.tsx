@@ -21,7 +21,7 @@ export default function FanRevealCard({ tables }: { tables: FanRevealTable[] }) 
   const [open, setOpen] = useState(false);
   if (tables.length === 0) return null;
   const cur = tables[Math.min(active, tables.length - 1)];
-  // 전체 범위에서만 비대상 행이 섞여 온다 — 그때만 범례를 그린다.
+  // 전체 범위에서만 비대상 행이 섞여 온다 — 그때만 범례·구분 표시를 그린다.
   const mixed = cur.items.some((it) => it.target === false);
   if (!open) {
     return (
@@ -66,13 +66,24 @@ export default function FanRevealCard({ tables }: { tables: FanRevealTable[] }) 
           <b>진한 글씨</b> = 업보로 기록되는 상품 · 흐린 글씨는 룰렛에 있지만 업보 시트에는 안 올라가요
         </p>
       ) : null}
-      <div className={mixed ? `${styles.odds} ${styles.oddsScroll}` : styles.odds}>
-        {cur.items.map((it) => (
-          <div key={it.name} className={it.target === false ? `${styles.row} ${styles.rowMuted}` : styles.row}>
-            <span className={styles.name}>{it.name}</span>
-            <span className={styles.prob}>{it.prob}%</span>
-          </div>
-        ))}
+      {/* 전체 범위는 표가 길어 카드 안에서 스크롤 — 키보드로도 스크롤할 수 있게 포커스 가능한 영역으로 둔다. */}
+      <div
+        className={mixed ? `${styles.odds} ${styles.oddsScroll}` : styles.odds}
+        {...(mixed ? { tabIndex: 0, role: "region", "aria-label": `${cur.label} 전체 확률표` } : {})}
+      >
+        {cur.items.map((it) => {
+          const muted = it.target === false;
+          return (
+            // 같은 상품이 다른 확률로 두 번 있을 수 있어(꽝 10%·꽝 5%) key 에 확률까지 넣는다.
+            <div key={`${it.name}|${it.prob}`} className={muted ? `${styles.row} ${styles.rowMuted}` : styles.row}>
+              <span className={styles.name}>
+                {it.name}
+                {mixed && !muted ? <span className={styles.srOnly}> (업보 대상)</span> : null}
+              </span>
+              <span className={styles.prob}>{it.prob}%</span>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
