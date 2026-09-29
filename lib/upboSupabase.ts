@@ -4826,8 +4826,10 @@ export async function saveCouponChanges(
 // 닉네임만 있는 줄에 계정 ID를 붙이면 그 순간 ID 줄로 잔액을 옮기고 닉네임 줄은 지운다.
 // (꾸야 건의 2026-09-29 / sy 결정: 닉네임-only 는 임시 상태, ID 를 알게 되는 순간 ID 계정으로 합침)
 // 계획은 lib/couponMerge.ts 순수 함수가 세우고, 여기서는 그대로 실행만 한다.
-// 순서: 대상 줄 upsert → 이력 insert → 닉네임 줄 delete(id 지정). 트랜잭션은 없으므로 delete 가
-// 실패하면 닉네임 줄이 남는다 — 그 경우 화면에 두 줄이 그대로 보여 재시도 전에 눈으로 확인 가능하다.
+// 순서: (1) ID 줄 합산값 + 닉네임 줄 0 을 한 번의 upsert 로(같은 문장 = 원자적) → (2) 이력 insert →
+// (3) 닉네임 줄 delete(id 지정 + balance=0 조건). 트랜잭션은 없지만 (1) 뒤 어디서 실패해도 닉네임 줄은
+// 이미 0 이라 재시도 때 옮길 양이 0 → 이중 합산이 나지 않는다(리뷰 2026-09-29 HIGH 반영). balance=0 조건은
+// (1)~(3) 사이에 자동 적립이 닉네임 줄에 새로 쌓였을 때 그걸 지우지 않게 막는다(남으면 다시 붙이기로 처리).
 // 옛 coupon_events 의 viewer_key(닉네임)는 손대지 않는다(이력은 그대로, 합침 조정 2건만 추가).
 export async function mergeCouponViewerIntoAccount(
   slug: string,
@@ -4837,10 +4839,21 @@ export async function mergeCouponViewerIntoAccount(
   const streamer = await requireStreamer(slug);
   const accountId = normalizeAccountId(accountIdRaw).slice(0, 80);
   const nickname = String(nicknameRaw ?? "").trim().slice(0, 80);
+  if (!nickname || !accountId) {
+    const error = new Error(!nickname ? "합칠 닉네임이 비어 있어요." : "붙일 계정 ID를 입력해 주세요.");
+    (error as Error & { status?: number }).status = 400;
+    throw error;
+  }
 
-  const existing = await supabaseFetch<CouponBalanceRow[]>(
-    `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&select=*&limit=5000`,
-  );
+  // 필요한 건 두 열쇠(닉네임 줄·ID 줄)뿐이라 그 줄만 읽는다 — 전체 읽기는 PostgREST max-rows(1000) 에
+  // 잘려 ID 줄을 못 보고 합산값을 덮어쓸 수 있다(리뷰 MEDIUM 반영). 두 열쇠가 같으면 계획 단계에서 거부된다.
+  const keyFilter = (key: string) =>
+    `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&viewer_key=eq.${encodeURIComponent(key)}&select=*&limit=1000`;
+  const [sourceRows, targetRows] = await Promise.all([
+    supabaseFetch<CouponBalanceRow[]>(keyFilter(nickname)),
+    nickname === accountId ? Promise.resolve([] as CouponBalanceRow[]) : supabaseFetch<CouponBalanceRow[]>(keyFilter(accountId)),
+  ]);
+  const existing = [...sourceRows, ...targetRows];
   const plan = planCouponViewerMerge(
     existing.map((row) => ({
       id: row.id,
@@ -4862,28 +4875,40 @@ export async function mergeCouponViewerIntoAccount(
   }
 
   const now = new Date().toISOString();
-  if (plan.upserts.length > 0) {
+  // (1) ID 줄 합산값과 닉네임 줄 0 을 한 요청에 — 같은 INSERT … ON CONFLICT 문장이라 둘 다 되거나 둘 다 안 된다.
+  const upsertRows = [...plan.upserts, ...plan.sourceZeroUpserts];
+  if (upsertRows.length > 0) {
     await supabaseFetch(
       `/${tableName("coupon_balances")}?on_conflict=streamer_id,viewer_key,item_key`,
       {
         method: "POST",
         headers: { prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify(plan.upserts.map((v) => ({ streamer_id: streamer.id, ...v, updated_at: now }))),
+        body: JSON.stringify(upsertRows.map((v) => ({ streamer_id: streamer.id, ...v, updated_at: now }))),
       },
     );
   }
+  // (2) 이력. 여기서 실패하면 잔액은 이미 옮겨졌고 이력만 빠진 상태 — 메시지로 그 사실을 알린다.
   if (plan.events.length > 0) {
-    await supabaseFetch(`/${tableName("coupon_events")}`, {
-      method: "POST",
-      headers: { prefer: "return=minimal" },
-      body: JSON.stringify(
-        plan.events.map((ev) => ({ streamer_id: streamer.id, ...ev, created_by: "streamer_admin", created_at: now })),
-      ),
-    });
+    try {
+      await supabaseFetch(`/${tableName("coupon_events")}`, {
+        method: "POST",
+        headers: { prefer: "return=minimal" },
+        body: JSON.stringify(
+          plan.events.map((ev) => ({ streamer_id: streamer.id, ...ev, created_by: "streamer_admin", created_at: now })),
+        ),
+      });
+    } catch (err) {
+      const error = new Error(
+        `잔액은 ID 줄로 옮겼지만 이력 기록에 실패했어요(${err instanceof Error ? err.message : String(err)}). 새로고침 후 잔액을 확인해 주세요.`,
+      );
+      (error as Error & { status?: number }).status = 500;
+      throw error;
+    }
   }
+  // (3) 닉네임 줄 제거 — id 지정 + 잔액 0 인 줄만(그 사이 자동 적립으로 다시 쌓였으면 남긴다).
   if (plan.deleteIds.length > 0) {
     await supabaseFetch(
-      `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&id=in.(${plan.deleteIds.join(",")})`,
+      `/${tableName("coupon_balances")}?streamer_id=eq.${streamer.id}&id=in.(${plan.deleteIds.join(",")})&balance=eq.0`,
       { method: "DELETE", headers: { prefer: "return=minimal" } },
     );
   }

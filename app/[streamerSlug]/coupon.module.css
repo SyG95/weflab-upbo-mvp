@@ -496,3 +496,9 @@
   align-items: flex-end;
   margin-top: 8px;
 }
+
+.mergeBtn:hover {
+  color: var(--stamp-ink, #fff);
+  background: var(--stamp);
+  border-color: var(--stamp);
+}

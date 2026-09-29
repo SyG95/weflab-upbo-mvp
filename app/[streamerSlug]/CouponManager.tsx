@@ -94,7 +94,10 @@ export default function CouponManager({
 
   // 닉네임 줄 → 계정 ID 줄 합치기(꾸야 건의 2026-09-29). 잔액 현황에서 "계정 ID 붙이기"를 누르면 열린다.
   // 규칙(sy 결정): 닉네임만 있는 줄은 임시 상태 — ID 를 알게 되는 순간 그 ID 계정으로 합친다.
-  const [mergeDraft, setMergeDraft] = useState<{ nickname: string; accountId: string } | null>(null);
+  // viewerKey = 닉네임 줄의 실제 열쇠(서버는 이걸로 줄을 찾는다). nickname 은 표시용.
+  const [mergeDraft, setMergeDraft] = useState<{ viewerKey: string; nickname: string; accountId: string } | null>(
+    null,
+  );
   const [merging, setMerging] = useState(false);
   const [mergeMsg, setMergeMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -317,13 +320,8 @@ export default function CouponManager({
     const nick = nickname.trim();
     let id = accountId.trim();
     // ID를 비우면 아는 시청자 목록에서 닉네임으로 찾아 채운다(ID 우선 규약 — 중복 줄 방지).
-    if (!id && nick) {
-      const found =
-        viewerSuggestions.find((v) => v.fanNickname === nick)?.fanId ||
-        balances.find((b) => b.nickname === nick)?.accountId ||
-        "";
-      id = found;
-    }
+    // 합치기 패널의 ID 후보와 같은 함수를 써서 화면 안내와 실제 저장 대상이 어긋나지 않게 한다.
+    if (!id && nick) id = suggestAccountId(nick);
     if (!nick && !id) {
       setMsg({ kind: "err", text: "시청자 닉네임 또는 ID를 입력해 주세요." });
       return;
@@ -390,14 +388,14 @@ export default function CouponManager({
   }
 
   // ── 닉네임 줄 → 계정 ID 줄 합치기 ───────────────────────────────────
-  // 닉네임만 있는 줄(ID 없음)을 닉네임별로 모아 둔다 — 합치기 패널 요약·기록 폼 안내에 쓴다.
+  // 닉네임만 있는 줄(ID 없음)을 열쇠(viewerKey)별로 모아 둔다 — 합치기 패널 요약에 쓴다.
   const nicknameOnlyRows = useMemo(() => {
     const map = new Map<string, CouponBalance[]>();
     for (const b of balances) {
-      if (b.accountId || !b.nickname) continue;
-      const list = map.get(b.nickname) ?? [];
+      if (b.accountId || !b.viewerKey) continue;
+      const list = map.get(b.viewerKey) ?? [];
       list.push(b);
-      map.set(b.nickname, list);
+      map.set(b.viewerKey, list);
     }
     return map;
   }, [balances]);
@@ -412,8 +410,13 @@ export default function CouponManager({
   }
 
   function startMerge(b: CouponBalance) {
+    const nick = b.nickname || b.viewerKey;
     setMergeMsg(null);
-    setMergeDraft({ nickname: b.nickname, accountId: suggestAccountId(b.nickname) });
+    setMergeDraft({ viewerKey: b.viewerKey, nickname: nick, accountId: suggestAccountId(nick) });
+    // 패널은 표 위에 열리므로 긴 표에서 누른 줄과 멀 수 있다 — 열리면 패널로 시선을 옮긴다.
+    requestAnimationFrame(() => {
+      document.getElementById(mergePanelId)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
   }
 
   async function submitMerge() {
@@ -424,7 +427,7 @@ export default function CouponManager({
       setMergeMsg({ kind: "err", text: "붙일 계정 ID를 입력해 주세요." });
       return;
     }
-    const rows = nicknameOnlyRows.get(nick) ?? [];
+    const rows = nicknameOnlyRows.get(mergeDraft.viewerKey) ?? [];
     const total = rows.reduce((s, r) => s + r.balance, 0);
     if (
       !window.confirm(
@@ -439,10 +442,13 @@ export default function CouponManager({
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/coupon-merge`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ nickname: nick, accountId: id }),
+        body: JSON.stringify({ nickname: mergeDraft.viewerKey, accountId: id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
+        // 실패해도 서버가 최신 잔액을 실어 보내면 화면을 갱신한다(부분 실패 뒤 낡은 숫자로 재시도 방지).
+        if (Array.isArray(data?.balances)) setBalances(data.balances);
+        if (Array.isArray(data?.events)) setEvents(data.events);
         setMergeMsg({ kind: "err", text: data?.error || "합치지 못했어요 — 다시 시도해 주세요." });
       } else {
         if (Array.isArray(data?.balances)) setBalances(data.balances);
@@ -459,13 +465,14 @@ export default function CouponManager({
     }
   }
 
-  const mergeRows = mergeDraft ? (nicknameOnlyRows.get(mergeDraft.nickname) ?? []) : [];
+  const mergeRows = mergeDraft ? (nicknameOnlyRows.get(mergeDraft.viewerKey) ?? []) : [];
   const mergeTotal = mergeRows.reduce((s, r) => s + r.balance, 0);
   const mergeListId = `coupon-merge-ids-${slug}`;
+  const mergePanelId = `coupon-merge-panel-${slug}`;
 
   // 기록 폼 안내: 적은 닉네임에 "닉네임만 있는 줄"이 따로 있고 기록은 ID 줄로 갈 때(꾸야가 겪은 상황).
   const formNick = nickname.trim();
-  const formNickOnlyRows = formNick ? nicknameOnlyRows.get(formNick) : undefined;
+  const formNickOnlyRows = formNick ? balances.filter((b) => !b.accountId && b.nickname === formNick) : [];
   const formResolvedId = accountId.trim() || (formNick ? suggestAccountId(formNick) : "");
 
   const sortedBalances = [...balances].sort(
@@ -887,7 +894,7 @@ export default function CouponManager({
           같은 닉네임이 여러 명일 수 있어 계정 ID로 구분해요. ID를 비우면 업보 기록에서 닉네임이 정확히
           일치하는 시청자의 ID를 자동으로 찾아 씁니다.
         </p>
-        {formNickOnlyRows && formResolvedId ? (
+        {formNickOnlyRows.length > 0 && formResolvedId ? (
           <p className={styles.previewWarn}>
             &lsquo;{formNick}&rsquo;은 닉네임만 있는 줄이 따로 있어요(잔액{" "}
             {formNickOnlyRows.reduce((s, r) => s + r.balance, 0)}). 이 기록은 계정 ID {formResolvedId} 줄에
@@ -905,7 +912,7 @@ export default function CouponManager({
         ) : (
           <>
             {mergeDraft ? (
-              <div className={styles.mergePanel}>
+              <div className={styles.mergePanel} id={mergePanelId}>
                 <p className={styles.previewTotal}>&lsquo;{mergeDraft.nickname}&rsquo; 줄에 계정 ID 붙이기</p>
                 <p className={styles.previewMuted}>
                   닉네임만 적어 둔 줄(쿠폰 {mergeRows.length}종, 잔액 합계 {mergeTotal})을 계정 ID 줄로
@@ -921,7 +928,10 @@ export default function CouponManager({
                       list={mergeListId}
                       value={mergeDraft.accountId}
                       placeholder="예: abcd1234"
-                      onChange={(e) => setMergeDraft({ nickname: mergeDraft.nickname, accountId: e.target.value })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setMergeDraft((d) => (d ? { ...d, accountId: v } : d));
+                      }}
                     />
                     <datalist id={mergeListId}>
                       {viewerSuggestions
