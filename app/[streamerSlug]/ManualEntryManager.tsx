@@ -665,7 +665,14 @@ export default function ManualEntryManager({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(data?.error || String(res.status));
-      setMsg({ type: "ok", text: `탭을 «${tabNameOfHint(picked.hint, tabChoices)}»(으)로 바꿨어요.` });
+      // 기본("")으로 되돌렸으면 힌트 이름이 아니라 실제로 가는 곳(상품이 정한 탭)을 말해 준다.
+      const target = manualEntries.find((e) => e.id === id);
+      const shown = picked.hint
+        ? tabNameOfHint(picked.hint, tabChoices)
+        : target
+          ? `${productTabOfEntry(target)} (상품이 정한 탭)`
+          : "상품이 정한 탭";
+      setMsg({ type: "ok", text: `탭을 «${shown}»(으)로 바꿨어요.` });
       setTabEdit(null);
       router.refresh();
     } catch (e) {
