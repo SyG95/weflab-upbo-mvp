@@ -33,7 +33,13 @@ fi
 
 SHORT="$(git rev-parse --short HEAD)"
 echo "[deploy] main $SHORT 운영 배포 시작"
-npx vercel deploy --prod --yes
+# 2026-09-22 함정: npx 는 최신 vercel(59.x)을 받아 "Not authorized" 로 실패했다(npx 캐시에 59.24.0).
+# 로그인된 설치본(전역 nvm v24 vercel 54.7.1)이 있으면 그걸 쓰고, 없을 때만 npx 로 간다.
+if command -v vercel >/dev/null 2>&1; then
+  vercel deploy --prod --yes
+else
+  npx vercel deploy --prod --yes
+fi
 
 STAMP="$(date +%Y%m%d-%H%M)"
 git tag -f prod-live "$LOCAL" >/dev/null
