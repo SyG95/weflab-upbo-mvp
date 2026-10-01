@@ -256,6 +256,7 @@ function buildLiveDashboard(
       specialItemRules: source.specialItemRules,
       modifierState,
       missionSettlementIgnore: judgeRules.missionSettlementIgnore,
+      modifierIgnoresUsage: judgeRules.modifierIgnoresUsage,
     });
     modifierState = recon.modifierState;
     for (const d of recon.decisions) {

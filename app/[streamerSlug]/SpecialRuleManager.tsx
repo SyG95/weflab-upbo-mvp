@@ -47,7 +47,8 @@ export default function SpecialRuleManager({ slug, rules }: Props) {
   return (
     <div className={styles.specialRules}>
       <p className={styles.fieldHint}>
-        자동 감지는 후보만 찾습니다. 확인한 항목만 같은 시청자의 다음 룰렛 배수권으로 적용돼요.
+        자동 감지는 후보만 찾습니다. &quot;두배권 맞음&quot;으로 확인한 칸만 같은 시청자의 다음 룰렛 배수권으로 적용돼요.
+        룰렛 상품 사용여부에서 &quot;사용 안 함&quot;으로 꺼 둔 칸이어도 여기서 확인돼 있으면 두배권은 적용됩니다.
       </p>
       {message ? <p className={styles.fieldOk}>{message}</p> : null}
       <div className={styles.specialRuleList}>
@@ -58,6 +59,7 @@ export default function SpecialRuleManager({ slug, rules }: Props) {
               <div className={styles.metaRow}>
                 <span className={styles.tagMuted}>룰렛 {rule.amountRangeLabel || "—"}</span>
                 <span className={styles.tagMuted}>확률 {rule.probability ?? "—"}%</span>
+                {rule.itemEnabled === false ? <span className={styles.tagMuted}>사용 안 함 칸</span> : null}
                 <span className={rule.status === "confirmed" ? styles.tagActive : rule.status === "rejected" ? styles.tagMuted : styles.tagWarn}>
                   {ruleStatusLabel(rule.status)}
                 </span>

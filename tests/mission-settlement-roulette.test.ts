@@ -202,15 +202,15 @@ const catalog = [item("방셀", 0.8), item("사랑해", 5), item("앙냠냠", 30
 
 // ⑦ 리뷰 반영: 판정 규칙 스냅샷 판독·조립(순수)
 {
-  assertEq(readJudgeRules(undefined), { missionSettlementIgnore: false }, "summary 없음 → 규칙 없음(옛 배치)");
-  assertEq(readJudgeRules(null), { missionSettlementIgnore: false }, "null → 규칙 없음");
-  assertEq(readJudgeRules({}), { missionSettlementIgnore: false }, "judgeRules 없음 → 규칙 없음");
-  assertEq(readJudgeRules({ judgeRules: "true" }), { missionSettlementIgnore: false }, "깨진 스냅샷(문자열) → 규칙 없음");
-  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnore: "true" } }), { missionSettlementIgnore: false }, "문자열 'true' → 규칙 없음(엄격)");
-  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnore: true } }), { missionSettlementIgnore: true }, "true → 규칙 켬");
-  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnored: true } }), { missionSettlementIgnore: false }, "키 오타 → 규칙 없음(안전 낙하)");
+  assertEq(readJudgeRules(undefined), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "summary 없음 → 규칙 없음(옛 배치)");
+  assertEq(readJudgeRules(null), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "null → 규칙 없음");
+  assertEq(readJudgeRules({}), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "judgeRules 없음 → 규칙 없음");
+  assertEq(readJudgeRules({ judgeRules: "true" }), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "깨진 스냅샷(문자열) → 규칙 없음");
+  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnore: "true" } }), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "문자열 'true' → 규칙 없음(엄격)");
+  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnore: true } }), { missionSettlementIgnore: true, modifierIgnoresUsage: false }, "true → 규칙 켬(새 키 없으면 false)");
+  assertEq(readJudgeRules({ judgeRules: { missionSettlementIgnored: true } }), { missionSettlementIgnore: false, modifierIgnoresUsage: false }, "키 오타 → 규칙 없음(안전 낙하)");
   const base = { totalResults: 3, recordCount: 1, ignoreCount: 2, duplicateCount: 0, needsReviewCount: 0, missionSettlementCount: 2 };
-  const on = { missionSettlementIgnore: true };
+  const on = { missionSettlementIgnore: true, modifierIgnoresUsage: true };
   assertEq(buildBatchSummary(base, {}, on), { ...base, judgeRules: on }, "예외 없음 → thresholdOverrides 키 없음 + judgeRules");
   assertEq(buildBatchSummary(base, { "1000": 1 }, on), { ...base, thresholdOverrides: { "1000": 1 }, judgeRules: on }, "예외 있음 → 둘 다");
   assertEq(readJudgeRules(buildBatchSummary(base, {}, on)), on, "저장한 스냅샷을 그대로 읽는다(왕복)");

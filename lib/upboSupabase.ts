@@ -1017,8 +1017,16 @@ export async function getStreamerState(slug: string) {
       groupsByVersion,
     );
   }
+  // 후보 목록은 판정과 같은 "사용여부 적용 후" 상품으로 만든다 — 사용 안 함 칸은 itemEnabled=false 로 표시만 하고
+  // 두배권 적용 여부는 status(두배권 맞음)만 본다(reconcileResults 의 modifierIgnoresUsage 와 같은 규칙, sy 2026-10-01).
   const specialItemRules = currentCatalog
-    ? buildSpecialItemRuleCandidates((currentCatalog.items as NormalizedCatalogItem[]) || [], ruleOverrides)
+    ? buildSpecialItemRuleCandidates(
+        applyCatalogUsage(
+          (currentCatalog.items as NormalizedCatalogItem[]) || [],
+          (currentCatalogVersion != null ? usageByVersion[currentCatalogVersion] : undefined) ?? {},
+        ),
+        ruleOverrides,
+      )
     : [];
   return {
     ...mapStreamer(streamer),
@@ -4271,7 +4279,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
   const currentModifierState = await latestModifierState(streamer.id);
   const knownSourceKeys = await existingSourceKeys(streamer.id);
   // 판정에 쓰는 규칙과 배치에 남기는 스냅샷은 같은 값 하나에서 나온다(둘이 어긋나면 검증실이 거짓 재현을 한다).
-  const judgeRules: JudgeRules = { missionSettlementIgnore: true };
+  const judgeRules: JudgeRules = { missionSettlementIgnore: true, modifierIgnoresUsage: true };
   const preview = reconcileResults({
     catalogItems,
     results: normalized.results,
@@ -4280,6 +4288,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
     specialItemRules: await specialRulesForCatalog(streamer.id, catalogItems),
     modifierState: currentModifierState,
     missionSettlementIgnore: judgeRules.missionSettlementIgnore,
+    modifierIgnoresUsage: judgeRules.modifierIgnoresUsage,
   });
   // 정가(시그니처) 패스: 룰렛 판정과 별개로, 시그니처 갯수와 일치하는 후원을 기록한다.
   // 시그니처 미설정이면 후보가 0개라 아무것도 하지 않는다(기존 동작과 동일).

@@ -170,6 +170,8 @@ export type SpecialItemRule = {
   itemName?: string;
   normalizedName?: string;
   probability?: number;
+  // 현재 표에서 이 칸의 사용 여부(사용 안 함=false). 표시용 — 두배권 적용은 status(두배권 맞음)만 본다.
+  itemEnabled?: boolean;
 };
 
 export type ViewerNote = {

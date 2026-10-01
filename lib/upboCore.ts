@@ -83,6 +83,8 @@ export type SpecialItemRule = {
   itemName?: string;
   normalizedName?: string;
   probability?: number;
+  // 현재 표에서 이 칸의 사용 여부(사용 안 함=false). 표시용 — 두배권 적용 여부는 status(두배권 맞음)만 본다.
+  itemEnabled?: boolean;
 };
 
 export type ModifierState = {
@@ -181,8 +183,9 @@ export function buildSpecialItemRuleCandidates(
   overrides: SpecialItemRule[] = [],
 ): SpecialItemRule[] {
   const overrideMap = new Map(overrides.map((rule) => [rule.ruleKey, rule]));
+  // "사용 안 함"으로 꺼 둔 칸도 후보에 올린다 — 두배권 적용은 사용 여부가 아니라 "두배권 맞음" 확정만 본다
+  // (sy 2026-10-01). 꺼진 칸을 빼면 확정도 못 하고 판정에서도 조용히 빠져 당첨이 검토함으로 사라진다.
   return catalogItems
-    .filter((item) => item.enabled !== false)
     .filter((item) => isMultiplierCandidateName(item.itemName) || overrideMap.has(specialRuleKeyForItem(item)))
     .map((item) => {
       const ruleKey = specialRuleKeyForItem(item);
@@ -197,6 +200,7 @@ export function buildSpecialItemRuleCandidates(
         itemName: item.itemName,
         normalizedName: item.normalizedName,
         probability: item.probability,
+        itemEnabled: item.enabled !== false,
       };
     });
 }
@@ -354,8 +358,10 @@ export function normalizeResultCapture(capture: ResultCapture): {
 export function findCatalogMatch(
   result: NormalizedResult,
   catalogItems: NormalizedCatalogItem[] = [],
+  // includeDisabled: "사용 안 함" 칸까지 찾는다. 두배권 칸 식별 전용(reconcileResults) — 업보 기록 매칭은 기본(사용 중 칸만).
+  options: { includeDisabled?: boolean } = {},
 ): NormalizedCatalogItem | null {
-  const activeCatalogItems = catalogItems.filter((item) => item.enabled !== false);
+  const activeCatalogItems = options.includeDisabled ? catalogItems : catalogItems.filter((item) => item.enabled !== false);
   const normalizedName = result.normalizedName || normalizeName(result.itemName);
   const donationAmount = toNumber(result.donationAmount);
   const amountScoped = donationAmount === null
@@ -417,14 +423,23 @@ export function effectiveThresholdForLabel(
 }
 
 // ---------- 배치 판정 규칙 스냅샷(judgeRules) — 순수 ----------
-export type JudgeRules = { missionSettlementIgnore: boolean };
+export type JudgeRules = {
+  missionSettlementIgnore: boolean;
+  // 두배권 칸은 "사용 안 함"으로 꺼 두었어도 "두배권 맞음" 확정이면 적용한다(sy 2026-10-01).
+  // 꾸야 2026-09-03~09-30 사고: 사용 안 함 칸은 판정에서 "모르는 칸"이 되어 두배권 당첨 36건이 검토함으로 빠졌다.
+  modifierIgnoresUsage: boolean;
+};
 
 // 저장된 배치 summary 에서 판정 규칙 스냅샷을 읽는다. 스냅샷이 없거나 깨진 옛 배치는 "규칙 없음"(false)으로
 // 읽어 도입 전 판정을 그대로 재현한다(엄격 === true — 문자열 "true" 도 규칙 없음으로 본다 = 안전한 쪽으로 낙하).
 export function readJudgeRules(summary: unknown): JudgeRules {
   const raw = summary && typeof summary === "object" ? (summary as { judgeRules?: unknown }).judgeRules : undefined;
-  const rules = raw && typeof raw === "object" ? (raw as { missionSettlementIgnore?: unknown }) : {};
-  return { missionSettlementIgnore: rules.missionSettlementIgnore === true };
+  const rules =
+    raw && typeof raw === "object" ? (raw as { missionSettlementIgnore?: unknown; modifierIgnoresUsage?: unknown }) : {};
+  return {
+    missionSettlementIgnore: rules.missionSettlementIgnore === true,
+    modifierIgnoresUsage: rules.modifierIgnoresUsage === true,
+  };
 }
 
 // 배치에 저장할 summary 조립: 판정 summary + 실제로 판정에 쓴 예외/규칙 스냅샷. 기준확률 예외가 없으면 키를
@@ -449,6 +464,7 @@ export function reconcileResults({
   specialItemRules = [],
   modifierState = {},
   missionSettlementIgnore = true,
+  modifierIgnoresUsage = true,
 }: {
   catalogItems: NormalizedCatalogItem[];
   results: NormalizedResult[];
@@ -459,6 +475,9 @@ export function reconcileResults({
   // 미션 성공 정산 뭉치 결과를 무시하는 규칙(기본 켬). 검증실이 규칙 도입 전 배치를 저장 summary 와
   // 같게 재현할 때만 끈다(배치 summary.judgeRules 스냅샷 기준).
   missionSettlementIgnore?: boolean;
+  // 두배권 칸을 "사용 안 함"으로 꺼 두어도 두배권 맞음 확정이면 부여하는 규칙(기본 켬, sy 2026-10-01).
+  // 검증실이 규칙 도입 전 배치를 저장 summary 와 같게 재현할 때만 끈다(배치 summary.judgeRules 스냅샷 기준).
+  modifierIgnoresUsage?: boolean;
 }) {
   const processed = new Set<string>(modifierState.processedSourceKeys || []);
   const existing = new Set<string>(existingSourceKeys || []);
@@ -487,7 +506,10 @@ export function reconcileResults({
     const catalogItem = findCatalogMatch(result, catalogItems);
     // 상품이 속한 룰렛표에 기준확률 예외가 얹혀 있으면 그 값으로, 없으면 전역 기준으로 판정.
     const itemThreshold = toNumber(catalogItem?.thresholdOverridePercent) ?? threshold;
-    const ruleKey = catalogItem ? specialRuleKeyForItem(catalogItem) : "";
+    // 두배권 칸은 "사용 안 함"이어도 찾는다(modifierIgnoresUsage). 업보 기록 매칭(catalogItem)은 그대로 사용 중 칸만 본다.
+    const modifierItem =
+      catalogItem ?? (modifierIgnoresUsage ? findCatalogMatch(result, catalogItems, { includeDisabled: true }) : null);
+    const ruleKey = modifierItem ? specialRuleKeyForItem(modifierItem) : "";
     // 미션 성공 정산 뭉치의 룰렛 결과는 귀속할 시청자가 없다 — 기록·검토함·두배권 부여 없이 무시한다
     // (isMissionSettlementType 주석 참고). 중복 검사 뒤에 두어 이미 기록된 옛 건은 duplicate 로 남는다
     // (재판정·검증실 재현의 멱등성 유지).
@@ -505,15 +527,16 @@ export function reconcileResults({
       summary.ignoreCount += 1;
       summary.missionSettlementCount += 1;
       settlementKeys.add(sourceKey);
-    } else if (!catalogItem) {
-      decision = "needs_review";
-      reason = "no matching catalog item";
-      summary.needsReviewCount += 1;
     } else if (modifierRule) {
+      // 확정 두배권은 상품 매칭(사용 여부)보다 먼저 본다 — 꺼진 칸이어도 부여. 사용 중 칸이면 순서를 바꿔도 결과가 같다.
       decision = "ignore";
       reason = `confirmed modifier ${modifierRule.ruleType}`;
       summary.ignoreCount += 1;
       summary.modifierCount += 1;
+    } else if (!catalogItem) {
+      decision = "needs_review";
+      reason = "no matching catalog item";
+      summary.needsReviewCount += 1;
     } else if (catalogItem.probability <= itemThreshold) {
       decision = "record";
       reason = `catalog probability ${catalogItem.probability}% <= threshold ${itemThreshold}%`;
@@ -528,7 +551,8 @@ export function reconcileResults({
       decision,
       reason,
       result,
-      catalogItem,
+      // 꺼진 두배권 칸으로 판정된 건은 그 칸을 남겨 검증실·미리보기에서 어느 표의 두배권인지 보이게 한다.
+      catalogItem: catalogItem ?? (modifierRule ? modifierItem : null),
       modifierRule,
       multiplier: 1,
       effectiveCount: decision === "record" ? 1 : 0,
