@@ -4,6 +4,9 @@
 //           ③ 사용 중 + 확정은 기존과 100% 동일(회귀 고정)
 //           ④ 규칙 off(옛 배치 재현)는 도입 전 판정(사용 안 함 확정 칸 = 검토함) 그대로
 //           ⑤ judgeRules 스냅샷: 없으면 false, 있으면 그대로 / 후보 목록은 꺼진 칸도 올리고 itemEnabled 로 표시
+//           ⑥ 정산 뭉치 + 꺼진 확정 칸 → 정산 무시가 우선(부여 없음)  ⑦ 중복 + 꺼진 확정 칸 → duplicate(부여 없음)
+//           ⑧ 표 전체 꺼짐 → 두배권은 부여·다음 결과(꺼진 상품)는 검토함 / 금액대에 상품이 없으면 두배권도 검토함
+//           ⑨ 재판정: 꺼진 확정 두배권은 ignore 로 세고 이름 연결(unmatched)에 안 섞임  ⑩ 같은 ruleKey 두 칸 → 후보 1장
 import {
   buildBatchSummary,
   buildSpecialItemRuleCandidates,
@@ -14,6 +17,7 @@ import {
   type NormalizedResult,
   type SpecialItemRule,
 } from "../lib/upboCore";
+import { collectRejudgeCandidates, type RejudgeSourceBatch } from "../lib/rejudge";
 
 let passed = 0;
 function assertEq(actual: unknown, expected: unknown, label: string) {
@@ -115,6 +119,55 @@ const twoSpins = [
   assertEq(readJudgeRules(built), { missionSettlementIgnore: true, modifierIgnoresUsage: true }, "새 스냅샷 왕복");
   const rules = buildSpecialItemRuleCandidates([item("다음 룰렛 2배", 5, true), item("다음 룰렛 2배", 3, false, 990)], []);
   assertEq(rules.map((r) => [r.amountRangeLabel, r.itemEnabled]), [["500", true], ["990", false]], "후보는 사용 중/안 함 모두, itemEnabled 로 구분");
+}
+
+// ⑥ 정산 뭉치 + 꺼진 확정 칸 → 정산 무시가 우선, 부여 없음
+{
+  const rules = buildSpecialItemRuleCandidates(catalogOff, [confirmed]);
+  const settle = { ...result("", "다음 룰렛 2배", 5, "2026-09-28 20:00:00", "s1"), donationType: "도전미션 별풍선 성공", fanId: "", fanNickname: "상자 11개 모으기" };
+  const r = reconcileResults({ catalogItems: catalogOff, results: [settle], thresholdPercent: THRESHOLD, specialItemRules: rules });
+  assertEq([r.decisions[0].decision, r.decisions[0].modifierAction, r.summary.modifierCount, r.summary.missionSettlementCount], ["ignore", null, 0, 1], "정산 뭉치는 꺼진 확정 칸이어도 부여 없음");
+  assertEq(r.modifierState.pendingByViewer, {}, "정산 뭉치는 대기 두배권을 만들지 않는다");
+}
+
+// ⑦ 중복 + 꺼진 확정 칸 → duplicate, 부여 없음·다음 결과 ×1
+{
+  const rules = buildSpecialItemRuleCandidates(catalogOff, [confirmed]);
+  const r = reconcileResults({ catalogItems: catalogOff, results: twoSpins, thresholdPercent: THRESHOLD, existingSourceKeys: new Set(["k1"]), specialItemRules: rules });
+  assertEq(r.decisions.map((d) => d.decision), ["duplicate", "record"], "이미 처리한 두배권은 duplicate");
+  assertEq([r.decisions[1].effectiveCount, r.summary.modifierCount], [1, 0], "중복 두배권은 부여 없음·×1");
+}
+
+// ⑧ 표 전체 꺼짐(그룹 단위 사용 안 함) + 확정 → 두배권은 부여, 다음 결과(꺼진 상품)는 검토함(쿠폰 소진) / 금액대 밖이면 검토함
+{
+  const allOff = catalogOn.map((it) => ({ ...it, enabled: false }));
+  const rules = buildSpecialItemRuleCandidates(allOff, [confirmed]);
+  const r = reconcileResults({ catalogItems: allOff, results: twoSpins, thresholdPercent: THRESHOLD, specialItemRules: rules });
+  assertEq(r.decisions.map((d) => [d.decision, d.modifierAction]), [["ignore", "grant"], ["needs_review", null]], "표 전체 꺼짐: 두배권 부여·다음 결과는 검토함");
+  assertEq(r.modifierState.pendingByViewer, {}, "검토함으로 간 다음 결과가 대기 두배권을 소진한다(기존 규칙 유지)");
+  const outside = { ...result("fan1", "다음 룰렛 2배", 5, "2026-09-28 20:00:00", "k9"), donationAmount: 999 };
+  const r2 = reconcileResults({ catalogItems: catalogOff, results: [outside], thresholdPercent: THRESHOLD, specialItemRules: rules });
+  assertEq([r2.decisions[0].decision, r2.summary.modifierCount], ["needs_review", 0], "금액대에 상품이 없으면 두배권도 검토함");
+}
+
+// ⑨ 재판정: 꺼진 확정 두배권은 ignore 로 세고 이름 연결(unmatched)에 섞이지 않는다
+{
+  const rules = buildSpecialItemRuleCandidates(catalogOff, [confirmed]);
+  const capture: RejudgeSourceBatch["capture"] = {
+    capturedAt: "2026-09-28T12:00:00.000Z",
+    rows: [{ sourceUid: "u1", donateTimeText: "2026-09-28 20:00:00", donationType: "별풍선", donationAmount: 500, fanNickname: "팬", fanId: "fan1", results: [{ name: "다음 룰렛 2배", probability: 5, index: 0, total: 1 }] }],
+  };
+  const r = collectRejudgeCandidates({ batches: [{ batchId: "b1", capture }], catalogItems: catalogOff, thresholdPercent: THRESHOLD, existingSourceKeys: new Set(), specialItemRules: rules });
+  assertEq([r.summary.ignored, r.summary.stillNeedsReview, r.unmatched.length, r.candidates.length], [1, 0, 0, 0], "재판정: 꺼진 확정 두배권은 ignore·연결 화면 제외·기록 0");
+}
+
+// ⑩ 같은 ruleKey 두 칸(사용 중 + 꺼짐) → 후보 1장, itemEnabled=true
+{
+  const dup = [item("다음 룰렛 2배", 5, true), { ...item("다음 룰렛 2배", 5, false), groupIndex: 1 }];
+  const rules = buildSpecialItemRuleCandidates(dup, [confirmed]);
+  assertEq(rules.map((r) => [r.ruleKey, r.status, r.itemEnabled]), [["500::다음룰렛2배::5", "confirmed", true]], "중복 ruleKey 는 하나로, 하나라도 사용 중이면 true");
+  const dupOff = [item("다음 룰렛 2배", 5, false), { ...item("다음 룰렛 2배", 5, false), groupIndex: 1 }];
+  assertEq(buildSpecialItemRuleCandidates(dupOff, [confirmed]).map((r) => r.itemEnabled), [false], "둘 다 꺼짐이면 false");
 }
 
 console.log(`double-ticket-usage-free: ${passed} assertions passed`);

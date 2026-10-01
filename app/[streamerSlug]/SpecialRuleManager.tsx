@@ -41,7 +41,7 @@ export default function SpecialRuleManager({ slug, rules }: Props) {
   }
 
   if (rules.length === 0) {
-    return <p className={styles.fieldHint}>현재 활성 룰렛표에서 두배권 후보를 찾지 못했어요.</p>;
+    return <p className={styles.fieldHint}>현재 룰렛표에서 두배권 후보를 찾지 못했어요.</p>;
   }
 
   return (

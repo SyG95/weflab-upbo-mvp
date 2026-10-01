@@ -185,24 +185,33 @@ export function buildSpecialItemRuleCandidates(
   const overrideMap = new Map(overrides.map((rule) => [rule.ruleKey, rule]));
   // "사용 안 함"으로 꺼 둔 칸도 후보에 올린다 — 두배권 적용은 사용 여부가 아니라 "두배권 맞음" 확정만 본다
   // (sy 2026-10-01). 꺼진 칸을 빼면 확정도 못 하고 판정에서도 조용히 빠져 당첨이 검토함으로 사라진다.
-  return catalogItems
-    .filter((item) => isMultiplierCandidateName(item.itemName) || overrideMap.has(specialRuleKeyForItem(item)))
-    .map((item) => {
-      const ruleKey = specialRuleKeyForItem(item);
-      const override = overrideMap.get(ruleKey);
-      return {
-        ruleKey,
-        ruleType: "next_result_multiplier",
-        status: override?.status || "candidate",
-        multiplier: Number(override?.multiplier || 2),
-        groupIndex: item.groupIndex,
-        amountRangeLabel: item.amountRangeLabel,
-        itemName: item.itemName,
-        normalizedName: item.normalizedName,
-        probability: item.probability,
-        itemEnabled: item.enabled !== false,
-      };
+  // 같은 ruleKey(같은 금액대·이름·확률)가 여러 칸에 있으면 하나로 합친다(화면 key 중복 방지).
+  // 판정은 ruleKey 단위라 어차피 하나이고, 표시용 itemEnabled 는 "하나라도 사용 중"이면 true.
+  const byKey = new Map<string, SpecialItemRule>();
+  for (const item of catalogItems) {
+    const ruleKey = specialRuleKeyForItem(item);
+    if (!(isMultiplierCandidateName(item.itemName) || overrideMap.has(ruleKey))) continue;
+    const enabled = item.enabled !== false;
+    const prev = byKey.get(ruleKey);
+    if (prev) {
+      if (enabled) prev.itemEnabled = true;
+      continue;
+    }
+    const override = overrideMap.get(ruleKey);
+    byKey.set(ruleKey, {
+      ruleKey,
+      ruleType: "next_result_multiplier",
+      status: override?.status || "candidate",
+      multiplier: Number(override?.multiplier || 2),
+      groupIndex: item.groupIndex,
+      amountRangeLabel: item.amountRangeLabel,
+      itemName: item.itemName,
+      normalizedName: item.normalizedName,
+      probability: item.probability,
+      itemEnabled: enabled,
     });
+  }
+  return [...byKey.values()];
 }
 
 function viewerKey(result: NormalizedResult): string {

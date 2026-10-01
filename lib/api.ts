@@ -146,7 +146,7 @@ export type ImportBatchSummary = {
   missionSettlementCount?: number;
   // 판정에 쓴 스냅샷(검증실 재현용). 없으면 도입 전 배치.
   thresholdOverrides?: Record<string, number>;
-  judgeRules?: { missionSettlementIgnore?: boolean };
+  judgeRules?: { missionSettlementIgnore?: boolean; modifierIgnoresUsage?: boolean };
 };
 
 export type ImportBatch = {

@@ -4220,6 +4220,10 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
   };
 }
 
+// 지금 판정에 쓰는 규칙 — 미리보기(preview)와 반영(apply)이 같은 값을 쓴다(둘이 어긋나면 미리보기가 거짓말을 한다).
+// 반영은 이 값을 배치 summary.judgeRules 스냅샷으로 남기고, 검증실은 스냅샷대로 옛 배치를 재현한다.
+const CURRENT_JUDGE_RULES: JudgeRules = { missionSettlementIgnore: true, modifierIgnoresUsage: true };
+
 export async function previewResultsForStreamer(streamer: StreamerRow, capture: ResultCapture) {
   const catalog = await latestCatalog(streamer.id);
   const normalized = normalizeResultCapture(capture);
@@ -4240,6 +4244,8 @@ export async function previewResultsForStreamer(streamer: StreamerRow, capture: 
     existingSourceKeys: knownSourceKeys,
     specialItemRules: await specialRulesForCatalog(streamer.id, catalogItems),
     modifierState: await latestModifierState(streamer.id),
+    missionSettlementIgnore: CURRENT_JUDGE_RULES.missionSettlementIgnore,
+    modifierIgnoresUsage: CURRENT_JUDGE_RULES.modifierIgnoresUsage,
   });
   // 정가(시그니처) 미리보기 — 기록하지 않고 요약만 계산한다. 기간 한정(이벤트·서버) 갯수는
   // 후원 시각이 기간 안일 때만 후보가 된다(latestFixedPriceJudgeConfig + judgeFixedPeriod).
@@ -4279,7 +4285,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
   const currentModifierState = await latestModifierState(streamer.id);
   const knownSourceKeys = await existingSourceKeys(streamer.id);
   // 판정에 쓰는 규칙과 배치에 남기는 스냅샷은 같은 값 하나에서 나온다(둘이 어긋나면 검증실이 거짓 재현을 한다).
-  const judgeRules: JudgeRules = { missionSettlementIgnore: true, modifierIgnoresUsage: true };
+  const judgeRules: JudgeRules = CURRENT_JUDGE_RULES;
   const preview = reconcileResults({
     catalogItems,
     results: normalized.results,

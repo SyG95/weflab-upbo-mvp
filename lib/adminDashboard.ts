@@ -247,6 +247,9 @@ function buildLiveDashboard(
     const normalized = normalizeResultCapture(raw);
     // 판정 당시 미션 정산 뭉치 제외 규칙이 켜져 있었는지(summary.judgeRules 스냅샷, readJudgeRules 순수 판독).
     // 스냅샷 없는 옛 배치는 규칙 없이 재현해야 저장된 공식 summary 와 일치한다.
+    // 한계: 이 재현은 위플랩 원본 items 를 쓰고 스트리머의 "사용 안 함" 덮어쓰기(applyCatalogUsage)는 적용하지 않는다.
+    // 그래서 modifierIgnoresUsage=false 로 옛 배치를 돌려도 "사용 안 함 칸 두배권 → 검토함"이던 옛 판정은
+    // 재현되지 않고(부여로 나옴) 해당 배치는 summaryMatches=false 로 남는다(도입 전부터 있던 한계, 2026-10-01 기록).
     const judgeRules = readJudgeRules(batch.summary);
     const recon = reconcileResults({
       catalogItems,

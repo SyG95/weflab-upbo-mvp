@@ -16,6 +16,8 @@
 //      다시 계산하면 이미 소모된 배수가 두 번 적용될 수 있다. 매 배치에 빈
 //      modifierState 를 넘기고, 결과 상태는 저장하지 않는다(effectiveCount 는 항상 1).
 //      확정된 두배권 항목 자체는 specialItemRules 로 그대로 넘겨 ignore 처리된다.
+//      "사용 안 함"으로 꺼 둔 확정 두배권 칸도 같은 ignore 다(2026-10-01, 사용 여부와 분리) —
+//      이름 연결 화면(unmatched)에 "다음 룰렛 2배"가 섞여 잘못 연결되는 일을 막는다.
 //   4) 배치를 저장 순서대로 하나씩 재실행한다. 같은 결과가 여러 배치에 중복 캡처돼
 //      있으므로, 한 번에 몰아 돌리면 같은 sourceKey 가 두 번 record 로 잡힌다.
 //      (공식 apply 순서·검증실 재현과 같은 방식)
@@ -141,6 +143,8 @@ export function collectRejudgeCandidates({
       specialItemRules,
       // 두배권 미적용(위 안전 규칙 3). 결과 상태는 버린다.
       modifierState: {},
+      // 꺼진 확정 두배권 칸도 ignore(위 규칙 3 보강). 반영(apply)과 같은 규칙을 명시한다.
+      modifierIgnoresUsage: true,
     });
 
     for (const decision of recon.decisions) {
