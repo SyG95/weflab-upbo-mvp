@@ -52,6 +52,7 @@ import {
   couponExcludedNameSet,
   filterHoldingsByExcludedNames,
   getWardrobeBySlug,
+  getExtensionConsoleBySlug,
   type ShowcaseState,
   type CouponState,
   type CouponBalance,
@@ -82,12 +83,14 @@ import SheetTitleForm from "./SheetTitleForm";
 import { effectiveThresholdForLabel } from "@/lib/upboCore";
 import FanRevealCard, { type FanRevealTable } from "./FanRevealCard";
 import { FAN_REVEAL_SCOPE_DEFAULT } from "@/lib/fanRevealScope";
+import { EXTENSION_CONFIG_DEFAULT } from "@/lib/extensionStatus";
 import ProductColorManager from "./ProductColorManager";
 import FanRevealManager, { type RevealRoulette } from "./FanRevealManager";
 import FanTabNameManager, { type FanNameRow, type FanTabForNaming } from "./FanTabNameManager";
 import WeflabLinkManager from "./WeflabLinkManager";
 import FanLayoutEditor from "./FanLayoutEditor";
 import SheetAdminGate from "./SheetAdminGate";
+import ExtensionStatusLine from "./ExtensionStatusLine";
 import SheetAdminPasswordForm from "./SheetAdminPasswordForm";
 import AdminTabEditor from "./AdminTabEditor";
 import SortableSections from "./SortableSections";
@@ -500,6 +503,13 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   // 관리자 모드 잠금: 스트리머(슬러그)별 비밀번호 확인 전엔 화면을 열지 않는다.
   const sheetAccess = isAdminMode ? await sheetAdminAccessState(streamerSlug) : null;
   const sheetAdminLocked = sheetAccess === "locked" || sheetAccess === "blocked-unconfigured";
+  // 확프 상태 한 줄(수집 레인 1단계): 관리자 모드 + 잠금 해제 후에만 읽는다(팬 화면 조회 0).
+  // 스트리머 1 + 상태·설정·원본 최신 병렬 3. 실패해도 페이지는 그대로("불러오지 못했어요"만).
+  const extensionConsole =
+    isAdminMode && !sheetAdminLocked && result.ok
+      ? await getExtensionConsoleBySlug(streamerSlug).catch(() => null)
+      : null;
+  const extensionCheckedAt = new Date();
 
   const monthlyAssignments = await monthlyAssignmentsPromise;
   return (
@@ -553,14 +563,23 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
         ) : !result.ok ? (
           <ConnectionNotice reason={result.reason} slug={streamerSlug} />
         ) : isAdminMode ? (
-          <AdminPanel
-            integratedMonth={normalizeMonth(month)}
-            state={result.state}
-            activeAdminTab={activeAdminTab}
-            showcase={showcase}
-            coupon={couponState}
-            wardrobe={wardrobe}
-          />
+          <>
+            <ExtensionStatusLine
+              status={extensionConsole?.status ?? null}
+              config={extensionConsole?.config ?? EXTENSION_CONFIG_DEFAULT}
+              serverNewestCaptureAt={extensionConsole?.serverNewestCaptureAt ?? null}
+              now={extensionCheckedAt}
+              loadFailed={extensionConsole === null}
+            />
+            <AdminPanel
+              integratedMonth={normalizeMonth(month)}
+              state={result.state}
+              activeAdminTab={activeAdminTab}
+              showcase={showcase}
+              coupon={couponState}
+              wardrobe={wardrobe}
+            />
+          </>
         ) : showcaseOn ? (
           <div
             className={styles.showcaseLayout}

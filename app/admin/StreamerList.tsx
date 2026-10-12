@@ -1,16 +1,20 @@
 "use client";
 
 // 운영 콘솔 목록: 장부형(컬럼 정렬) 스트리머 현황 + 줄별 관리(시트/검증실/비번 리셋/삭제).
-// 상태점 = 최근 동기화 신선도(48시간 이내 초록 / 7일 이내 노랑 / 그 외·없음 회색).
+// 상태점 = 확프 하트비트 신호등(0.4.0+, 서버가 계산한 초록/노랑/빨강 + 사유 툴팁).
+//   하트비트가 없는 줄(옛 확프)은 예전처럼 최근 동기화 신선도(48시간 이내 초록 / 7일 이내 노랑 / 그 외·없음 회색).
+// 되읽기 스위치(줄별·전체) = 서버 원격 설정. 확프는 다음 하트비트(≤5분)에 따른다.
 
-import { useMemo, useState } from "react";
+import { useMemo, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import styles from "./admin-index.module.css";
 import PinResetButton from "./PinResetButton";
 import RenameStreamerButton from "./RenameStreamerButton";
 import DeleteStreamerButton from "./DeleteStreamerButton";
 import ResetDataButton from "./ResetDataButton";
+import { setExtensionConfigAction, setExtensionConfigForAllAction } from "./actions";
 import type { AdminStreamerSummary } from "@/lib/adminDashboard";
+import { formatElapsed, type ExtensionLightColor } from "@/lib/extensionStatus";
 
 function fmtKst(iso?: string): string {
   if (!iso) return "수집 없음";
@@ -46,6 +50,85 @@ const FRESH_LABEL: Record<Freshness, string> = {
   none: "동기화 오래됨/없음",
 };
 
+const LIGHT_LABEL: Record<ExtensionLightColor, string> = {
+  green: "확프 정상",
+  yellow: "확프 주의",
+  red: "확프 이상",
+  gray: "확프 상태 없음",
+};
+
+type ExtensionSummary = NonNullable<AdminStreamerSummary["extension"]>;
+
+// 툴팁: 사유(없으면 "정상") · 마지막 하트비트 N분 전. 화면 렌더 시각 기준이라 SSR/수화 차이는 무시한다.
+function extensionTitle(ext: ExtensionSummary): string {
+  const reasons = ext.light.reasons.length > 0 ? ext.light.reasons.join(" · ") : "정상";
+  return `${LIGHT_LABEL[ext.light.color]}: ${reasons} · ${formatElapsed(Date.now() - Date.parse(ext.updatedAt))} 전`;
+}
+
+// 줄별 되읽기 스위치. 저장 중엔 낙관적으로 보여 주고, 저장 뒤 목록 새로고침(revalidate) 값으로 맞춘다.
+function CatchupToggle({ slug, enabled, disabled }: { slug: string; enabled: boolean; disabled: boolean }) {
+  const [pending, startTransition] = useTransition();
+  const [shown, setShown] = useOptimistic(enabled);
+  const [error, setError] = useState("");
+  return (
+    <>
+      <label
+        className={styles.catchupToggle}
+        title="확프 되읽기(빠진 행 다시 읽기) — 서버 설정, 다음 하트비트(최대 5분)에 반영"
+      >
+        <input
+          type="checkbox"
+          checked={shown}
+          disabled={disabled || pending}
+          onChange={(event) => {
+            const next = event.target.checked;
+            setError("");
+            startTransition(async () => {
+              setShown(next);
+              const res = await setExtensionConfigAction(slug, { catchupEnabled: next });
+              if (!res.ok) setError(res.error || "저장 실패");
+            });
+          }}
+        />
+        되읽기
+      </label>
+      {error ? <span className={styles.resetErr}>{error}</span> : null}
+    </>
+  );
+}
+
+// 목록 머리: 되읽기 전체 끄기/켜기(확인 한 번). 스트리머마다 자기 설정에 덮어쓴 이벤트 1건씩 남는다.
+function CatchupAllControls({ onCount, total, disabled }: { onCount: number; total: number; disabled: boolean }) {
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState("");
+  const run = (enabled: boolean) => {
+    const question = enabled
+      ? "모든 스트리머의 확프 되읽기를 켤까요?"
+      : "모든 스트리머의 확프 되읽기를 끌까요?";
+    if (!window.confirm(`${question}\n확프는 다음 하트비트(최대 5분)에 따라요.`)) return;
+    setMessage("");
+    startTransition(async () => {
+      const res = await setExtensionConfigForAllAction({ catchupEnabled: enabled });
+      setMessage(res.ok ? `${res.count ?? 0}명 ${enabled ? "켬" : "끔"} ✓` : res.error || "저장 실패");
+    });
+  };
+  return (
+    <div className={styles.catchupBar}>
+      <span>
+        확프 되읽기 <b>{onCount}</b> / {total}명 켜짐
+      </span>
+      <button type="button" className={styles.resetBtn} disabled={disabled || pending} onClick={() => run(false)}>
+        되읽기 전체 끄기
+      </button>
+      <button type="button" className={styles.resetBtn} disabled={disabled || pending} onClick={() => run(true)}>
+        전체 켜기
+      </button>
+      {pending ? <span className={styles.catchupMsg}>저장 중…</span> : null}
+      {!pending && message ? <span className={styles.catchupMsg}>{message}</span> : null}
+    </div>
+  );
+}
+
 type SortKey = "attention" | "recent" | "name";
 
 export default function StreamerList({
@@ -77,6 +160,7 @@ export default function StreamerList({
   }, [streamers, query, sort]);
 
   const suffix = isMock ? "?mock=1" : "";
+  const catchupOnCount = streamers.filter((s) => s.extensionConfig.catchupEnabled).length;
 
   return (
     <div className={styles.listWrap}>
@@ -100,6 +184,7 @@ export default function StreamerList({
           {shown.length} / {streamers.length}명
         </span>
       </div>
+      <CatchupAllControls onCount={catchupOnCount} total={streamers.length} disabled={isMock} />
 
       {shown.length === 0 ? (
         <p className={styles.empty}>
@@ -121,12 +206,34 @@ export default function StreamerList({
                 <li key={s.slug}>
                   <div className={styles.row}>
                     <div className={styles.rowMain}>
-                      <span className={styles.syncDot} data-fresh={f} title={FRESH_LABEL[f]} />
+                      {s.extension ? (
+                        <span
+                          className={styles.syncDot}
+                          data-light={s.extension.light.color}
+                          role="img"
+                          aria-label={extensionTitle(s.extension)}
+                          title={extensionTitle(s.extension)}
+                          suppressHydrationWarning
+                        />
+                      ) : (
+                        <span className={styles.syncDot} data-fresh={f} title={FRESH_LABEL[f]} />
+                      )}
                       <div className={styles.nameBox}>
                         <Link href={`/${s.slug}`} className={styles.name} title="팬 시트 열기">
                           {s.displayName}
                         </Link>
                         <span className={styles.slug}>/{s.slug}</span>
+                        {s.extension ? (
+                          <span className={styles.extLine}>
+                            확프{s.extension.clientVersion ? ` v${s.extension.clientVersion}` : ""} · {s.extension.screenSummary}
+                          </span>
+                        ) : null}
+                        {/* 초록이 아니면 사유를 글자로도 — 툴팁은 터치 화면에서 안 보인다 */}
+                        {s.extension && s.extension.light.reasons.length > 0 ? (
+                          <span className={styles.extReasons} data-light={s.extension.light.color}>
+                            {s.extension.light.reasons.join(" · ")}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <span className={styles.colRecords}>{s.recordSum.toLocaleString()}</span>
@@ -139,6 +246,11 @@ export default function StreamerList({
                     </span>
                     <span className={styles.colSync}>{fmtKst(s.lastAppliedAt)}</span>
                     <div className={styles.rowActions}>
+                      <CatchupToggle
+                        slug={s.slug}
+                        enabled={s.extensionConfig.catchupEnabled}
+                        disabled={isMock}
+                      />
                       <Link href={`/admin/${s.slug}${suffix}`} className={styles.verifyLink}>
                         검증실
                       </Link>

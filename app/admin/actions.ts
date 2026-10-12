@@ -13,11 +13,14 @@ import {
   hasResetScope,
   previewStreamerReset,
   renameStreamer,
+  setExtensionConfig,
+  setExtensionConfigForAll,
   setSheetAdminPinHash,
   upsertStreamer,
   type ResetCount,
   type ResetScope,
 } from "@/lib/upboSupabase";
+import type { ExtensionConfig } from "@/lib/extensionStatus";
 
 // 오픈 리다이렉트 방지: /admin 으로 시작하는 경로만 허용.
 function safeReturn(path: string): string {
@@ -238,5 +241,41 @@ export async function resetStreamerPinAction(
     return { ok: true, slug, pin };
   } catch (error) {
     return { error: (error as Error).message || "비번 리셋에 실패했어요." };
+  }
+}
+
+// ── 확프 원격 스위치(수집 레인 1단계, 2026-10-12) ─────────────────────────
+// 스트리머별·전체 되읽기 켜기/끄기 등. 저장은 audit_logs 이벤트(스키마 0), 확프는 다음 하트비트(≤5분)에 따른다.
+// 화면이 보낸 patch 는 믿지 않는다 — 아는 키만, 타입·범위는 서버에서 정제(mergeExtensionConfig).
+
+export type ExtensionConfigActionResult = { ok: boolean; error?: string; config?: ExtensionConfig; count?: number };
+
+export async function setExtensionConfigAction(
+  slug: string,
+  patch: Partial<ExtensionConfig>,
+): Promise<ExtensionConfigActionResult> {
+  try {
+    await assertConsoleAdmin();
+    const clean = String(slug ?? "").trim().toLowerCase();
+    if (!SLUG_RE.test(clean)) return { ok: false, error: "잘못된 슬러그예요." };
+    const streamer = await getStreamerRowBySlug(clean);
+    const config = await setExtensionConfig(streamer, patch ?? {});
+    revalidatePath("/admin");
+    return { ok: true, config };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message || "확프 설정 저장에 실패했어요." };
+  }
+}
+
+export async function setExtensionConfigForAllAction(
+  patch: Partial<ExtensionConfig>,
+): Promise<ExtensionConfigActionResult> {
+  try {
+    await assertConsoleAdmin();
+    const count = await setExtensionConfigForAll(patch ?? {});
+    revalidatePath("/admin");
+    return { ok: true, count };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message || "전체 확프 설정 저장에 실패했어요." };
   }
 }

@@ -1,0 +1,65 @@
+/* 스트리머 관리자 화면 상단 "확프 상태" 한 줄 — 테마 토큰만 쓴다(다크 테마에서 흰색 하드코딩 금지).
+   점 색만 테마와 무관한 신호 색(초록·노랑·빨강·회색), /admin 목록 신호등과 같은 값. */
+.line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-weight: 800;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b9adb3;
+}
+
+.dot[data-light="green"] {
+  background: #27a567;
+  box-shadow: 0 0 0 3px rgba(39, 165, 103, 0.18);
+}
+
+.dot[data-light="yellow"] {
+  background: #e0a10c;
+  box-shadow: 0 0 0 3px rgba(224, 161, 12, 0.16);
+}
+
+.dot[data-light="red"] {
+  background: #d64545;
+  box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.18);
+}
+
+.facts {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reasons {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
+/* 사유 글자는 테마 잉크(노랑은 점이 색을 맡는다 — 밝은 테마에서 호박색 글자는 대비 부족),
+   빨강만 페이지 공용 오류색(--destructive)을 쓴다. */
+.line[data-light="red"] .reasons {
+  color: var(--destructive);
+}
+
+.muted {
+  color: var(--muted);
+}

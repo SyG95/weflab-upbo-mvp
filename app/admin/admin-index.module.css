@@ -317,6 +317,27 @@
   box-shadow: 0 0 0 3px rgba(224, 161, 12, 0.14);
 }
 
+/* 확프 하트비트 신호등(0.4.0+, 서버 계산): green=정상 / yellow=화면·설정 주의 / red=무응답·로그인·전송 오류.
+   하트비트가 없는 줄은 위 data-fresh(최근 동기화 신선도)를 그대로 쓴다. */
+.syncDot[data-light="green"] {
+  background: #27a567;
+  box-shadow: 0 0 0 3px rgba(39, 165, 103, 0.16);
+}
+
+.syncDot[data-light="yellow"] {
+  background: #e0a10c;
+  box-shadow: 0 0 0 3px rgba(224, 161, 12, 0.14);
+}
+
+.syncDot[data-light="red"] {
+  background: #d64545;
+  box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.16);
+}
+
+.syncDot[data-light="gray"] {
+  background: #d9cad2;
+}
+
 .nameBox {
   display: flex;
   flex-direction: column;
@@ -340,6 +361,26 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
+}
+
+/* 확프 화면 요약 한 줄: "확프 v0.4.0 · 100행 · 10-05~10-12 · 더보기 있음" */
+.extLine {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* 신호등 사유(초록 아닐 때만): 노랑은 잉크색(점이 색을 맡음), 빨강은 오류색 */
+.extReasons {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.extReasons[data-light="red"] {
+  color: #c0392b;
 }
 
 .colRecords {
@@ -879,3 +920,49 @@
   font-weight: 800;
   color: #1d7a3d;
 }
+
+/* ── 확프 되읽기 원격 스위치(줄별 토글 + 목록 머리 전체 끄기/켜기) ── */
+.catchupToggle {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--paper-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.catchupToggle:hover {
+  border-color: var(--stamp);
+}
+
+.catchupToggle input {
+  margin: 0;
+  accent-color: var(--stamp);
+}
+
+.catchupBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.catchupBar b {
+  color: var(--ink);
+}
+
+.catchupMsg {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f7a47;
+}
+
