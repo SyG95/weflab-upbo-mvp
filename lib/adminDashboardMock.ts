@@ -10,8 +10,51 @@ import type {
   RawResultRow,
   ReflectionRow,
 } from "@/lib/adminDashboard";
+import {
+  EXTENSION_CONFIG_DEFAULT,
+  extensionScreenSummary,
+  normalizeHeartbeat,
+  trafficLight,
+  type ExtensionConfig,
+} from "@/lib/extensionStatus";
+
+// 확프 하트비트(0.4.0+) 샘플 — 신호등 3색 화면 확인용. 시각은 "지금" 기준 상대값으로 만든다.
+function mockExtension(
+  minutesAgo: number,
+  patch: { page?: Record<string, unknown>; screen?: Record<string, unknown>; collector?: Record<string, unknown> },
+  config: ExtensionConfig = EXTENSION_CONFIG_DEFAULT,
+): AdminStreamerSummary["extension"] {
+  const now = new Date();
+  const updatedAt = new Date(now.getTime() - minutesAgo * 60_000).toISOString();
+  const payload = normalizeHeartbeat({
+    clientVersion: "0.4.0",
+    autoSyncEnabled: true,
+    autoSyncMode: "apply",
+    page: { onAlertList: true, loginOk: true, ...patch.page },
+    screen: {
+      rowCount: 100,
+      newestRowTime: "2026-10-12 21:14:03",
+      oldestRowTime: "2026-10-05 19:02:11",
+      rangeText: "26-10-05 00:00 ~ 26-10-12 23:59",
+      rangeEndIsToday: true,
+      filter: { searchActive: false, minActive: false, typeValue: "all" },
+      moreButtonVisible: false,
+      ...patch.screen,
+    },
+    collector: { observedRows: 100, observedResults: 140, autoSeenKeyCount: 612, ...patch.collector },
+  });
+  const status = { updatedAt, payload };
+  return {
+    updatedAt,
+    clientVersion: payload.clientVersion,
+    light: trafficLight({ status, now }),
+    config,
+    screenSummary: extensionScreenSummary(payload),
+  };
+}
 
 export function getMockAdminIndex(): AdminStreamerSummary[] {
+  const catchupOn: ExtensionConfig = { ...EXTENSION_CONFIG_DEFAULT, catchupEnabled: true };
   return [
     {
       slug: "poromi",
@@ -22,6 +65,8 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       lastAppliedAt: "2026-06-28T13:06:00.000Z",
       recordSum: 2,
       needsReviewSum: 1,
+      extensionConfig: catchupOn,
+      extension: mockExtension(3, {}, catchupOn),
     },
     {
       slug: "gomdori",
@@ -32,6 +77,22 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       lastAppliedAt: "2026-06-27T09:40:00.000Z",
       recordSum: 18,
       needsReviewSum: 4,
+      extensionConfig: EXTENSION_CONFIG_DEFAULT,
+      extension: mockExtension(2, {
+        screen: { filter: { searchActive: true, minActive: false, typeValue: "all" }, moreButtonVisible: true },
+      }),
+    },
+    {
+      slug: "dalbit",
+      displayName: "달빛 (MOCK)",
+      thresholdPercent: 2,
+      updatedAt: "2026-06-25T10:00:00.000Z",
+      batchCount: 4,
+      lastAppliedAt: "2026-06-25T09:10:00.000Z",
+      recordSum: 6,
+      needsReviewSum: 0,
+      extensionConfig: EXTENSION_CONFIG_DEFAULT,
+      extension: mockExtension(47, { page: { loginOk: false } }),
     },
     {
       slug: "byulbit",
@@ -42,6 +103,8 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       lastAppliedAt: "2026-06-26T21:30:00.000Z",
       recordSum: 9,
       needsReviewSum: 0,
+      // 하트비트 없음(옛 확프 0.3.x) → 목록은 옛 "최근 동기화" 신선도 점.
+      extensionConfig: EXTENSION_CONFIG_DEFAULT,
     },
   ];
 }

@@ -62,6 +62,18 @@ import {
   judgeFixedPeriod,
   type FixedPriceJudgeEntry,
 } from "./fixedPricePeriod";
+import {
+  extensionScreenSummary,
+  knownKeysFromRawRows,
+  mergeExtensionConfig,
+  normalizeExtensionConfig,
+  normalizeHeartbeat,
+  trafficLight,
+  type ExtensionConfig,
+  type ExtensionLight,
+  type ExtensionStatus,
+  type HeartbeatPayload,
+} from "./extensionStatus";
 
 type Json = unknown;
 
@@ -1122,6 +1134,16 @@ export type AdminStreamerIndexRow = {
   lastAppliedAt?: string;
   recordSum: number;
   needsReviewSum: number;
+  // 확프 원격 스위치(되읽기 등) — 설정 이벤트가 없으면 기본값(전부 꺼짐). 하트비트 유무와 무관하게 늘 있다.
+  extensionConfig: ExtensionConfig;
+  // 확프 하트비트(0.4.0+) 신호등. 하트비트 기록이 없으면(옛 확프) undefined → 목록은 옛 신선도 점을 쓴다.
+  extension?: {
+    updatedAt: string;
+    clientVersion?: string;
+    light: ExtensionLight;
+    config: ExtensionConfig;
+    screenSummary: string;
+  };
 };
 
 // import_batches 전 스트리머 합산 조회를 "받은 게 없을 때까지" offset 으로 나눠 받는다.
@@ -1144,13 +1166,17 @@ async function fetchAllImportBatchRows(): Promise<Array<{ streamer_id: string; a
 }
 
 // 운영자 목록 화면용 읽기 전용 집계. streamers 1쿼리 + import_batches 전량 페이지 순회를 JS에서 합친다.
+// 확프 신호등: 하트비트 상태 전량 1쿼리 + 원격 스위치 이벤트 1쿼리(스트리머별 추가 조회 없음).
 export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> {
-  const [streamers, batches] = await Promise.all([
+  const [streamers, batches, statusMap, configMap] = await Promise.all([
     supabaseFetch<StreamerRow[]>(
       `/${tableName("streamers")}?select=id,slug,display_name,threshold_percent,updated_at&order=updated_at.desc&limit=1000`,
     ),
     fetchAllImportBatchRows(),
+    getExtensionStatusMap(),
+    getExtensionConfigMap(),
   ]);
+  const now = new Date();
   const agg = new Map<string, { batchCount: number; lastAppliedAt?: string; recordSum: number; needsReviewSum: number }>();
   for (const b of batches) {
     const cur = agg.get(b.streamer_id) ?? { batchCount: 0, lastAppliedAt: undefined, recordSum: 0, needsReviewSum: 0 };
@@ -1163,6 +1189,8 @@ export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> 
   }
   return streamers.map((r) => {
     const a = agg.get(r.id);
+    const config = configMap.get(r.id) ?? normalizeExtensionConfig(null);
+    const status = statusMap.get(r.id);
     return {
       slug: r.slug,
       displayName: r.display_name,
@@ -1172,6 +1200,17 @@ export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> 
       lastAppliedAt: a?.lastAppliedAt,
       recordSum: a?.recordSum ?? 0,
       needsReviewSum: a?.needsReviewSum ?? 0,
+      extensionConfig: config,
+      extension: status
+        ? {
+            updatedAt: status.updatedAt,
+            clientVersion: status.clientVersion || undefined,
+            // 목록은 스트리머별 원본 조회를 하지 않는다(serverNewestCaptureAt 없음).
+            light: trafficLight({ status, now, serverNewestCaptureAt: undefined }),
+            config,
+            screenSummary: extensionScreenSummary(status.payload),
+          }
+        : undefined,
     };
   });
 }
@@ -5760,4 +5799,167 @@ export async function applyCouponBackfill(
 export async function getFanDeliveryAssignmentsBySlug(slug: string) {
   const streamer = await requireStreamer(slug);
   return getDeliveryAssignments(streamer.id);
+}
+
+// ---------- 확프 하트비트·원격 스위치(수집 레인 1단계, 2026-10-12) ----------
+// 하트비트(5분마다, 고빈도) = extension_status 테이블에 스트리머당 1행 덮어쓰기(upsert).
+//   ★테이블은 sy 가 SQL Editor 로 만든다(supabase/migrations/20261012_extension_status.sql). 만들기 전엔
+//     읽기는 "상태 없음"(회색), 쓰기는 저장 생략(false) — 앱·확프가 죽지 않는다(delivery_progress 폴백과 같은 방식).
+// 원격 스위치(드묾) = audit_logs(action=extension_config_updated) 최신 1건 → 스키마 변경 없음.
+// 판정·수집 저장 규칙(results/catalogs)은 건드리지 않는다.
+const EXTENSION_CONFIG_ACTION = "extension_config_updated";
+
+type ExtensionStatusRow = {
+  streamer_id: string;
+  updated_at: string;
+  client_version?: string | null;
+  payload: unknown;
+};
+
+function mapExtensionStatus(row: ExtensionStatusRow): ExtensionStatus {
+  const payload = normalizeHeartbeat(row.payload);
+  return { updatedAt: row.updated_at, clientVersion: row.client_version || payload.clientVersion, payload };
+}
+
+// 저장 성공 true, 테이블이 아직 없으면 false(그 외 오류는 throw).
+export async function upsertExtensionStatus(
+  streamerId: string,
+  clientVersion: string,
+  payload: HeartbeatPayload,
+): Promise<boolean> {
+  try {
+    await supabaseFetch(`/${tableName("extension_status")}?on_conflict=streamer_id`, {
+      method: "POST",
+      headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({
+        streamer_id: streamerId,
+        updated_at: new Date().toISOString(),
+        client_version: clientVersion,
+        payload,
+      }),
+    });
+    return true;
+  } catch (error) {
+    if (isMissingTableError(error)) return false;
+    throw error;
+  }
+}
+
+export async function getExtensionStatus(streamerId: string): Promise<ExtensionStatus | null> {
+  try {
+    const rows = await supabaseFetch<ExtensionStatusRow[]>(
+      `/${tableName("extension_status")}?streamer_id=eq.${streamerId}&select=streamer_id,updated_at,client_version,payload&limit=1`,
+    );
+    return rows[0] ? mapExtensionStatus(rows[0]) : null;
+  } catch (error) {
+    if (isMissingTableError(error)) return null;
+    throw error;
+  }
+}
+
+export async function getExtensionStatusMap(): Promise<Map<string, ExtensionStatus>> {
+  try {
+    const rows = await supabaseFetch<ExtensionStatusRow[]>(
+      `/${tableName("extension_status")}?select=streamer_id,updated_at,client_version,payload&limit=1000`,
+    );
+    return new Map(rows.map((row) => [row.streamer_id, mapExtensionStatus(row)]));
+  } catch (error) {
+    if (isMissingTableError(error)) return new Map();
+    throw error;
+  }
+}
+
+export async function getExtensionConfig(streamerId: string): Promise<ExtensionConfig> {
+  const rows = await supabaseFetch<Array<{ payload: unknown }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${EXTENSION_CONFIG_ACTION}&select=payload&order=created_at.desc&limit=1`,
+  );
+  return normalizeExtensionConfig(rows[0]?.payload);
+}
+
+// 목록용: 최신순으로 받아 스트리머별 처음 만난 행(=최신 1건)만. 운영 max-rows(1,000)로 잘려도 "전체 켜기/끄기"는
+// 모든 스트리머를 한꺼번에 갱신하므로 각자 최신 1건은 최근 행 안에 남는다. 그 사이 다른 스트리머만 1,000번 넘게
+// 바꾼 경우에만 옛 최신이 잘려 목록에 기본값으로 보일 수 있다(확프는 자기 최신 1건을 따로 읽어 영향 없음).
+// 비용: action 단독 조건이라 색인(streamer_id, action, created_at) 앞열을 못 써 audit_logs 를 훑는다 —
+// /admin(sy 전용)·전체 스위치 때만 부르고 돌려받는 행은 적다. 고빈도 하트비트는 getExtensionConfig(색인 사용).
+export async function getExtensionConfigMap(): Promise<Map<string, ExtensionConfig>> {
+  const rows = await supabaseFetch<Array<{ streamer_id: string | null; payload: unknown }>>(
+    `/${tableName("audit_logs")}?action=eq.${EXTENSION_CONFIG_ACTION}&select=streamer_id,payload,created_at&order=created_at.desc&limit=2000`,
+  );
+  const map = new Map<string, ExtensionConfig>();
+  for (const row of rows) {
+    if (row.streamer_id && !map.has(row.streamer_id)) map.set(row.streamer_id, normalizeExtensionConfig(row.payload));
+  }
+  return map;
+}
+
+function extensionConfigEvent(streamerId: string, config: ExtensionConfig) {
+  return { streamer_id: streamerId, action: EXTENSION_CONFIG_ACTION, actor: "operator", payload: config };
+}
+
+// 온 키만 바꾸고 나머지는 최신 값 유지해 한 줄로 다시 적는다(fan_reveal_updated 와 같은 방식).
+export async function setExtensionConfig(streamer: StreamerRow, patch: Partial<ExtensionConfig>): Promise<ExtensionConfig> {
+  const next = mergeExtensionConfig(await getExtensionConfig(streamer.id), patch);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify(extensionConfigEvent(streamer.id, next)),
+  });
+  return next;
+}
+
+// 전체 스위치(긴급 끄기 등): 스트리머마다 자기 최신 설정에 patch 를 얹은 이벤트 1건씩, 한 번의 POST 로 추가.
+export async function setExtensionConfigForAll(patch: Partial<ExtensionConfig>): Promise<number> {
+  const [streamers, configMap] = await Promise.all([
+    supabaseFetch<Array<{ id: string }>>(`/${tableName("streamers")}?select=id&limit=1000`),
+    getExtensionConfigMap(),
+  ]);
+  if (streamers.length === 0) return 0;
+  const events = streamers.map((s) =>
+    extensionConfigEvent(s.id, mergeExtensionConfig(configMap.get(s.id) ?? normalizeExtensionConfig(null), patch)),
+  );
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify(events),
+  });
+  return events.length;
+}
+
+// 서버가 가진 최신 원본(results) 수집 시각. ★raw_imports 는 새 기록이 생긴 수집만 저장된다(applyResultsForStreamer).
+export async function latestRawCaptureAt(streamerId: string): Promise<string | null> {
+  const rows = await supabaseFetch<Array<{ captured_at: string | null }>>(
+    `/${tableName("raw_imports")}?streamer_id=eq.${streamerId}&type=eq.results&captured_at=not.is.null&select=captured_at&order=captured_at.desc&limit=1`,
+  );
+  return rows[0]?.captured_at ?? null;
+}
+
+// 최근 N일 raw_imports(results)에 이미 있는 행의 열쇠 — 확프 재설치 직후 "본 키 캐시" 시드용(읽기 전용).
+// 확프와 같은 규칙으로 다시 만든다(lib/extensionStatus.knownKeysFromRawRows). raw 전체 대신 rows 만 받는다.
+// ★한계: raw_imports 는 새 기록이 생긴 수집만 저장되므로, 평범한 당첨뿐이던 수집·순수 후원만 있던 수집의 행은
+//   여기 없다 → 확프가 그런 행은 다시 보낸다(서버 판정은 duplicate/ignore 로 흡수, 정가 소급 위험은 남음).
+export async function knownSourceKeysForStreamer(
+  streamerId: string,
+  days: number,
+): Promise<{ resultKeys: string[]; donationKeys: string[] }> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const rows = await supabaseFetchAll<{ id?: string; captured_at?: string; rows?: unknown }>(
+    `/${tableName("raw_imports")}?streamer_id=eq.${streamerId}&type=eq.results&captured_at=gte.${encodeQuery(since)}&select=id,captured_at,rows:raw->rows`,
+    [{ column: "captured_at", dir: "asc" }, { column: "id", dir: "asc" }],
+  );
+  return knownKeysFromRawRows(rows.map((row) => row.rows));
+}
+
+// 스트리머 관리자 화면 상단 확프 상태 줄 전용(관리자 모드에서만 호출): 스트리머 1 + (상태·설정·원본 최신) 병렬 3.
+export async function getExtensionConsoleBySlug(slug: string): Promise<{
+  status: ExtensionStatus | null;
+  config: ExtensionConfig;
+  serverNewestCaptureAt: string | null;
+}> {
+  const streamer = await requireStreamer(slug);
+  const [status, config, serverNewestCaptureAt] = await Promise.all([
+    getExtensionStatus(streamer.id),
+    getExtensionConfig(streamer.id),
+    latestRawCaptureAt(streamer.id),
+  ]);
+  return { status, config, serverNewestCaptureAt };
 }
