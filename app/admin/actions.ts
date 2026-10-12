@@ -246,6 +246,7 @@ export async function resetStreamerPinAction(
 
 // ── 확프 원격 스위치(수집 레인 1단계, 2026-10-12) ─────────────────────────
 // 스트리머별·전체 되읽기 켜기/끄기 등. 저장은 audit_logs 이벤트(스키마 0), 확프는 다음 하트비트(≤5분)에 따른다.
+// patch 로 바꿀 수 있는 키 = ExtensionConfig 전부(예: 오래 열린 탭 되읽기 끄기 { staleTabHours: 0 }, 주기 { staleSweepHours }).
 // 화면이 보낸 patch 는 믿지 않는다 — 아는 키만, 타입·범위는 서버에서 정제(mergeExtensionConfig).
 
 export type ExtensionConfigActionResult = { ok: boolean; error?: string; config?: ExtensionConfig; count?: number };

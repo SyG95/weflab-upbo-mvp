@@ -91,8 +91,9 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       lastAppliedAt: "2026-06-25T09:10:00.000Z",
       recordSum: 6,
       needsReviewSum: 0,
-      extensionConfig: EXTENSION_CONFIG_DEFAULT,
-      extension: mockExtension(47, { page: { loginOk: false } }),
+      // 오래 열린 탭 되읽기만 원격으로 끈 예(staleTabHours=0) — 목록에 설정 줄이 보인다.
+      extensionConfig: { ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0 },
+      extension: mockExtension(47, { page: { loginOk: false } }, { ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0 }),
     },
     {
       slug: "byulbit",

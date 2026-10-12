@@ -14,7 +14,13 @@ import DeleteStreamerButton from "./DeleteStreamerButton";
 import ResetDataButton from "./ResetDataButton";
 import { setExtensionConfigAction, setExtensionConfigForAllAction } from "./actions";
 import type { AdminStreamerSummary } from "@/lib/adminDashboard";
-import { formatElapsed, type ExtensionLightColor } from "@/lib/extensionStatus";
+import {
+  EXTENSION_CONFIG_DEFAULT,
+  extensionConfigSummary,
+  formatElapsed,
+  type ExtensionConfig,
+  type ExtensionLightColor,
+} from "@/lib/extensionStatus";
 
 function fmtKst(iso?: string): string {
   if (!iso) return "수집 없음";
@@ -65,8 +71,26 @@ function extensionTitle(ext: ExtensionSummary): string {
   return `${LIGHT_LABEL[ext.light.color]}: ${reasons} · ${formatElapsed(Date.now() - Date.parse(ext.updatedAt))} 전`;
 }
 
+// 되읽기 설정 줄은 켜져 있거나 기본값과 다른 값이 있을 때만 보인다(전부 기본·꺼짐이면 토글 툴팁에만).
+function showConfigLine(config: ExtensionConfig): boolean {
+  if (config.catchupEnabled) return true;
+  return (Object.keys(EXTENSION_CONFIG_DEFAULT) as Array<keyof ExtensionConfig>).some(
+    (key) => key !== "catchupEnabled" && config[key] !== EXTENSION_CONFIG_DEFAULT[key],
+  );
+}
+
 // 줄별 되읽기 스위치. 저장 중엔 낙관적으로 보여 주고, 저장 뒤 목록 새로고침(revalidate) 값으로 맞춘다.
-function CatchupToggle({ slug, enabled, disabled }: { slug: string; enabled: boolean; disabled: boolean }) {
+function CatchupToggle({
+  slug,
+  enabled,
+  summary,
+  disabled,
+}: {
+  slug: string;
+  enabled: boolean;
+  summary: string;
+  disabled: boolean;
+}) {
   const [pending, startTransition] = useTransition();
   const [shown, setShown] = useOptimistic(enabled);
   const [error, setError] = useState("");
@@ -74,7 +98,7 @@ function CatchupToggle({ slug, enabled, disabled }: { slug: string; enabled: boo
     <>
       <label
         className={styles.catchupToggle}
-        title="확프 되읽기(빠진 행 다시 읽기) — 서버 설정, 다음 하트비트(최대 5분)에 반영"
+        title={`확프 되읽기(빠진 행 다시 읽기) — ${summary}. 서버 설정, 다음 하트비트(최대 5분)에 반영`}
       >
         <input
           type="checkbox"
@@ -234,6 +258,12 @@ export default function StreamerList({
                             {s.extension.light.reasons.join(" · ")}
                           </span>
                         ) : null}
+                        {showConfigLine(s.extensionConfig) ? (
+                          <span className={styles.extConfig}>
+                            되읽기 {s.extensionConfig.catchupEnabled ? "켜짐" : "꺼짐"} ·{" "}
+                            {extensionConfigSummary(s.extensionConfig)}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <span className={styles.colRecords}>{s.recordSum.toLocaleString()}</span>
@@ -249,6 +279,7 @@ export default function StreamerList({
                       <CatchupToggle
                         slug={s.slug}
                         enabled={s.extensionConfig.catchupEnabled}
+                        summary={extensionConfigSummary(s.extensionConfig)}
                         disabled={isMock}
                       />
                       <Link href={`/admin/${s.slug}${suffix}`} className={styles.verifyLink}>

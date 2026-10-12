@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 
 // 서버가 최근 N일(기본 7, 1~14) 원본(raw_imports)에 이미 가진 행의 열쇠 목록 — 읽기 전용, 부수효과 없음.
 // 확프 0.4.0 이 재설치 직후(본 키 캐시가 빈 상태) 1회 받아 캐시를 채운다 → 서버가 이미 받은 행은 다시 안 보낸다.
-// 열쇠 규칙은 확프 content.js 와 같다(lib/extensionStatus.knownKeysFromRawRows). 각 목록 최대 5,000개.
+// 열쇠 규칙은 확프 content.js 와 같다(lib/extensionStatus.knownKeysFromRawRows): 결과 열쇠 + 금액 있는 모든 행의
+// 후원(don::) 열쇠(결과 유무 무관). 각 목록 최대 5,000개(최근 우선).
 export async function GET(request: Request) {
   try {
     const streamer = await resolveExtensionToken(extensionTokenFromRequest(request));

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   EXTENSION_CONFIG_DEFAULT,
   clampKnownKeysDays,
+  extensionConfigSummary,
   extensionScreenSummary,
   formatElapsed,
   knownKeysFromRawRows,
@@ -203,6 +204,8 @@ test("원격 스위치 정제: 기본값·범위 고정(되읽기 1~336시간, �
     catchupMaxPages: 10,
     catchupCooldownMinutes: 30,
     paused: false,
+    staleTabHours: 6,
+    staleSweepHours: 3,
   });
   const low = normalizeExtensionConfig({ catchupLookbackHours: 0, catchupMaxPages: -3, catchupCooldownMinutes: 1 });
   assert.deepEqual([low.catchupLookbackHours, low.catchupMaxPages, low.catchupCooldownMinutes], [1, 1, 5]);
@@ -214,6 +217,33 @@ test("원격 스위치 정제: 기본값·범위 고정(되읽기 1~336시간, �
   assert.equal(normalizeExtensionConfig({ catchupEnabled: "true", paused: 1 }).catchupEnabled, false);
   assert.equal(normalizeExtensionConfig({ catchupEnabled: "true", paused: 1 }).paused, false);
   assert.equal(normalizeExtensionConfig({ catchupEnabled: true }).catchupEnabled, true);
+});
+
+test("오래 열린 탭 되읽기: staleTabHours 0~48(0=끔, 기본 6), staleSweepHours 1~24(기본 3)", () => {
+  // 옛 이벤트(두 키 없음)는 기본값으로 읽힌다 — 확프 catchupDecision 의 기본과 같다
+  const legacy = normalizeExtensionConfig({ catchupEnabled: true, catchupLookbackHours: 48, catchupMaxPages: 10, catchupCooldownMinutes: 30, paused: false });
+  assert.equal(legacy.staleTabHours, 6);
+  assert.equal(legacy.staleSweepHours, 3);
+  assert.equal(normalizeExtensionConfig({ staleTabHours: 0 }).staleTabHours, 0, "0 은 '끔'이라 그대로 둔다");
+  assert.equal(normalizeExtensionConfig({ staleTabHours: -3 }).staleTabHours, 0);
+  assert.equal(normalizeExtensionConfig({ staleTabHours: 99 }).staleTabHours, 48);
+  assert.equal(normalizeExtensionConfig({ staleTabHours: "12" }).staleTabHours, 12);
+  assert.equal(normalizeExtensionConfig({ staleTabHours: "x" }).staleTabHours, 6);
+  assert.equal(normalizeExtensionConfig({ staleSweepHours: 0 }).staleSweepHours, 1);
+  assert.equal(normalizeExtensionConfig({ staleSweepHours: 99 }).staleSweepHours, 24);
+  assert.equal(normalizeExtensionConfig({ staleSweepHours: 2.6 }).staleSweepHours, 3);
+  // 원격으로 끄기: 다른 값은 그대로, staleTabHours 만 0
+  const current = { ...EXTENSION_CONFIG_DEFAULT, catchupEnabled: true, staleSweepHours: 5 };
+  assert.deepEqual(mergeExtensionConfig(current, { staleTabHours: 0 }), { ...current, staleTabHours: 0 });
+  // 목록 표시 한 줄
+  assert.equal(
+    extensionConfigSummary(EXTENSION_CONFIG_DEFAULT),
+    "최근 48시간 · 최대 10쪽 · 쿨다운 30분 · 오래 열린 탭 6시간↑ 3시간마다",
+  );
+  assert.equal(
+    extensionConfigSummary({ ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0, paused: true }),
+    "최근 48시간 · 최대 10쪽 · 쿨다운 30분 · 오래 열린 탭 끔 · 일시정지",
+  );
 });
 
 test("원격 스위치 병합: 온 키만 바뀌고 undefined·모르는 키는 무시", () => {
@@ -244,7 +274,7 @@ test("경과 표기와 화면 요약 한 줄", () => {
   assert.equal(extensionScreenSummary(normalizeHeartbeat(notList)), "후원관리 화면 아님");
 });
 
-test("본 키 시드: 확프 content.js 와 같은 결과·순수 후원 열쇠", () => {
+test("본 키 시드: 확프 content.js 와 같은 결과 열쇠 + 금액 있는 모든 행의 후원 열쇠", () => {
   const capture1 = [
     // sourceKey 그대로
     { sourceUid: "u1", results: [{ index: 0, sourceKey: "u1::0" }, { index: 1, sourceKey: "u1::1" }], donationAmount: 10 },
@@ -252,7 +282,7 @@ test("본 키 시드: 확프 content.js 와 같은 결과·순수 후원 열쇠"
     { sourceUid: "u2", results: [{ index: 2 }, { rouletteIndex: 5 }, {}] },
     // uid·sourceKey 둘 다 없음 → 열쇠 없음
     { sourceUid: "", fanId: "f3", results: [{ index: 0 }] },
-    // 결과 0개 + 금액 → don::{uid||fanId||닉네임}::{시각}::{금액}
+    // 금액 있는 행 → don::{uid||fanId||닉네임}::{시각}::{금액} (결과 유무 무관 — 위 u1 행도)
     { sourceUid: "u4", results: [], donationAmount: 1000, donateTimeText: "2026-10-12 10:00:00" },
     { sourceUid: "", fanId: "f5", fanNickname: "닉5", results: [], donationAmount: 0, donateTimeText: "2026-10-12 10:01:00" },
     { fanNickname: "닉6", donationAmount: 50 },
@@ -265,10 +295,14 @@ test("본 키 시드: 확프 content.js 와 같은 결과·순수 후원 열쇠"
   const keys = knownKeysFromRawRows([capture1, capture2, "not-a-list", null]);
   assert.deepEqual(keys.resultKeys, ["u1::1", "u2::2", "u2::5", "u2::0", "u1::0"]);
   assert.deepEqual(keys.donationKeys, [
+    "don::u1::::10",
     "don::u4::2026-10-12 10:00:00::1000",
     "don::f5::2026-10-12 10:01:00::0",
     "don::닉6::::50",
   ]);
+  // 결과가 있고 금액도 있는 행: 결과 열쇠와 후원 열쇠를 둘 다 만든다
+  const both = knownKeysFromRawRows([[{ sourceUid: "r9", donateTimeText: "2026-10-12 11:00:00", donationAmount: 175, results: [{ index: 0, sourceKey: "r9::0" }] }]]);
+  assert.deepEqual(both, { resultKeys: ["r9::0"], donationKeys: ["don::r9::2026-10-12 11:00:00::175"] });
 });
 
 test("본 키 시드 상한: 넘치면 가장 최근 것만 남긴다 / days 는 1~14(기본 7)", () => {

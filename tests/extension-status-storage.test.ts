@@ -159,6 +159,8 @@ test("원격 스위치: 기본값 → 줄별 저장(온 키만 병합) → 전�
     catchupMaxPages: 10,
     catchupCooldownMinutes: 30,
     paused: false,
+    staleTabHours: 6,
+    staleSweepHours: 3,
   });
   const streamerA = { id: "s-a", slug: "a", display_name: "A", threshold_percent: 2 };
   const first = await lib.setExtensionConfig(streamerA, { catchupMaxPages: 20 });
@@ -166,6 +168,12 @@ test("원격 스위치: 기본값 → 줄별 저장(온 키만 병합) → 전�
   const second = await lib.setExtensionConfig(streamerA, { catchupEnabled: true });
   assert.equal(second.catchupEnabled, true);
   assert.equal(second.catchupMaxPages, 20, "앞서 바꾼 값이 유지돼야 한다");
+  const third = await lib.setExtensionConfig(streamerA, { staleTabHours: 0 });
+  assert.equal(third.staleTabHours, 0, "오래 열린 탭 되읽기 원격 끄기(0)가 저장돼야 한다");
+  assert.equal(third.catchupEnabled, true);
+  const saved = state.audit.at(-1)?.payload as Record<string, unknown>;
+  assert.equal(saved.staleTabHours, 0);
+  assert.equal(saved.staleSweepHours, 3);
   const auditBefore = state.audit.length;
   assert.equal(await lib.setExtensionConfigForAll({ catchupEnabled: false }), 3);
   assert.equal(state.audit.length, auditBefore + 3);
@@ -174,6 +182,7 @@ test("원격 스위치: 기본값 → 줄별 저장(온 키만 병합) → 전�
   const map = await lib.getExtensionConfigMap();
   assert.equal(map.get("s-a")?.catchupEnabled, false);
   assert.equal(map.get("s-a")?.catchupMaxPages, 20, "전체 끄기도 각자 다른 설정은 유지");
+  assert.equal(map.get("s-a")?.staleTabHours, 0, "전체 끄기도 오래 열린 탭 설정은 유지");
   assert.equal(map.get("s-c")?.catchupMaxPages, 10);
   for (const row of state.audit) {
     assert.equal(row.action, "extension_config_updated");

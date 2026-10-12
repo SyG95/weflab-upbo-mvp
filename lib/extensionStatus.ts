@@ -143,12 +143,16 @@ export function normalizeHeartbeat(input: unknown): HeartbeatPayload {
 // ---------- 원격 스위치(서버 설정) ----------
 // 저장은 audit_logs(action=extension_config_updated) 최신 1건, 확프는 하트비트 응답으로 받아 그대로 따른다.
 // "룰렛 자동기록" 본 스위치는 스트리머 것이라 여기 없다(서버는 paused 로 긴급 정지만, 대신 켜주지 않음).
+// 오래 열린 탭 되읽기(확프 0.4.0 catchup-lib catchupDecision): 탭이 staleTabHours 이상 열려 있으면
+// staleSweepHours 마다 1회 되읽는다. staleTabHours=0 이면 이 사유를 끈다(서버가 값을 버리면 원격으로 못 끈다).
 export type ExtensionConfig = {
   catchupEnabled: boolean;
   catchupLookbackHours: number;
   catchupMaxPages: number;
   catchupCooldownMinutes: number;
   paused: boolean;
+  staleTabHours: number;
+  staleSweepHours: number;
 };
 
 export const EXTENSION_CONFIG_DEFAULT: ExtensionConfig = {
@@ -157,6 +161,8 @@ export const EXTENSION_CONFIG_DEFAULT: ExtensionConfig = {
   catchupMaxPages: 10,
   catchupCooldownMinutes: 30,
   paused: false,
+  staleTabHours: 6,
+  staleSweepHours: 3,
 };
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
@@ -173,7 +179,23 @@ export function normalizeExtensionConfig(input: unknown): ExtensionConfig {
     catchupMaxPages: clampInt(raw.catchupMaxPages, 1, 50, EXTENSION_CONFIG_DEFAULT.catchupMaxPages),
     catchupCooldownMinutes: clampInt(raw.catchupCooldownMinutes, 5, 1440, EXTENSION_CONFIG_DEFAULT.catchupCooldownMinutes),
     paused: raw.paused === true,
+    staleTabHours: clampInt(raw.staleTabHours, 0, 48, EXTENSION_CONFIG_DEFAULT.staleTabHours),
+    staleSweepHours: clampInt(raw.staleSweepHours, 1, 24, EXTENSION_CONFIG_DEFAULT.staleSweepHours),
   };
+}
+
+// 목록 표시용 한 줄: "최근 48시간 · 최대 10쪽 · 쿨다운 30분 · 오래 열린 탭 6시간↑ 3시간마다"(0이면 "오래 열린 탭 끔").
+export function extensionConfigSummary(config: ExtensionConfig): string {
+  const parts = [
+    `최근 ${config.catchupLookbackHours}시간`,
+    `최대 ${config.catchupMaxPages}쪽`,
+    `쿨다운 ${config.catchupCooldownMinutes}분`,
+    config.staleTabHours > 0
+      ? `오래 열린 탭 ${config.staleTabHours}시간↑ ${config.staleSweepHours}시간마다`
+      : "오래 열린 탭 끔",
+  ];
+  if (config.paused) parts.push("일시정지");
+  return parts.join(" · ");
 }
 
 // 온 키만 바꾸고 나머지는 현재 값 유지(모르는 키·undefined 는 무시) → 정제.
@@ -283,7 +305,8 @@ export function extensionScreenSummary(payload: HeartbeatPayload): string {
 // ---------- 본 키 시드(재설치 직후 캐시 채우기) ----------
 // 확프 content.js 와 "같은 열쇠"를 raw_imports.raw.rows 에서 다시 만든다.
 //   결과 열쇠: result.sourceKey || (sourceUid ? `${sourceUid}::${index ?? rouletteIndex ?? 0}` : "")
-//   순수 후원(결과 0개) 열쇠: don::{sourceUid||fanId||fanNickname}::{donateTimeText||""}::{donationAmount}
+//   후원 열쇠: 금액이 있는 모든 행(결과 유무 무관) — don::{sourceUid||fanId||fanNickname}::{donateTimeText||""}::{donationAmount}
+//   (결과 있던 행도 넣는다: 확프가 그 행을 "순수 후원" 모양으로 다시 보내지 않게, 2026-10-12 코디네이터 요청)
 // rowLists 는 수집 시각 오름차순 — 상한을 넘으면 최근 것만 남긴다.
 export const KNOWN_KEYS_CAP = 5000;
 export const KNOWN_KEYS_DAYS_DEFAULT = 7;
@@ -321,7 +344,6 @@ export function knownKeysFromRawRows(
         const index = keyPart(result.index ?? result.rouletteIndex ?? 0);
         pushRecent(resultKeys, sourceKey || (uid ? `${uid}::${index}` : ""));
       }
-      if (results.length > 0) continue;
       const amount = keyPart(row.donationAmount);
       if (!amount) continue;
       const who = uid || keyPart(row.fanId) || keyPart(row.fanNickname);
