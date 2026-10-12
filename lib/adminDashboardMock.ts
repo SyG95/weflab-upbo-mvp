@@ -12,6 +12,7 @@ import type {
 } from "@/lib/adminDashboard";
 import {
   EXTENSION_CONFIG_DEFAULT,
+  extensionInfoNotes,
   extensionScreenSummary,
   normalizeHeartbeat,
   trafficLight,
@@ -50,6 +51,7 @@ function mockExtension(
     light: trafficLight({ status, now }),
     config,
     screenSummary: extensionScreenSummary(payload),
+    notes: extensionInfoNotes(payload),
   };
 }
 
@@ -66,7 +68,8 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       recordSum: 2,
       needsReviewSum: 1,
       extensionConfig: catchupOn,
-      extension: mockExtension(3, {}, catchupOn),
+      // 초록 그대로 + 참고 정보(되읽기 중단됨) — 색은 안 바뀐다.
+      extension: mockExtension(3, { collector: { catchupSuspended: true } }, catchupOn),
     },
     {
       slug: "gomdori",

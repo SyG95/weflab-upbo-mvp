@@ -383,6 +383,13 @@
   color: #c0392b;
 }
 
+/* 신호등 색과 무관한 참고 정보(되읽기 중단됨 / 시드 실패: …) */
+.extNotes {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 /* 되읽기 원격 설정 한 줄(켜짐이거나 기본값과 다를 때만): "되읽기 켜짐 · 최근 48시간 · … · 오래 열린 탭 6시간↑ 3시간마다" */
 .extConfig {
   font-size: 11px;

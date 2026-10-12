@@ -1,8 +1,10 @@
 // 스트리머 관리자 화면 상단 "확프 상태" 한 줄(수집 레인 1단계, 2026-10-12) — 서버 컴포넌트, 사실만 적는다.
-// 예: 확프 ● 3분 전 · v0.4.0 · 화면 100행(10-05~10-12) · 더보기 있음 · 되읽기 꺼짐 — 검색어 걸림
+// 예: 확프 ● 3분 전 · v0.4.0 · 화면 100행(10-05~10-12) · 더보기 있음 · 되읽기 꺼짐 — 검색어 걸림 · 되읽기 중단됨
 // 점 색·사유는 /admin 목록과 같은 trafficLight 규칙. 하트비트는 확프 0.4.0 이상만 보낸다(팬 화면에는 안 나옴).
+// 참고 정보(되읽기 중단됨 / 시드 실패: …)는 색을 바꾸지 않고 툴팁·사유 글자 뒤에만 흐린 글씨로 붙는다.
 import styles from "./extensionStatus.module.css";
 import {
+  extensionInfoNotes,
   formatElapsed,
   screenRangeLabel,
   trafficLight,
@@ -54,6 +56,8 @@ export default function ExtensionStatusLine({
   facts.push(`되읽기 ${config.catchupEnabled ? "켜짐" : "꺼짐"}`);
   if (config.paused) facts.push("서버 일시정지");
   const reasonText = light.reasons.join(" · ");
+  const noteText = extensionInfoNotes(payload).join(" · ");
+  const tooltip = [reasonText, noteText].filter(Boolean).join(" · ") || "정상";
   return (
     <p className={styles.line} data-light={light.color}>
       <span className={styles.label}>확프</span>
@@ -62,10 +66,11 @@ export default function ExtensionStatusLine({
         data-light={light.color}
         role="img"
         aria-label={`확프 ${LIGHT_NAME[light.color]}`}
-        title={reasonText || "정상"}
+        title={tooltip}
       />
       <span className={styles.facts}>{facts.join(" · ")}</span>
       {reasonText ? <span className={styles.reasons}>— {reasonText}</span> : null}
+      {noteText ? <span className={styles.notes}>{reasonText ? `· ${noteText}` : `— ${noteText}`}</span> : null}
     </p>
   );
 }

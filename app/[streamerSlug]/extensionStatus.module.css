@@ -63,3 +63,10 @@
 .muted {
   color: var(--muted);
 }
+
+/* 참고 정보(되읽기 중단됨 / 시드 실패) — 색 무관, 흐린 글씨 */
+.notes {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}

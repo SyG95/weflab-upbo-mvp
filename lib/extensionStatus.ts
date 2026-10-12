@@ -38,6 +38,9 @@ export type HeartbeatPayload = {
     // 확프 0.4.0(~/upbo-beta/extension-v2-next) 이 실제로 보내는 진단값 — 되읽기 실패 사유·탭을 연 시각.
     lastCatchupError?: string | null;
     pageLoadedAt?: string | null;
+    // 세션·제한 오류 뒤 새로고침 전까지 되읽기 중단 / 본 키 시드 실패 사유(120자). 색에는 안 쓰고 정보로만 보여 준다.
+    catchupSuspended?: boolean;
+    seedError?: string | null;
   };
   donations?: {
     enabled: boolean;
@@ -127,6 +130,8 @@ export function normalizeHeartbeat(input: unknown): HeartbeatPayload {
   if (collector.lastCatchupReason !== undefined) out.collector.lastCatchupReason = textOrNull(collector.lastCatchupReason);
   if (collector.lastCatchupError !== undefined) out.collector.lastCatchupError = textOrNull(collector.lastCatchupError);
   if (collector.pageLoadedAt !== undefined) out.collector.pageLoadedAt = textOrNull(collector.pageLoadedAt);
+  if (collector.catchupSuspended !== undefined) out.collector.catchupSuspended = flag(collector.catchupSuspended);
+  if (collector.seedError !== undefined) out.collector.seedError = textOrNull(collector.seedError);
   if (root.donations && typeof root.donations === "object" && !Array.isArray(root.donations)) {
     const donations = objectOf(root.donations);
     out.donations = {
@@ -275,6 +280,14 @@ export function trafficLight(args: {
   }
   if (!payload.autoSyncEnabled) yellow.push("자동기록 꺼짐");
   return yellow.length > 0 ? { color: "yellow", reasons: yellow } : { color: "green", reasons: [] };
+}
+
+// 신호등 색과 무관한 참고 정보(툴팁·사유 글자 뒤에 덧붙인다): 되읽기 중단 / 본 키 시드 실패.
+export function extensionInfoNotes(payload: HeartbeatPayload): string[] {
+  const notes: string[] = [];
+  if (payload.collector.catchupSuspended === true) notes.push("되읽기 중단됨");
+  if (payload.collector.seedError) notes.push(`시드 실패: ${payload.collector.seedError}`);
+  return notes;
 }
 
 // ---------- 화면 요약 ----------

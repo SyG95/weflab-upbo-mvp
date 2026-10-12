@@ -5,6 +5,7 @@ import {
   EXTENSION_CONFIG_DEFAULT,
   clampKnownKeysDays,
   extensionConfigSummary,
+  extensionInfoNotes,
   extensionScreenSummary,
   formatElapsed,
   knownKeysFromRawRows,
@@ -193,6 +194,38 @@ test("허용 목록만 남기고, 문자열 120자(코드포인트)·숫자 0 �
   assert.equal(withCatchup.collector.lastCatchupError, null);
   assert.equal(withCatchup.collector.pageLoadedAt, minutesAgo(400));
   assert.deepEqual(withCatchup.donations, { enabled: true, lastSuccessAt: null, lastErrorAt: null, lastError: "3", observedRows: 50 });
+});
+
+test("되읽기 중단·시드 실패: 허용 목록에 남고(시드 사유 120자), 안 보낸 빌드와 구분된다", () => {
+  const sent = normalizeHeartbeat({
+    ...healthy(),
+    collector: { ...(healthy().collector as object), catchupSuspended: true, seedError: `  ${"X".repeat(200)}  ` },
+  });
+  assert.equal(sent.collector.catchupSuspended, true);
+  assert.equal(sent.collector.seedError, "X".repeat(120));
+  const cleared = normalizeHeartbeat({ ...healthy(), collector: { catchupSuspended: false, seedError: null } });
+  assert.equal(cleared.collector.catchupSuspended, false);
+  assert.equal(cleared.collector.seedError, null);
+  const coerced = normalizeHeartbeat({ ...healthy(), collector: { catchupSuspended: "yes", seedError: 3 } });
+  assert.equal(coerced.collector.catchupSuspended, false);
+  assert.equal(coerced.collector.seedError, "3");
+  const absent = normalizeHeartbeat(healthy());
+  assert.equal("catchupSuspended" in absent.collector, false);
+  assert.equal("seedError" in absent.collector, false);
+});
+
+test("되읽기 중단·시드 실패는 색을 바꾸지 않고 참고 정보로만", () => {
+  const withNotes = (body: Record<string, unknown>) => {
+    body.collector = { ...(body.collector as object), catchupSuspended: true, seedError: "HTTP 401" };
+    return body;
+  };
+  assert.deepEqual(light(withNotes(healthy())), { color: "green", reasons: [] });
+  assert.deepEqual(light(withNotes(withFilter({ searchActive: true }))), { color: "yellow", reasons: ["검색어 걸림"] });
+  assert.deepEqual(extensionInfoNotes(normalizeHeartbeat(withNotes(healthy()))), ["되읽기 중단됨", "시드 실패: HTTP 401"]);
+  assert.deepEqual(extensionInfoNotes(normalizeHeartbeat(healthy())), []);
+  const onlySeed = healthy();
+  onlySeed.collector = { ...(onlySeed.collector as object), catchupSuspended: false, seedError: "시드 3분 초과 — 시드 없이 진행" };
+  assert.deepEqual(extensionInfoNotes(normalizeHeartbeat(onlySeed)), ["시드 실패: 시드 3분 초과 — 시드 없이 진행"]);
 });
 
 test("원격 스위치 정제: 기본값·범위 고정(되읽기 1~336시간, 페이지 1~50, 쿨다운 5~1440분)", () => {

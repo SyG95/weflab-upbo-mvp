@@ -65,10 +65,11 @@ const LIGHT_LABEL: Record<ExtensionLightColor, string> = {
 
 type ExtensionSummary = NonNullable<AdminStreamerSummary["extension"]>;
 
-// 툴팁: 사유(없으면 "정상") · 마지막 하트비트 N분 전. 화면 렌더 시각 기준이라 SSR/수화 차이는 무시한다.
+// 툴팁: 사유(없으면 "정상") · 참고 정보(색 무관) · 마지막 하트비트 N분 전. 렌더 시각 기준이라 SSR/수화 차이는 무시한다.
 function extensionTitle(ext: ExtensionSummary): string {
   const reasons = ext.light.reasons.length > 0 ? ext.light.reasons.join(" · ") : "정상";
-  return `${LIGHT_LABEL[ext.light.color]}: ${reasons} · ${formatElapsed(Date.now() - Date.parse(ext.updatedAt))} 전`;
+  const notes = ext.notes.length > 0 ? ` · ${ext.notes.join(" · ")}` : "";
+  return `${LIGHT_LABEL[ext.light.color]}: ${reasons}${notes} · ${formatElapsed(Date.now() - Date.parse(ext.updatedAt))} 전`;
 }
 
 // 되읽기 설정 줄은 켜져 있거나 기본값과 다른 값이 있을 때만 보인다(전부 기본·꺼짐이면 토글 툴팁에만).
@@ -257,6 +258,9 @@ export default function StreamerList({
                           <span className={styles.extReasons} data-light={s.extension.light.color}>
                             {s.extension.light.reasons.join(" · ")}
                           </span>
+                        ) : null}
+                        {s.extension && s.extension.notes.length > 0 ? (
+                          <span className={styles.extNotes}>{s.extension.notes.join(" · ")}</span>
                         ) : null}
                         {showConfigLine(s.extensionConfig) ? (
                           <span className={styles.extConfig}>

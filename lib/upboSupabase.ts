@@ -63,6 +63,7 @@ import {
   type FixedPriceJudgeEntry,
 } from "./fixedPricePeriod";
 import {
+  extensionInfoNotes,
   extensionScreenSummary,
   knownKeysFromRawRows,
   mergeExtensionConfig,
@@ -1143,6 +1144,8 @@ export type AdminStreamerIndexRow = {
     light: ExtensionLight;
     config: ExtensionConfig;
     screenSummary: string;
+    // 색과 무관한 참고 정보(되읽기 중단됨 / 시드 실패: …)
+    notes: string[];
   };
 };
 
@@ -1209,6 +1212,7 @@ export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> 
             light: trafficLight({ status, now, serverNewestCaptureAt: undefined }),
             config,
             screenSummary: extensionScreenSummary(status.payload),
+            notes: extensionInfoNotes(status.payload),
           }
         : undefined,
     };
