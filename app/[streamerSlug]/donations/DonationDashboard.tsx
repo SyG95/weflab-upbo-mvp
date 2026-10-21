@@ -1170,6 +1170,52 @@ function RouletteLab({
   );
 }
 
+// CSV 한 칸. 쉼표·따옴표·줄바꿈은 따옴표로 감싸고, =·+·-·@ 로 시작하는 닉네임은
+// 엑셀이 수식으로 읽지 않게 앞에 ' 를 붙인다.
+function csvCell(value: string | number): string {
+  let text = String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+// KST 날짜만 "2026-10-21" — 파일 이름용.
+function kstDate(iso: string | null): string {
+  const k = epochToParts(iso ? new Date(iso).getTime() : Date.now());
+  return `${k.y}-${pad(k.mo)}-${pad(k.d)}`;
+}
+
+// 룰렛 순위를 엑셀에서 바로 열리는 CSV로 내려받는다. 화면(50명)과 달리 전원을 담는다.
+// 계정ID 칸은 넣지 않는다(sy 결정 2026-10-21: 파일이 밖으로 돌아도 ID가 안 나가게).
+function downloadRouletteCsv(slug: string, rows: RankingRow[], from: string | null, to: string | null, selectedKey: string) {
+  const lines = [["순위", "닉네임", "합계(개)", "룰렛 횟수", "마지막 룰렛 시각"].map(csvCell).join(",")];
+  rows.forEach((row, index) => {
+    const at = row.lastDonationAt ? epochToParts(new Date(row.lastDonationAt).getTime()) : null;
+    lines.push(
+      [
+        index + 1,
+        row.fanNickname || "(닉네임 없음)",
+        row.amountSum,
+        row.eventCount,
+        at ? `${at.y}-${pad(at.mo)}-${pad(at.d)} ${pad(at.h)}:${pad(at.mi)}` : "",
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+  });
+  const amountLabel = selectedKey ? `${selectedKey.replace(/,/g, "+")}개` : "전체";
+  const periodLabel = !from && !to ? "전체기간" : `${from ? kstDate(from) : "처음"}~${kstDate(to)}`;
+  // 맨 앞 BOM = 엑셀이 한글을 UTF-8로 읽게 하는 표시.
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slug}_룰렛_${amountLabel}_${periodLabel}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // 룰렛 탭 — 이 스트리머가 실제로 룰렛을 돌린 후원 갯수 목록을 칩으로 보여주고,
 // 고른 갯수의 계정별 순위(룰렛 횟수)를 보여준다. 개인후원과 무관하게 has_roulette=true만.
 function RouletteTab({
@@ -1272,6 +1318,15 @@ function RouletteTab({
               총 <b>{fmtNum(totals.amountSum)}</b>개 · 룰렛 <b>{fmtNum(totals.eventCount)}</b>회 ·{" "}
               <b>{fmtNum(totals.fanCount)}</b>명
             </span>
+          ) : null}
+          {!loading && !error && totals && totals.eventCount > 0 ? (
+            <button
+              type="button"
+              className={styles.exportBtn}
+              onClick={() => downloadRouletteCsv(slug, data?.rankings ?? [], from, to, selectedKey)}
+            >
+              엑셀로 받기
+            </button>
           ) : null}
         </div>
         {!loading && !error && totals ? (

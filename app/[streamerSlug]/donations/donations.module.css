@@ -437,6 +437,27 @@
   font-variant-numeric: tabular-nums;
 }
 
+.exportBtn {
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.18s ease, transform 0.12s ease;
+}
+
+.exportBtn:hover {
+  border-color: var(--stamp);
+}
+
+.exportBtn:active {
+  transform: scale(0.95);
+}
+
 .condError {
   font-size: 12px;
   font-weight: 700;
