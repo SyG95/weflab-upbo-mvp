@@ -1213,7 +1213,8 @@ function downloadRouletteCsv(slug: string, rows: RankingRow[], from: string | nu
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Safari 는 바로 해제하면 다운로드가 취소될 수 있어 늦춰서 해제.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 // 룰렛 탭 — 이 스트리머가 실제로 룰렛을 돌린 후원 갯수 목록을 칩으로 보여주고,
@@ -1261,7 +1262,10 @@ function RouletteTab({
         if (err.name === "AbortError") return;
         setError(err.message || "룰렛 집계를 불러오지 못했습니다.");
       })
-      .finally(() => setLoading(false));
+      // 칩을 연달아 누르면 앞 요청이 취소된다. 취소된 요청이 로딩을 끄면 옛 표·옛 파일이 새 이름표로 보이므로 무시.
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     return () => controller.abort();
   }, [slug, from, to, selectedKey, reloadKey]);
 
