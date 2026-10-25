@@ -122,6 +122,9 @@ export async function PATCH(request: Request, context: RouteContext) {
 export async function GET(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
+    // POST/PATCH 와 동일한 관리자 잠금. 이 GET 은 운영 이벤트(PIN 해시가 든 audit_logs 등)로
+    // 번질 수 있는 service_role 조회라, 로그인 없이 열어 두지 않는다(2026-10-18 점검 critical).
+    await requireSheetAdmin(streamerSlug);
     const url = new URL(request.url);
     const upboEntryId = url.searchParams.get("upboEntryId") || "";
     if (!upboEntryId) return jsonError(new Error("upboEntryId query param is required"));

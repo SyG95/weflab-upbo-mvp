@@ -4517,9 +4517,11 @@ export async function recordItemEvent(
   upboEntryId: string,
   input: RecordItemEventInput,
 ) {
+  // entry id 는 쿼리 문자열에 그대로 이어붙으므로 UUID 가 아니면 거부한다(다른 수정 경로와 동일 규칙).
+  if (!UUID_RE.test(upboEntryId)) throw new Error("invalid entry id");
   const streamer = await requireStreamer(slug);
   const entries = await supabaseFetch<UpboEntryRow[]>(
-    `/${tableName("upbo_entries")}?id=eq.${upboEntryId}&streamer_id=eq.${streamer.id}&select=*&limit=1`,
+    `/${tableName("upbo_entries")}?id=eq.${encodeQuery(upboEntryId)}&streamer_id=eq.${streamer.id}&select=*&limit=1`,
   );
   const entry = entries[0];
   if (!entry) {
@@ -4530,8 +4532,9 @@ export async function recordItemEvent(
 
   // 같은 이벤트를 두 번 되돌리면 수량이 이중 복구되므로 서버에서 차단한다.
   if (input.eventType === "admin_adjustment" && input.revertOf?.eventId) {
+    // revertOfEventId 도 입력값이라 인코딩해서 넣는다(쿼리 주입 방지).
     const dupes = await supabaseFetch<Array<{ id: string }>>(
-      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamer.id}&event_type=eq.admin_adjustment&after_json->>revertOfEventId=eq.${input.revertOf.eventId}&select=id&limit=1`,
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamer.id}&event_type=eq.admin_adjustment&after_json->>revertOfEventId=eq.${encodeQuery(input.revertOf.eventId)}&select=id&limit=1`,
     );
     if (dupes.length > 0) {
       const error = new Error("이미 되돌린 처리예요.");
@@ -4608,9 +4611,13 @@ export async function recordItemEvent(
 }
 
 export async function getItemEvents(slug: string, upboEntryId: string) {
+  // 입력 id 는 쿼리 문자열에 그대로 이어붙으므로(service_role 호출) UUID 가 아니면 거부하고,
+  // 통과한 값도 인코딩해서 넣는다 — '&'/'#' 등으로 다른 테이블·필터를 끼워 넣는 주입을 막는다
+  // (2026-10-18 점검 critical: audit_logs 의 PIN 해시 읽기 → pass-the-hash 로그인).
+  if (!UUID_RE.test(upboEntryId)) throw new Error("invalid entry id");
   const streamer = await requireStreamer(slug);
   const rows = await supabaseFetch<ItemEventRow[]>(
-    `/${tableName("upbo_item_events")}?upbo_entry_id=eq.${upboEntryId}&streamer_id=eq.${streamer.id}&select=*&order=created_at.asc`,
+    `/${tableName("upbo_item_events")}?upbo_entry_id=eq.${encodeQuery(upboEntryId)}&streamer_id=eq.${streamer.id}&select=*&order=created_at.asc`,
   );
   return rows.map(mapItemEvent);
 }
