@@ -10,8 +10,12 @@
 //   1) 이력이 없으면 첫 저장은 값이 같아도 1줄(baseline) — 그 시각부터 정확해진다.
 //   2) 이력이 있으면 "새 값이 최신 after 와 다르거나, 지금 DB 값(before)이 최신 after 와 다를 때"만 1줄.
 //      후자는 기록 없이 바뀐 흔적(다른 경로·기록 실패)을 다음 저장 때 메우는 장치다.
-//   3) 그때 기준: t 이전 마지막 이력의 after(정확). 그 이력과 다음 이력 사이에 기록 없는 변경 흔적이
-//      있으면 근사. 이력 시작 전이면 t 이전 마지막 반영 배치 스냅샷(근사), 그것도 없으면 현재 값(근사).
+//   3) 그때 기준: t 이전 마지막 이력의 after(정확). 다만 "그 뒤로 기록 없이 바뀐 흔적"이 있으면 근사 —
+//      다음 이력이 있으면 그 before 가, 마지막 이력이면 지금 DB 값(current)이 after 와 달라야 흔적이다
+//      (설정 저장의 기록 실패 503 뒤 다시 저장 안 함·관리자 등록 best-effort 실패·두 탭 엇갈린 저장).
+//      이력 시작 전이면 t 이전 마지막 반영 배치 스냅샷(근사), 그것도 없으면 현재 값(근사).
+//   4) 같은 시각 경계: 이력은 "t 보다 앞"만(저장과 같은 시각의 후원은 바뀌기 전 값으로 보수적으로 본다),
+//      배치는 "t 이하"(그 반영 시각에 실제로 쓰인 값의 스냅샷이므로 같은 시각도 그 값).
 
 export const THRESHOLD_PERCENT_ACTION = "threshold_percent_updated";
 
@@ -94,9 +98,9 @@ export function thresholdPercentAt(
   if (index >= 0) {
     const picked = rows[index];
     const next = rows[index + 1];
-    // 다음 이력의 before 가 이번 after 와 다르면, 그 사이 어딘가에서 기록 없이 바뀐 것 — 시점을 모른다.
-    const gapBefore = next ? next.before : null;
-    const exact = !next || gapBefore === null || same(gapBefore, picked.after);
+    // 다음 이력의 before(마지막 이력이면 지금 DB 값)가 이번 after 와 다르면, 그 사이 어딘가에서 기록 없이
+    // 바뀐 것 — 시점을 모른다. 첫 줄이 아닌데 before 가 비어 있는 줄(모양이 깨짐)도 확인할 수 없으니 근사.
+    const exact = next ? next.before !== null && same(next.before, picked.after) : same(picked.after, current);
     return { value: picked.after, exact, source: "history" };
   }
   const batch = batches

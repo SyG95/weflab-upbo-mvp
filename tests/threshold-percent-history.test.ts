@@ -67,10 +67,11 @@ test("그때 기준%: t 이전 마지막 이력(정확), 경계는 '이전'만",
     { at: "2026-10-20T00:00:00Z", before: 2, after: 2 },
     { at: "2026-10-22T00:00:00Z", before: 2, after: 5 },
   ];
-  assert.deepEqual(thresholdPercentAt(T("2026-10-21T00:00:00Z"), history, [], 9), { value: 2, exact: true, source: "history" });
-  assert.deepEqual(thresholdPercentAt(T("2026-10-23T00:00:00Z"), history, [], 9), { value: 5, exact: true, source: "history" });
+  // 지금 DB 값(current)=5 — 마지막 이력과 맞는 정상 상태
+  assert.deepEqual(thresholdPercentAt(T("2026-10-21T00:00:00Z"), history, [], 5), { value: 2, exact: true, source: "history" });
+  assert.deepEqual(thresholdPercentAt(T("2026-10-23T00:00:00Z"), history, [], 5), { value: 5, exact: true, source: "history" });
   // 바뀐 바로 그 시각의 후원은 바뀌기 전 값(같은 시각은 이전 이력만 인정)
-  assert.deepEqual(thresholdPercentAt(T("2026-10-22T00:00:00Z"), history, [], 9), { value: 2, exact: true, source: "history" });
+  assert.deepEqual(thresholdPercentAt(T("2026-10-22T00:00:00Z"), history, [], 5), { value: 2, exact: true, source: "history" });
 });
 
 test("그때 기준%: 다음 이력의 before 가 어긋나면 그 사이는 근사", () => {
@@ -78,8 +79,44 @@ test("그때 기준%: 다음 이력의 before 가 어긋나면 그 사이는 근
     { at: "2026-10-20T00:00:00Z", before: 2, after: 2 },
     { at: "2026-10-25T00:00:00Z", before: 5, after: 2 }, // 20~25일 사이 어딘가에서 기록 없이 5가 됐었다
   ];
-  assert.deepEqual(thresholdPercentAt(T("2026-10-22T00:00:00Z"), history, [], 9), { value: 2, exact: false, source: "history" });
-  assert.deepEqual(thresholdPercentAt(T("2026-10-26T00:00:00Z"), history, [], 9), { value: 2, exact: true, source: "history" });
+  assert.deepEqual(thresholdPercentAt(T("2026-10-22T00:00:00Z"), history, [], 2), { value: 2, exact: false, source: "history" });
+  assert.deepEqual(thresholdPercentAt(T("2026-10-26T00:00:00Z"), history, [], 2), { value: 2, exact: true, source: "history" });
+});
+
+test("그때 기준%: 마지막 이력 뒤 지금 DB 값이 다르면 그 구간은 근사(기록 실패 후 다시 저장 안 함·엇갈린 저장)", () => {
+  // 기준선 2 → 10/22 에 5로 저장했지만 이력 쓰기 실패(503)하고 다시 저장하지 않음: DB 5, 마지막 이력 after 2
+  const failed = [{ at: "2026-10-20T00:00:00Z", before: 2, after: 2 }];
+  assert.deepEqual(thresholdPercentAt(T("2026-10-23T00:00:00Z"), failed, [], 5), { value: 2, exact: false, source: "history" });
+  // 두 탭 동시 저장이 엇갈려 DB 3, 마지막 이력 after 5
+  const crossed = [
+    { at: "2026-10-20T00:00:00Z", before: 2, after: 2 },
+    { at: "2026-10-22T00:00:00Z", before: 2, after: 5 },
+  ];
+  assert.deepEqual(thresholdPercentAt(T("2026-10-23T00:00:00Z"), crossed, [], 3), { value: 5, exact: false, source: "history" });
+  // 앞 구간(다음 이력 before 가 맞음)은 그대로 정확
+  assert.deepEqual(thresholdPercentAt(T("2026-10-21T00:00:00Z"), crossed, [], 3), { value: 2, exact: true, source: "history" });
+});
+
+test("그때 기준%: 첫 줄이 아닌데 before 가 비어 있으면(모양 깨짐) 앞 구간은 근사", () => {
+  const history = [
+    { at: "2026-10-20T00:00:00Z", before: 2, after: 2 },
+    { at: "2026-10-22T00:00:00Z", before: null, after: 5 },
+  ];
+  assert.deepEqual(thresholdPercentAt(T("2026-10-21T00:00:00Z"), history, [], 5), { value: 2, exact: false, source: "history" });
+  // 새 스트리머 생성(첫 줄 before 없음)은 정상 — 그 줄이 마지막이고 DB 값과 같으면 정확
+  assert.deepEqual(
+    thresholdPercentAt(T("2026-10-21T00:00:00Z"), [{ at: "2026-10-20T00:00:00Z", before: null, after: 2 }], [], 2),
+    { value: 2, exact: true, source: "history" },
+  );
+});
+
+test("그때 기준%: 배치 경계는 '이하' — 반영 시각과 같은 시각의 후원은 그 배치 값", () => {
+  const batches = [
+    { appliedAt: "2026-10-10T00:00:00Z", thresholdPercent: 2 },
+    { appliedAt: "2026-10-12T00:00:00Z", thresholdPercent: 4 },
+  ];
+  assert.deepEqual(thresholdPercentAt(T("2026-10-12T00:00:00Z"), [], batches, 9), { value: 4, exact: false, source: "batch" });
+  assert.deepEqual(thresholdPercentAt(T("2026-10-11T23:59:59Z"), [], batches, 9), { value: 2, exact: false, source: "batch" });
 });
 
 test("그때 기준%: 이력 시작 전은 그 시각 이전 마지막 반영 배치(근사), 없으면 현재 값(근사)", () => {
@@ -101,7 +138,9 @@ const state = {
   streamers: [] as Row[],
   audit: [] as Row[],
   failAuditPost: false,
+  failHistoryGet: false, // 기준% 이력 "읽기"만 실패시킨다
   heads: [] as string[],
+  gets: [] as string[],
   clock: Date.parse("2026-10-25T00:00:00Z"),
 };
 
@@ -161,8 +200,10 @@ const server = http.createServer(async (req, res) => {
       }
       return send(201, "");
     }
+    state.gets.push(`${url.pathname}?${q.toString()}`);
     const action = eqParam(q, "action");
     const sid = eqParam(q, "streamer_id");
+    if (state.failHistoryGet && action === THRESHOLD_PERCENT_ACTION) return send(500, { message: "read boom" });
     const rows = state.audit
       .filter((r) => r.action === action && (!sid || r.streamer_id === sid))
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
@@ -227,6 +268,33 @@ test("설정 저장: 이력 쓰기 실패면 값은 저장되고 ThresholdHistor
   // 같은 값(7)으로 다시 저장: DB 7 ≠ 최신 이력 after 2 → 메운다
   await lib.setStreamerSettings("bbb", { thresholdPercent: 7 });
   assert.deepEqual(historyOf("s-b").at(-1), { before: 7, after: 7, source: "settings" });
+});
+
+test("설정 저장: 이력 '읽기'가 실패해도 값은 저장되고 같은 ThresholdHistoryWriteError(503 안내)", async () => {
+  state.streamers = [{ id: "s-r", slug: "rrr", display_name: "R", threshold_percent: 2 }];
+  state.audit = [];
+  state.failHistoryGet = true;
+  await assert.rejects(
+    () => lib.setStreamerSettings("rrr", { thresholdPercent: 6 }),
+    (error: unknown) => error instanceof lib.ThresholdHistoryWriteError,
+  );
+  state.failHistoryGet = false;
+  assert.equal(state.streamers[0].threshold_percent, 6, "값 자체는 저장됨");
+  assert.equal(historyOf("s-r").length, 0);
+});
+
+test("팬 페이지 오버레이 조회(getStreamerState)에 기준% 이력 action 이 들어가지 않는다", async () => {
+  state.streamers = [{ id: "s-e", slug: "eee", display_name: "E", threshold_percent: 2 }];
+  state.audit = [];
+  state.gets = [];
+  await lib.getStreamerState("eee").catch(() => null); // 빈 가짜 DB 라 중간에 실패해도 조회 모양만 본다
+  const overlay = state.gets
+    .map((g) => decodeURIComponent(g))
+    .find((g) => g.startsWith("/rest/v1/audit_logs") && g.includes("action=in.("));
+  assert.ok(overlay, "오버레이 묶음 조회가 있어야 한다");
+  const list = overlay!.match(/action=in\.\(([^)]*)\)/)![1].split(",");
+  assert.ok(list.includes("threshold_overrides_updated"), "기존 오버레이 목록은 그대로");
+  assert.ok(!list.includes(THRESHOLD_PERCENT_ACTION), "기준% 이력은 팬 페이지로 나가지 않는다");
 });
 
 test("설정 저장: 기준% 없이 저장하면 이력을 건드리지 않는다", async () => {
