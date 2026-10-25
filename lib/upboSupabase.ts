@@ -58,6 +58,12 @@ import { cleanManualTabHint, storableManualTabHint, type ManualTabHint } from ".
 import { normalizeFanRevealScope, type FanRevealScope } from "./fanRevealScope";
 import { planCouponViewerMerge, type CouponMergeMove } from "./couponMerge";
 import {
+  THRESHOLD_PERCENT_ACTION,
+  parseThresholdHistoryRow,
+  thresholdChangeToRecord,
+  type ThresholdPercentChange,
+} from "./thresholdHistory";
+import {
   isFixedPeriodExpired,
   judgeFixedPeriod,
   type FixedPriceJudgeEntry,
@@ -643,6 +649,8 @@ export async function upsertStreamer(input: {
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
     throw new Error("thresholdPercent must be a number between 0 and 100");
   }
+  // 기준% 이력용 "이전 값". 이 경로는 기존 슬러그도 덮어쓰므로(기준이 기본값 2로 바뀔 수 있음) 이력을 남긴다.
+  const existing = await getStreamerRow(slug);
   const rows = await supabaseFetch<StreamerRow[]>(`/${tableName("streamers")}?on_conflict=slug`, {
     method: "POST",
     headers: { prefer: "resolution=merge-duplicates,return=representation" },
@@ -653,6 +661,17 @@ export async function upsertStreamer(input: {
       updated_at: new Date().toISOString(),
     }),
   });
+  // 운영 콘솔·관리 API 경로는 이력 기록이 실패해도 생성·저장 자체는 성공시킨다(다음 설정 저장이 흔적을 메운다).
+  try {
+    await recordThresholdPercentChange(rows[0], {
+      before: existing ? Number(existing.threshold_percent) : null,
+      after: threshold,
+      source: "admin_upsert",
+      actor: "operator",
+    });
+  } catch (error) {
+    console.warn("[threshold history] admin_upsert record failed:", (error as Error).message);
+  }
   return mapStreamer(rows[0]);
 }
 
@@ -703,11 +722,13 @@ export type ResetScope = {
 export type ResetCount = { key: string; label: string; count: number };
 
 // 리셋 후에도 남아야 하는 "열쇠·연결선"과 리셋 이력 자체.
+// 기준% 변경 이력은 "그때 기준" 판정 재료라 화면 설정 리셋에서도 남긴다(2026-10-25 sy R6).
 const RESET_KEEP_ACTIONS = [
   "sheet_admin_pin_updated",
   "donation_admin_pin_updated",
   "weflab_link_updated",
   "data_reset",
+  THRESHOLD_PERCENT_ACTION,
 ];
 const RESET_PIN_ACTIONS = ["sheet_admin_pin_updated", "donation_admin_pin_updated", "weflab_link_updated"];
 
@@ -1222,8 +1243,9 @@ export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> 
 export async function setStreamerSettings(slug: string, settings: { thresholdPercent?: number }) {
   const streamer = await requireStreamer(slug);
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  let threshold: number | null = null;
   if (settings.thresholdPercent !== undefined) {
-    const threshold = Number(settings.thresholdPercent);
+    threshold = Number(settings.thresholdPercent);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) {
       throw new Error("thresholdPercent must be a number between 0 and 100");
     }
@@ -1234,7 +1256,69 @@ export async function setStreamerSettings(slug: string, settings: { thresholdPer
     headers: { prefer: "return=representation" },
     body: JSON.stringify(patch),
   });
-  return mapStreamer(rows[0]).settings;
+  const saved = mapStreamer(rows[0]).settings;
+  if (threshold !== null) {
+    // 값은 이미 저장됐다. 이력 기록이 실패하면 성공으로 답하지 않는다 — 다시 저장하면 흔적 규칙으로 메워진다.
+    try {
+      await recordThresholdPercentChange(streamer, {
+        before: Number(streamer.threshold_percent),
+        after: threshold,
+        source: "settings",
+        actor: "sheet_admin",
+      });
+    } catch (error) {
+      throw new ThresholdHistoryWriteError(saved, (error as Error).message);
+    }
+  }
+  return saved;
+}
+
+// ---------- 전역 기준% 변경 이력(audit_logs action=threshold_percent_updated) ----------
+// 판정 로직은 lib/thresholdHistory.ts. 팬 페이지 오버레이(OVERLAY_LATEST_ACTIONS)에는 넣지 않는다 —
+// 관리자·판정 재료 전용이라 팬 핫패스에 실을 이유가 없다. 화면 설정 리셋에서도 남긴다(RESET_KEEP_ACTIONS).
+export class ThresholdHistoryWriteError extends Error {
+  readonly code = "HISTORY_WRITE_FAILED";
+  readonly settings: ReturnType<typeof mapStreamer>["settings"];
+  constructor(settings: ReturnType<typeof mapStreamer>["settings"], detail: string) {
+    super(`threshold saved but history write failed: ${detail}`);
+    this.name = "ThresholdHistoryWriteError";
+    this.settings = settings;
+  }
+}
+
+async function latestThresholdPercentRow(streamerId: string): Promise<{ hasHistory: boolean; latestAfter: number | null }> {
+  const rows = await supabaseFetch<Array<{ created_at?: string; payload?: unknown }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${THRESHOLD_PERCENT_ACTION}&select=payload,created_at&order=created_at.desc&limit=1`,
+  );
+  const latest = rows[0] ? parseThresholdHistoryRow(rows[0]) : null;
+  return { hasHistory: rows.length > 0, latestAfter: latest ? latest.after : null };
+}
+
+// 남길 줄이 있을 때만 1줄 추가(규칙은 thresholdChangeToRecord). 남긴 줄을 돌려준다(없으면 null).
+export async function recordThresholdPercentChange(
+  streamer: Pick<StreamerRow, "id">,
+  input: { before: number | null; after: number; source: "settings" | "admin_upsert"; actor: string },
+): Promise<ThresholdPercentChange | null> {
+  const { hasHistory, latestAfter } = await latestThresholdPercentRow(streamer.id);
+  const change = thresholdChangeToRecord({
+    hasHistory,
+    latestAfter,
+    before: input.before !== null && Number.isFinite(input.before) ? input.before : null,
+    after: input.after,
+    source: input.source,
+  });
+  if (!change) return null;
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: THRESHOLD_PERCENT_ACTION,
+      actor: input.actor,
+      payload: change,
+    }),
+  });
+  return change;
 }
 
 // 스트리머 테마 프리셋 저장. 기존 extension 토큰으로 인증된 streamer 에 한해 호출된다.

@@ -65,14 +65,24 @@ export default function ThresholdForm({ slug, current, groups, overrides }: Prop
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ thresholdPercent: pct }),
       });
-      if (!settingsRes.ok) throw new Error(String(settingsRes.status));
+      // 기준 값은 저장됐는데 변경 기록만 실패(HISTORY_WRITE_FAILED) — 예외 저장은 이어서 하고, 다시 저장을 안내한다.
+      let historyFailed = false;
+      if (!settingsRes.ok) {
+        const body = (await settingsRes.json().catch(() => null)) as { code?: string } | null;
+        if (body?.code !== "HISTORY_WRITE_FAILED") throw new Error(String(settingsRes.status));
+        historyFailed = true;
+      }
       const overridesRes = await fetch(`/api/s/${encodeURIComponent(slug)}/threshold-overrides`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ overrides: cleanedOverrides }),
       });
       if (!overridesRes.ok) throw new Error(String(overridesRes.status));
-      setMsg({ type: "ok", text: "저장됐어요. 다음 결과 반영부터 적용됩니다." });
+      setMsg(
+        historyFailed
+          ? { type: "err", text: "기준은 저장됐지만 변경 기록을 못 남겼어요. 한 번 더 저장해 주세요." }
+          : { type: "ok", text: "저장됐어요. 다음 결과 반영부터 적용됩니다." },
+      );
       router.refresh();
     } catch {
       setMsg({ type: "err", text: "저장 실패. 수집 API 연결을 확인해 주세요." });
