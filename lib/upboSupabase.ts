@@ -64,6 +64,15 @@ import {
   type ThresholdPercentChange,
 } from "./thresholdHistory";
 import {
+  COUPON_AUTO_NOTE_PREFIX,
+  parseAutoAccrualNote,
+  splitAccrualIntoEvents,
+  splitAccrualsByTruncation,
+  type AccrualPart,
+  type TruncatedAccrualMark,
+  type UncertainAccrualRow,
+} from "./couponNotes";
+import {
   isFixedPeriodExpired,
   judgeFixedPeriod,
   type FixedPriceJudgeEntry,
@@ -4533,7 +4542,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
     if (sourceMap.length > 0) {
       // 1차 방어: recordDecisions 는 이미 "이번에 처음 기록되는 새 당첨"뿐이다(reconcile 이 기존건을 duplicate 로 뺌).
       // 2차 방어: 그래도 이미 자동 적립된 sourceKey 는 제외한다(grant 저장 실패 후 재시도 대비).
-      const alreadyAccrued = await autoAccruedSourceKeys(streamer.id);
+      const { keys: alreadyAccrued } = await autoAccrualIndex(streamer.id);
       const freshRecords = alreadyAccrued.size
         ? recordDecisions.filter((decision) => !alreadyAccrued.has(cleanText(decision.sourceKey)))
         : recordDecisions;
@@ -5308,10 +5317,12 @@ export type CouponAccrual = {
   itemName: string; // 쿠폰 표시명 스냅샷(events.item_name 에 남김)
   delta: number;
   sourceKeys: string[]; // 이 적립에 기여한 당첨들의 sourceKey(재적립 방지 참조용)
+  // 키별 증가분(합 = delta). 적립 이벤트를 메모 500자 미만 조각으로 나눌 때 쓴다(lib/couponNotes.ts).
+  parts?: AccrualPart[];
 };
 
-// 자동 적립 이벤트의 note 접두사 — created_by="auto" 와 함께 화면/재적립 방지에서 자동분을 구분한다.
-const COUPON_AUTO_NOTE_PREFIX = "auto:";
+// 자동 적립 이벤트의 note 접두사(COUPON_AUTO_NOTE_PREFIX)는 lib/couponNotes.ts — created_by="auto" 와 함께
+// 화면/재적립 방지에서 자동분을 구분한다.
 
 // 순수 계산 함수(부작용 없음 — 단위 테스트용).
 // record decision 들 × 연결(sourceMap)을 받아 적립 목록을 만든다.
@@ -5359,6 +5370,11 @@ export function computeCouponAccruals(
       if (cur) {
         cur.delta += delta;
         if (sourceKey && !cur.sourceKeys.includes(sourceKey)) cur.sourceKeys.push(sourceKey);
+        if (sourceKey) {
+          const part = cur.parts!.find((p) => p.sourceKey === sourceKey);
+          if (part) part.delta += delta;
+          else cur.parts!.push({ sourceKey, delta });
+        }
       } else {
         acc.set(mapKey, {
           viewerKey,
@@ -5368,6 +5384,7 @@ export function computeCouponAccruals(
           itemName: nameByKey.get(itemKey) || itemKey,
           delta,
           sourceKeys: sourceKey ? [sourceKey] : [],
+          parts: sourceKey ? [{ sourceKey, delta }] : [],
         });
       }
     }
@@ -5376,21 +5393,32 @@ export function computeCouponAccruals(
 }
 
 // 이미 자동 적립된 sourceKey 집합(재적립 2차 방어). created_by="auto" 이벤트의 note 에 심긴 참조를 읽는다.
-async function autoAccruedSourceKeys(streamerId: string): Promise<Set<string>> {
-  const rows = await supabaseFetchAll<{ id?: string; note: string | null; created_at?: string }>(
-    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=id,note,created_at`,
+// 옛 코드가 500자에서 자른 note 는 마지막 조각을 버리고, 그 (시청자, 쿠폰)·적립 시각을 truncated 로 돌려준다
+// (소급이 그 시각 이전 당첨을 "확인 불가"로 빼도록 — lib/couponNotes.ts 머리 주석).
+async function autoAccrualIndex(
+  streamerId: string,
+): Promise<{ keys: Set<string>; truncated: TruncatedAccrualMark[] }> {
+  const rows = await supabaseFetchAll<{
+    id?: string;
+    note: string | null;
+    created_at?: string;
+    viewer_key?: string | null;
+    item_key?: string | null;
+  }>(
+    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=id,note,created_at,viewer_key,item_key`,
     PAGE_CREATED_DESC,
   );
-  const out = new Set<string>();
+  const keys = new Set<string>();
+  const truncated: TruncatedAccrualMark[] = [];
   for (const row of rows) {
-    const note = row.note ?? "";
-    if (!note.startsWith(COUPON_AUTO_NOTE_PREFIX)) continue;
-    for (const key of note.slice(COUPON_AUTO_NOTE_PREFIX.length).split(",")) {
-      const trimmed = key.trim();
-      if (trimmed) out.add(trimmed);
+    const parsed = parseAutoAccrualNote(row.note);
+    if (!parsed) continue;
+    for (const key of parsed.keys) keys.add(key);
+    if (parsed.truncated && row.viewer_key && row.item_key && row.created_at) {
+      truncated.push({ viewerKey: row.viewer_key, itemKey: row.item_key, createdAt: row.created_at });
     }
   }
-  return out;
+  return { keys, truncated };
 }
 
 // 적립 저장(saveCouponChanges 규약 재사용): balances upsert(기존 잔액+delta, 0~상한 클램프)
@@ -5427,6 +5455,7 @@ async function accrueCouponsForRecords(
   const touched = new Map<string, Working>();
   const eventRows: Array<Record<string, unknown>> = [];
   let totalDelta = 0;
+  let accruedPairs = 0; // (시청자, 쿠폰) 단위 적립 수 — 이벤트는 메모 길이 때문에 여러 줄일 수 있다
 
   for (const accrual of accruals) {
     const itemKey = String(accrual.itemKey || "").trim().toLowerCase();
@@ -5456,21 +5485,24 @@ async function accrueCouponsForRecords(
     };
     working.set(mapKey, merged);
     touched.set(mapKey, merged);
-    const note = `${COUPON_AUTO_NOTE_PREFIX}${accrual.sourceKeys.join(",")}`.slice(0, 500);
-    eventRows.push({
-      streamer_id: streamer.id,
-      viewer_key: viewerKey,
-      nickname: merged.nickname,
-      item_key: itemKey,
-      item_name: itemName,
-      delta: next - prev,
-      action_type: "grant",
-      previous_count: prev,
-      next_count: next,
-      note,
-      created_by: "auto",
-      created_at: now,
-    });
+    // note 를 자르지 않는다 — 키 묶음마다 이벤트를 나눠 각 note 를 500자 미만으로(재적립 방지 열쇠 보존).
+    for (const slice of splitAccrualIntoEvents({ sourceKeys: accrual.sourceKeys, parts: accrual.parts, prev, next })) {
+      eventRows.push({
+        streamer_id: streamer.id,
+        viewer_key: viewerKey,
+        nickname: merged.nickname,
+        item_key: itemKey,
+        item_name: itemName,
+        delta: slice.next - slice.previous,
+        action_type: "grant",
+        previous_count: slice.previous,
+        next_count: slice.next,
+        note: slice.note,
+        created_by: "auto",
+        created_at: now,
+      });
+    }
+    accruedPairs += 1;
     totalDelta += next - prev;
   }
 
@@ -5491,7 +5523,7 @@ async function accrueCouponsForRecords(
       body: JSON.stringify(eventRows),
     });
   }
-  return { accrued: eventRows.length, totalDelta };
+  return { accrued: accruedPairs, totalDelta };
 }
 
 // ---------- 쿠폰 자동 적립: 교환 유입분 ----------
@@ -5547,14 +5579,21 @@ async function revokeCouponAccrualsForExchange(
   const upserts: Array<Record<string, unknown>> = [];
   const eventRows: Array<Record<string, unknown>> = [];
   let totalDelta = 0;
+  // 적립은 메모 500자 제한 때문에 (시청자, 쿠폰)당 여러 줄일 수 있다(lib/couponNotes.ts) — 같은 쌍은 합쳐서
+  // 1번만 회수한다. 같은 잔액 행을 한 요청에서 두 번 upsert 하면 Postgres 가 거부한다.
+  const grantByPair = new Map<string, { row: CouponEventRow; delta: number }>();
   for (const g of grants) {
     const mapKey = `${g.viewer_key}@@${g.item_key}`;
+    const d = Math.max(0, Number(g.delta) || 0);
+    const acc = grantByPair.get(mapKey);
+    if (acc) acc.delta += d;
+    else grantByPair.set(mapKey, { row: g, delta: d });
+  }
+  for (const [mapKey, { row: g, delta: grantDelta }] of grantByPair) {
     const cur = balanceByKey.get(mapKey);
     const prev = cur?.balance ?? 0;
-    const next = Math.max(0, prev - Math.max(0, Number(g.delta) || 0));
+    const next = Math.max(0, prev - grantDelta);
     if (next === prev) continue;
-    // 한 묶음에선 (viewer,item)당 grant 1건뿐(computeCouponAccruals 가 병합) — 아래 뮤테이션은
-    // 혹시 모를 중복 대비 계산 방어일 뿐, upsert 키 중복은 실제로 발생하지 않는다.
     if (cur) cur.balance = next;
     upserts.push({
       streamer_id: streamer.id,
@@ -5577,7 +5616,7 @@ async function revokeCouponAccrualsForExchange(
       action_type: "adjust",
       previous_count: prev,
       next_count: next,
-      // COUPON_AUTO_NOTE_PREFIX 로 시작하지 않는 note — autoAccruedSourceKeys(재적립 방어)가
+      // COUPON_AUTO_NOTE_PREFIX 로 시작하지 않는 note — autoAccrualIndex(재적립 방어)가
       // 회수 이벤트를 적립 참조로 오독하지 않게 한다.
       note: `교환 되돌리기 회수 (exchange:${exchangeGroupId})`.slice(0, 500),
       created_by: "auto",
@@ -5605,7 +5644,7 @@ async function revokeCouponAccrualsForExchange(
 }
 
 // ---------- 쿠폰 소급 적립 (2단계 조각 3: 과거 당첨을 쿠폰으로 소급) ----------
-// 조각 2(computeCouponAccruals·accrueCouponsForRecords·autoAccruedSourceKeys)를 그대로 재사용한다.
+// 조각 2(computeCouponAccruals·accrueCouponsForRecords·autoAccrualIndex)를 그대로 재사용한다.
 // 핵심 아이디어: 저장된 record 당첨(mapEntry) 을 record ReconcileDecision 으로 "어댑트"하면
 // 조각 2의 순수 계산(computeCouponAccruals)을 코드 복제 없이 재사용할 수 있다.
 // 판정/entry/정가/applyResults 는 전혀 건드리지 않는 순수 추가 레인이다.
@@ -5621,6 +5660,8 @@ export type CouponBackfillEntry = {
   donateTimeText: string;
   // 원본 후원 유형(미션 정산 뭉치 제외 판별용). 옛 픽스처 호환을 위해 선택 필드.
   donationType?: string;
+  // 기록이 저장된 시각(upbo_entries.created_at). 잘린 옛 적립 메모 이전 당첨을 "확인 불가"로 가를 때 쓴다.
+  createdAt?: string;
 };
 
 // 소급 적립 대상 여부(순수). 미션 성공 정산 뭉치로 기록된 옛 유령 업보(계정 없음·닉네임=미션명)는 적립 키가
@@ -5649,6 +5690,9 @@ export type CouponBackfillPreview = {
   parseFailedCount: number; // 기간 지정 시 시각 해석 실패로 제외된 당첨 수
   consideredCount: number; // 기간·재적립제외 통과한 record 당첨 수
   alreadyAccruedCount: number; // 이미 자동 적립돼 제외된 당첨 수
+  // 잘린 옛 적립 메모 때문에 이미 받았는지 알 수 없어 자동 적립에서 뺀 당첨 수·(시청자, 쿠폰)별 내역.
+  uncertainCount: number;
+  uncertainRows: UncertainAccrualRow[];
   appliedPeriod: { from: string | null; to: string | null }; // 실제 적용된 기간(KST ISO), 미지정이면 null
 };
 
@@ -5804,6 +5848,7 @@ async function recordEntriesForCouponBackfill(streamerId: string): Promise<Coupo
       effectiveCount: e.effectiveCount,
       donateTimeText: e.donateTimeText,
       donationType: e.donationType,
+      createdAt: row.created_at,
     };
   });
   return applyCancelledQuantity(candidates, cancelled).map((c) => ({
@@ -5815,6 +5860,7 @@ async function recordEntriesForCouponBackfill(streamerId: string): Promise<Coupo
     effectiveCount: c.effectiveCount,
     donateTimeText: c.donateTimeText,
     donationType: c.donationType,
+    createdAt: c.createdAt,
   }));
 }
 
@@ -5823,13 +5869,14 @@ async function computeCouponBackfill(
   streamer: StreamerRow,
   period: CouponBackfillPeriod,
 ): Promise<{ accruals: CouponAccrual[]; preview: CouponBackfillPreview }> {
-  const [entries, sourceMap, couponItems, alreadyAccrued] = await Promise.all([
+  const [entries, sourceMap, couponItems, accrualIndex] = await Promise.all([
     // 미션 정산 뭉치 유령 기록은 소급 대상에서 제외(isCouponBackfillEligible).
     recordEntriesForCouponBackfill(streamer.id).then((rows) => rows.filter(isCouponBackfillEligible)),
     couponSourceMapForStreamer(streamer.id),
     couponItemsForStreamer(streamer.id),
-    autoAccruedSourceKeys(streamer.id),
+    autoAccrualIndex(streamer.id),
   ]);
+  const alreadyAccrued = accrualIndex.keys;
   const { included, parseFailedCount, fromIso, toIso } = filterCouponEntriesByPeriod(entries, period);
   // 이미 자동 적립된 sourceKey 는 빼서 "새로 적립될 것"만 남긴다(조각 2 재적립 방지와 동일 참조).
   const fresh = alreadyAccrued.size
@@ -5837,7 +5884,13 @@ async function computeCouponBackfill(
     : included;
   const alreadyAccruedCount = included.length - fresh.length;
   const decisions = fresh.map(couponBackfillEntryToDecision);
-  const accruals = computeCouponAccruals(decisions, sourceMap, couponItems);
+  // 잘린 옛 적립 메모가 있는 (시청자, 쿠폰)의 그 이전 당첨은 이미 받았는지 알 수 없다 → 자동 적립에서 빼고 따로 센다.
+  const createdAtByKey = new Map(fresh.map((e) => [cleanText(e.sourceKey), e.createdAt]));
+  const { certain: accruals, uncertain } = splitAccrualsByTruncation(
+    computeCouponAccruals(decisions, sourceMap, couponItems),
+    accrualIndex.truncated,
+    createdAtByKey,
+  );
   const rows: CouponBackfillRow[] = accruals.map((a) => ({
     viewerKey: a.viewerKey,
     nickname: a.nickname,
@@ -5858,6 +5911,8 @@ async function computeCouponBackfill(
       parseFailedCount,
       consideredCount: fresh.length,
       alreadyAccruedCount,
+      uncertainCount: uncertain.reduce((sum, row) => sum + row.entryCount, 0),
+      uncertainRows: uncertain,
       appliedPeriod: { from: fromIso, to: toIso },
     },
   };

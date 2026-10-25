@@ -793,6 +793,22 @@ export default function CouponManager({
                     제외했어요.
                   </p>
                 ) : null}
+                {(bfPreview.uncertainCount ?? 0) > 0 ? (
+                  <p className={styles.previewWarn}>
+                    확인 불가 {bfPreview.uncertainCount}건 — 예전 적립 기록이 길어서 잘려 있어, 이미 받았는지
+                    알 수 없는 당첨이에요. 두 번 쌓이지 않게 자동 적립에서 뺐어요. 필요하면 아래 지급
+                    기록으로 직접 주세요.
+                    {(bfPreview.uncertainRows ?? []).length > 0
+                      ? ` (${(bfPreview.uncertainRows ?? [])
+                          .slice(0, 5)
+                          .map(
+                            (r) =>
+                              `${r.nickname || r.viewerKey} · ${items.find((it) => it.key === r.itemKey)?.name || r.itemName} ${r.entryCount}건`,
+                          )
+                          .join(", ")}${(bfPreview.uncertainRows ?? []).length > 5 ? " 외" : ""})`
+                      : ""}
+                  </p>
+                ) : null}
               </div>
             ) : null}
             {bfMsg ? <p className={bfMsg.kind === "ok" ? styles.ok : styles.err}>{bfMsg.text}</p> : null}
