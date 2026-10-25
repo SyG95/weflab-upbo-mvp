@@ -161,9 +161,11 @@ export type CouponLinkCheck = (markMs: number, sourceKey: string, itemKey: strin
 // 쿠폰 연결 저장본 1개(audit coupon_source_map_updated). links: 쿠폰 itemKey → 정규화한 상품명들.
 export type CouponLinkSnapshot = { atMs: number; links: Map<string, Set<string>> };
 
-// 연결을 읽은 뒤 적립 줄을 쓰기까지의 틈(요청 한 번, 함수 최대 300초)에 연결이 바뀌었을 수 있다 —
+// 연결을 읽은 뒤 적립 줄을 쓰기까지의 틈(요청 한 번)에 연결이 바뀌었을 수 있다 —
 // 적립 시각 직전 이만큼 안의 저장본은 전부 "그때 쓰였을 수 있는 연결"로 본다.
-export const COUPON_LINK_GUARD_MS = 10 * 60 * 1000;
+// ★Vercel 함수 최대 시간(지금 Hobby 300초, Pro 로 올려도 최대 800초)보다 반드시 길어야 한다. 짧으면 실제로
+//   쓴 저장본이 빠져 "연결 안 됨"으로 오판 → 숨은 열쇠 이중 적립(리뷰 LOW-1). maxDuration 을 올릴 때 같이 볼 것.
+export const COUPON_LINK_GUARD_MS = 15 * 60 * 1000;
 
 // 연결 이력 + 당첨별 정규화 상품명 → CouponLinkCheck. "연결 안 됨"은 그때 쓰였을 수 있는 저장본 전부에서
 // 그 쿠폰의 연결 목록에 상품이 없을 때만 확실하다. 그 쿠폰 연결이 아예 안 보이면(잘린 적립이 있었는데

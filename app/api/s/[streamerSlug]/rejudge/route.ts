@@ -34,8 +34,15 @@ export async function POST(request: Request, context: RouteContext) {
     let previewKeys: string[] | undefined;
     if (body.sourceKeys !== undefined) {
       const keys = body.sourceKeys;
-      if (!Array.isArray(keys) || keys.length > 50000 || keys.some((k) => typeof k !== "string" || k.length > 300)) {
-        const error = new Error("sourceKeys must be an array of strings");
+      const problem = !Array.isArray(keys)
+        ? "sourceKeys must be an array of strings"
+        : keys.length > 50000
+          ? "sourceKeys is too long (max 50000)"
+          : keys.some((k) => typeof k !== "string" || k.length > 300)
+            ? "each sourceKey must be a string of at most 300 characters"
+            : "";
+      if (problem) {
+        const error = new Error(problem);
         (error as Error & { status?: number }).status = 400;
         throw error;
       }

@@ -4385,9 +4385,11 @@ export async function applyRejudgeForStreamer(
         catalogVersion: catalog.version,
         thresholdPercent: Number(streamer.threshold_percent ?? 2),
         summary,
+        // 화면 응답의 requested(=미리보기 수)와 헷갈리지 않게: previewed=확인창 수, targets=실제로 넣으려 한 수.
         previewed: previewSet ? previewSet.size : null,
-        requested: targets.length,
+        targets: targets.length,
         inserted: insertedKeys.length,
+        alreadyExisted: existedSincePreview + (targets.length - insertedKeys.length),
         changedSincePreview,
         notInPreview: previewSet ? notInPreview : 0,
         // 실제로 들어간 키만 남긴다(예전엔 후보 키). 읽는 곳 없음 — 감사·되짚기용.

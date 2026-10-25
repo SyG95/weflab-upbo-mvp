@@ -180,6 +180,11 @@ test("넣기 요청 도중(INSERT 직전)에 끼어든 것도 이미 있음으�
   assert.equal(r.recorded, 2);
   assert.equal(r.alreadyExisted, 1);
   assert.deepEqual([...(lastAudit().sourceKeys as string[])].sort(), ["uid1::0", "uid3::0"], "장부에는 실제로 넣은 키만");
+  // 감사 기록: previewed=확인창 수, targets=실제로 넣으려 한 수, alreadyExisted=그사이 이미 들어간 수
+  assert.deepEqual(
+    { previewed: lastAudit().previewed, targets: lastAudit().targets, inserted: lastAudit().inserted, alreadyExisted: lastAudit().alreadyExisted },
+    { previewed: 3, targets: 3, inserted: 2, alreadyExisted: 1 },
+  );
 });
 
 test("미리보기 뒤 새로 생긴 후보는 넣지 않고 숫자로만 알린다", async () => {
