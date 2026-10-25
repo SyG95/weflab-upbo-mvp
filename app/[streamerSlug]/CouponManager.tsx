@@ -305,7 +305,8 @@ export default function CouponManager({
         setBfPreview(null);
         setBfMsg({
           kind: "ok",
-          text: `가져오기 완료 — 당첨 ${data?.accrued ?? 0}건에서 쿠폰 ${data?.totalDelta ?? 0}개가 쌓였어요. 아래 잔액 현황과 팬 화면 쿠폰 탭에서 바로 확인할 수 있어요.`,
+          // accrued 는 당첨 수가 아니라 (시청자, 쿠폰) 줄 수다(리뷰 L6).
+          text: `가져오기 완료 — 쿠폰 ${data?.totalDelta ?? 0}개가 쌓였어요(시청자·쿠폰 ${data?.accrued ?? 0}줄). 아래 잔액 현황과 팬 화면 쿠폰 탭에서 바로 확인할 수 있어요.`,
         });
       }
     } catch {
@@ -749,8 +750,9 @@ export default function CouponManager({
                 </p>
                 {bfPreview.rows.length === 0 ? (
                   <p className={styles.previewMuted}>
-                    가져올 새 당첨이 없어요. 연결한 상품이 이 기간에 당첨된 적이 없거나, 이미 전부
-                    쿠폰으로 들어가 있는 거예요.
+                    {(bfPreview.uncertainCount ?? 0) > 0
+                      ? "자동으로 가져올 새 당첨은 없어요. 아래 '확인 불가' 안내를 봐 주세요."
+                      : "가져올 새 당첨이 없어요. 연결한 상품이 이 기간에 당첨된 적이 없거나, 이미 전부 쿠폰으로 들어가 있는 거예요."}
                   </p>
                 ) : (
                   <div className={styles.tableWrap}>
@@ -794,20 +796,32 @@ export default function CouponManager({
                   </p>
                 ) : null}
                 {(bfPreview.uncertainCount ?? 0) > 0 ? (
-                  <p className={styles.previewWarn}>
-                    확인 불가 {bfPreview.uncertainCount}건 — 예전 적립 기록이 길어서 잘려 있어, 이미 받았는지
-                    알 수 없는 당첨이에요. 두 번 쌓이지 않게 자동 적립에서 뺐어요. 필요하면 아래 지급
-                    기록으로 직접 주세요.
-                    {(bfPreview.uncertainRows ?? []).length > 0
-                      ? ` (${(bfPreview.uncertainRows ?? [])
-                          .slice(0, 5)
-                          .map(
-                            (r) =>
-                              `${r.nickname || r.viewerKey} · ${items.find((it) => it.key === r.itemKey)?.name || r.itemName} ${r.entryCount}건`,
-                          )
-                          .join(", ")}${(bfPreview.uncertainRows ?? []).length > 5 ? " 외" : ""})`
-                      : ""}
-                  </p>
+                  <div className={styles.previewWarn}>
+                    <p style={{ margin: 0 }}>
+                      확인 불가 {bfPreview.uncertainCount}건 — 예전 자동 적립 기록 일부가 잘려 있어서, 이 당첨들이
+                      그때 이미 쿠폰으로 들어갔는지 확인할 수 없어요. 두 번 쌓이지 않게 자동 적립에서 뺐어요.
+                      시청자 쿠폰 잔액이 실제와 다른 게 확실할 때만 아래 지급 기록으로 직접 맞춰 주세요.{" "}
+                      <b>직접 맞춘 뒤에도 이 안내는 다음 미리보기에 다시 보이니, 같은 걸 두 번 주지 마세요.</b>
+                    </p>
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                      {(bfPreview.uncertainRows ?? []).slice(0, 5).map((r) => (
+                        <li key={`${r.viewerKey}@@${r.itemKey}`}>
+                          {r.nickname || r.viewerKey} · {items.find((it) => it.key === r.itemKey)?.name || r.itemName}{" "}
+                          {r.entryCount}건
+                          {r.cutoffAt ? ` (${fmtKst(r.cutoffAt)} 이전 당첨` : " ("}
+                          {(r.products ?? []).length > 0
+                            ? `: ${(r.products ?? [])
+                                .slice(0, 3)
+                                .map((p) => `${p.name} ${p.count}`)
+                                .join(", ")}${(r.products ?? []).length > 3 ? " 외" : ""})`
+                            : ")"}
+                        </li>
+                      ))}
+                    </ul>
+                    {(bfPreview.uncertainRows ?? []).length > 5 ? (
+                      <p style={{ margin: "4px 0 0" }}>외 {(bfPreview.uncertainRows ?? []).length - 5}줄</p>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             ) : null}

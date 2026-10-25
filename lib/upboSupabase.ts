@@ -65,10 +65,12 @@ import {
 } from "./thresholdHistory";
 import {
   COUPON_AUTO_NOTE_PREFIX,
+  couponLinkCheckFromHistory,
   parseAutoAccrualNote,
   splitAccrualIntoEvents,
   splitAccrualsByTruncation,
   type AccrualPart,
+  type CouponLinkSnapshot,
   type TruncatedAccrualMark,
   type UncertainAccrualRow,
 } from "./couponNotes";
@@ -2986,7 +2988,7 @@ export async function recordExchangeBundle(
   // 받은 상품이 쿠폰 연결 상품이면 당첨과 동일하게 적립한다(created_by="auto",
   // note 참조키 = 받은 entry 의 source_key). ★안전: 여기서 무슨 일이 나도 위의 교환 저장은
   // 영향받지 않는다 — 실패는 coupon:{ error } 로 표기만 하고 절대 throw 하지 않는다.
-  // sourceKey 가 방금 만든 UUID 기반이라 과거 적립과 겹칠 수 없어 2차 방어(autoAccruedSourceKeys)는 생략.
+  // sourceKey 가 방금 만든 UUID 기반이라 과거 적립과 겹칠 수 없어 2차 방어(autoAccrualIndex)는 생략.
   let coupon: ExchangeCouponResult = null;
   try {
     const sourceMap = await couponSourceMapForStreamer(streamer.id);
@@ -4594,7 +4596,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
     if (sourceMap.length > 0) {
       // 1차 방어: recordDecisions 는 이미 "이번에 처음 기록되는 새 당첨"뿐이다(reconcile 이 기존건을 duplicate 로 뺌).
       // 2차 방어: 그래도 이미 자동 적립된 sourceKey 는 제외한다(grant 저장 실패 후 재시도 대비).
-      const { keys: alreadyAccrued } = await autoAccrualIndex(streamer.id);
+      const { keys: alreadyAccrued } = await autoAccrualIndex(streamer.id, { withTruncationMarks: false });
       const freshRecords = alreadyAccrued.size
         ? recordDecisions.filter((decision) => !alreadyAccrued.has(cleanText(decision.sourceKey)))
         : recordDecisions;
@@ -4936,7 +4938,8 @@ async function couponLedgerForStreamer(streamerId: string): Promise<{
       `/${tableName("coupon_balances")}?streamer_id=eq.${streamerId}&select=*&order=updated_at.desc&limit=5000`,
     ),
     supabaseFetch<CouponEventRow[]>(
-      `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&select=*&order=created_at.desc&limit=${COUPON_EVENTS_LIMIT}`,
+      // 같은 시각에 쓴 적립 조각들(메모 길이로 나뉜 한 적립)은 잔액이 큰 쪽(뒤 조각)부터 — 순서가 섞여 보이지 않게(리뷰 L2).
+      `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&select=*&order=created_at.desc,next_count.desc&limit=${COUPON_EVENTS_LIMIT}`,
     ),
   ]);
   return { balances: balanceRows.map(mapCouponBalance), events: eventRows.map(mapCouponEvent) };
@@ -5251,6 +5254,21 @@ export function cleanCouponSourceMap(raw: unknown, validItemKeys?: Set<string>):
   return out;
 }
 
+// 적립 연결의 저장 이력 전부(오래된 순) — 잘린 옛 적립 시각에 그 상품이 연결돼 있었는지 가릴 때만 읽는다.
+async function couponSourceMapHistory(streamerId: string): Promise<CouponLinkSnapshot[]> {
+  const rows = await supabaseFetchAll<{ id?: string; payload: { map?: unknown } | null; created_at: string }>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.coupon_source_map_updated&select=id,payload,created_at`,
+    PAGE_CREATED_ASC,
+  );
+  return rows.map((row) => {
+    const links = new Map<string, Set<string>>();
+    for (const entry of cleanCouponSourceMap(row.payload?.map)) {
+      links.set(entry.itemKey, new Set(entry.sources.map((s) => normalizeName(s.itemName)).filter(Boolean)));
+    }
+    return { atMs: Date.parse(row.created_at), links };
+  });
+}
+
 // 적립 연결(스트리머별 최신 1건). audit_logs 재활용 — 스키마 변경 없음.
 export async function couponSourceMapForStreamer(streamerId: string): Promise<CouponSourceMap[]> {
   const rows = await supabaseFetch<Array<{ payload: { map?: unknown } | null }>>(
@@ -5447,8 +5465,11 @@ export function computeCouponAccruals(
 // 이미 자동 적립된 sourceKey 집합(재적립 2차 방어). created_by="auto" 이벤트의 note 에 심긴 참조를 읽는다.
 // 옛 코드가 500자에서 자른 note 는 마지막 조각을 버리고, 그 (시청자, 쿠폰)·적립 시각을 truncated 로 돌려준다
 // (소급이 그 시각 이전 당첨을 "확인 불가"로 빼도록 — lib/couponNotes.ts 머리 주석).
+// withTruncationMarks=false(실시간 반영 경로)면 잘림 표시에만 쓰는 viewer_key·item_key 를 읽지 않는다 —
+// 반영 때마다 전량을 읽는 조회라 전송량을 늘리지 않으려는 것(리뷰 L7). 열쇠 집합은 같다.
 async function autoAccrualIndex(
   streamerId: string,
+  { withTruncationMarks = true }: { withTruncationMarks?: boolean } = {},
 ): Promise<{ keys: Set<string>; truncated: TruncatedAccrualMark[] }> {
   const rows = await supabaseFetchAll<{
     id?: string;
@@ -5457,7 +5478,7 @@ async function autoAccrualIndex(
     viewer_key?: string | null;
     item_key?: string | null;
   }>(
-    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=id,note,created_at,viewer_key,item_key`,
+    `/${tableName("coupon_events")}?streamer_id=eq.${streamerId}&created_by=eq.auto&select=id,note,created_at${withTruncationMarks ? ",viewer_key,item_key" : ""}`,
     PAGE_CREATED_DESC,
   );
   const keys = new Set<string>();
@@ -5744,8 +5765,13 @@ export type CouponBackfillPreview = {
   alreadyAccruedCount: number; // 이미 자동 적립돼 제외된 당첨 수
   // 잘린 옛 적립 메모 때문에 이미 받았는지 알 수 없어 자동 적립에서 뺀 당첨 수·(시청자, 쿠폰)별 내역.
   uncertainCount: number;
-  uncertainRows: UncertainAccrualRow[];
+  uncertainRows: CouponBackfillUncertainRow[];
   appliedPeriod: { from: string | null; to: string | null }; // 실제 적용된 기간(KST ISO), 미지정이면 null
+};
+
+// 화면용 확인 불가 줄: 열쇠 목록 대신 상품별 건수와 기준 시각(cutoffAt = 이 시각 이전 당첨).
+export type CouponBackfillUncertainRow = Omit<UncertainAccrualRow, "sourceKeys"> & {
+  products: Array<{ name: string; count: number }>;
 };
 
 // 저장된 record 당첨 행 → record ReconcileDecision 어댑터(순수).
@@ -5937,12 +5963,32 @@ async function computeCouponBackfill(
   const alreadyAccruedCount = included.length - fresh.length;
   const decisions = fresh.map(couponBackfillEntryToDecision);
   // 잘린 옛 적립 메모가 있는 (시청자, 쿠폰)의 그 이전 당첨은 이미 받았는지 알 수 없다 → 자동 적립에서 빼고 따로 센다.
+  // 단 그 적립 시각에 상품이 그 쿠폰에 연결돼 있지 않았던 게 연결 이력으로 확실하면 확실 쪽(리뷰 M2) —
+  // 잘린 적립이 있을 때만 이력을 읽는다.
   const createdAtByKey = new Map(fresh.map((e) => [cleanText(e.sourceKey), e.createdAt]));
+  const wasLinkedAt =
+    accrualIndex.truncated.length > 0
+      ? couponLinkCheckFromHistory(
+          await couponSourceMapHistory(streamer.id),
+          new Map(fresh.map((e) => [cleanText(e.sourceKey), normalizeName(e.itemName)])),
+        )
+      : undefined;
   const { certain: accruals, uncertain } = splitAccrualsByTruncation(
     computeCouponAccruals(decisions, sourceMap, couponItems),
     accrualIndex.truncated,
     createdAtByKey,
+    wasLinkedAt,
   );
+  // 확인 불가 줄마다 어떤 상품 당첨인지 센다(스트리머가 "직접 줄지" 판단할 재료). 열쇠 자체는 화면으로 안 보낸다.
+  const productNameByKey = new Map(fresh.map((e) => [cleanText(e.sourceKey), cleanText(e.itemName)]));
+  const uncertainRows: CouponBackfillUncertainRow[] = uncertain.map(({ sourceKeys, ...row }) => {
+    const counts = new Map<string, number>();
+    for (const sourceKey of sourceKeys) {
+      const name = productNameByKey.get(sourceKey) || "(상품 이름 없음)";
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return { ...row, products: [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count) };
+  });
   const rows: CouponBackfillRow[] = accruals.map((a) => ({
     viewerKey: a.viewerKey,
     nickname: a.nickname,
@@ -5964,7 +6010,7 @@ async function computeCouponBackfill(
       consideredCount: fresh.length,
       alreadyAccruedCount,
       uncertainCount: uncertain.reduce((sum, row) => sum + row.entryCount, 0),
-      uncertainRows: uncertain,
+      uncertainRows,
       appliedPeriod: { from: fromIso, to: toIso },
     },
   };
@@ -5980,7 +6026,7 @@ export async function previewCouponBackfill(
 }
 
 // 반영: 같은 계산 후 accrueCouponsForRecords 로 실제 적립(created_by="auto",
-// note→autoAccruedSourceKeys 재적립 방지 자동 작동). 화면 갱신용으로 최신 원장도 함께 반환한다.
+// note→autoAccrualIndex 재적립 방지 자동 작동). 화면 갱신용으로 최신 원장도 함께 반환한다.
 export async function applyCouponBackfill(
   streamer: StreamerRow,
   period: CouponBackfillPeriod,
