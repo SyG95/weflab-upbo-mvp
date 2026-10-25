@@ -58,7 +58,10 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(apply ? { apply: true, confirm: slug } : {}),
+        // 넣기는 미리보기에서 본 후보 키만 보낸다 — 그사이 새로 생긴 후보는 넣지 않고 숫자로만 알려 준다.
+        body: JSON.stringify(
+          apply ? { apply: true, confirm: slug, sourceKeys: (preview?.candidates ?? []).map((c) => c.sourceKey) } : {},
+        ),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -73,15 +76,24 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       }
       if (apply) {
         setPreview(null);
-        // recorded = 실제로 들어간 수. 그사이 다른 경로가 먼저 넣은 건 alreadyExisted 로 따로 알린다.
+        // recorded = 실제로 들어간 수, requested = 확인창에서 넣겠다고 한 수(미리보기 기준).
+        // 둘이 다르면 왜 다른지 같이 보여 준다(그사이 이미 들어감 / 표·기준이 바뀜).
+        const recorded = Number(data.recorded ?? 0);
+        const requested = Number(data.requested ?? recorded);
         const already = Number(data.alreadyExisted ?? 0);
-        setMsg({
-          type: "ok",
-          text:
-            already > 0
-              ? `${data.recorded}건을 업보 시트에 넣었어요(${already}건은 그사이 이미 들어가 있었어요). 팬 화면에서 바로 보입니다.`
-              : `${data.recorded}건을 업보 시트에 넣었어요. 팬 화면에서 바로 보입니다.`,
-        });
+        const changed = Number(data.changedSincePreview ?? 0);
+        const fresh = Number(data.notInPreview ?? 0);
+        const reasons: string[] = [];
+        if (already > 0) reasons.push(`${already}건은 그사이 이미 들어가 있었어요`);
+        if (changed > 0) reasons.push(`${changed}건은 그사이 표나 기준이 바뀌어 넣을 대상에서 빠졌어요`);
+        let text =
+          requested !== recorded
+            ? `미리보기 ${requested}건 중 ${recorded}건을 업보 시트에 넣었어요.`
+            : `${recorded}건을 업보 시트에 넣었어요.`;
+        if (reasons.length > 0) text += ` (${reasons.join(", ")})`;
+        if (recorded > 0) text += " 팬 화면에서 바로 보입니다.";
+        if (fresh > 0) text += ` 미리보기 뒤에 새로 찾은 ${fresh}건은 넣지 않았어요. 다시 미리보기로 확인해 주세요.`;
+        setMsg({ type: "ok", text });
         router.refresh();
       } else {
         setPreview(data as PreviewResult);

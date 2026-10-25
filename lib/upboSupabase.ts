@@ -4269,7 +4269,18 @@ async function rejudgeContextForStreamer(streamer: StreamerRow) {
     aliases,
     thresholdPercent: Number(streamer.threshold_percent ?? 2),
   }).map((group) => ({ ...group, options: group.options.slice(0, 5) }));
-  return { catalog, summary, candidates, aliasCandidates, aliases };
+  // 같은 원본 줄이 한 캡처에 두 번 담겨 오면 후보가 겹친다(rejudge.ts 는 배치 안 중복을 거르지 않는다).
+  // sourceKey 로 한 번만 남겨 미리보기 숫자와 넣기 숫자가 같은 기준이 되게 한다(2026-10-25 리뷰 L1).
+  const seenKeys = new Set<string>();
+  const uniqueCandidates = candidates.filter((c) => (seenKeys.has(c.sourceKey) ? false : (seenKeys.add(c.sourceKey), true)));
+  return {
+    catalog,
+    summary: { ...summary, wouldRecord: uniqueCandidates.length },
+    candidates: uniqueCandidates,
+    aliasCandidates,
+    aliases,
+    knownSourceKeys,
+  };
 }
 
 export async function previewRejudgeForStreamer(streamer: StreamerRow) {
@@ -4286,19 +4297,42 @@ export async function previewRejudgeForStreamer(streamer: StreamerRow) {
   };
 }
 
-export async function applyRejudgeForStreamer(streamer: StreamerRow) {
-  const { catalog, summary, candidates } = await rejudgeContextForStreamer(streamer);
+export async function applyRejudgeForStreamer(
+  streamer: StreamerRow,
+  options: { previewKeys?: string[] } = {},
+) {
+  const { catalog, summary, candidates, knownSourceKeys } = await rejudgeContextForStreamer(streamer);
   const now = new Date().toISOString();
-  // 실제로 들어간 줄만 센다(2026-10-25 R7). 미리보기와 넣기 사이에 실시간 수집·다른 탭이 같은 키를 먼저 넣으면
+  // 넣기는 후보를 처음부터 다시 계산한다. 화면이 미리보기 키(previewKeys)를 보내면 그 안의 것만 넣어서
+  // 확인창의 "n건"과 실제로 들어간 수를 같은 기준으로 센다(2026-10-25 리뷰 M1):
+  //   - 미리보기 뒤 다른 경로(실시간 수집·다른 탭)가 먼저 넣은 것 → alreadyExisted
+  //   - 미리보기 뒤 표·기준·사용 설정이 바뀌어 더는 넣을 대상이 아닌 것 → changedSincePreview
+  //   - 미리보기에 없던 새 후보 → 넣지 않고 notInPreview 로만 알린다(다시 미리보기로 확인)
+  // previewKeys 가 없으면(옛 화면) 예전처럼 지금 후보 전부를 넣는다.
+  const previewSet = options.previewKeys ? new Set(options.previewKeys) : null;
+  const targets = previewSet ? candidates.filter((c) => previewSet.has(c.sourceKey)) : candidates;
+  let existedSincePreview = 0;
+  let changedSincePreview = 0;
+  if (previewSet) {
+    const targetKeys = new Set(targets.map((c) => c.sourceKey));
+    for (const key of previewSet) {
+      if (targetKeys.has(key)) continue;
+      if (knownSourceKeys.has(key)) existedSincePreview += 1;
+      else changedSincePreview += 1;
+    }
+  }
+  const notInPreview = candidates.length - targets.length;
+  // 실제로 들어간 줄만 센다(2026-10-25 R7). 후보 계산과 INSERT 사이에 같은 키가 먼저 들어가면
   // ignore-duplicates 가 조용히 건너뛰는데, 예전엔 후보 수를 "넣었어요"로 보여 줬다.
   // ON CONFLICT DO NOTHING + RETURNING 은 실제 삽입 행만 돌려준다(lib/donationEvents.ts 선례).
   const insertedKeys: string[] = [];
-  if (candidates.length > 0) {
+  if (targets.length > 0) {
     // source_key 는 원본 그대로 쓴다 → unique(streamer_id, source_key)가 중복을 막아
     // 두 번 눌러도 같은 결과가 두 번 들어가지 않는다(멱등).
     // batch_id 는 null(수동기록·정가기록 선례) — 새 수집 배치를 만들지 않기 위해서다.
-    for (let i = 0; i < candidates.length; i += 500) {
-      const chunk = candidates.slice(i, i + 500);
+    // 청크는 운영 max-rows(1,000) 이하로 둔다 — return=representation 응답이 잘리면 "실제로 들어간 수"가 줄어 보인다.
+    for (let i = 0; i < targets.length; i += 500) {
+      const chunk = targets.slice(i, i + 500);
       const inserted = await supabaseFetch<Array<{ source_key: string }> | null>(
         `/${tableName("upbo_entries")}?on_conflict=streamer_id,source_key&select=source_key`,
         {
@@ -4349,8 +4383,11 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
         catalogVersion: catalog.version,
         thresholdPercent: Number(streamer.threshold_percent ?? 2),
         summary,
-        requested: candidates.length,
+        previewed: previewSet ? previewSet.size : null,
+        requested: targets.length,
         inserted: insertedKeys.length,
+        changedSincePreview,
+        notInPreview: previewSet ? notInPreview : 0,
         // 실제로 들어간 키만 남긴다(예전엔 후보 키). 읽는 곳 없음 — 감사·되짚기용.
         sourceKeys: insertedKeys.slice(0, 1000),
       },
@@ -4362,10 +4399,12 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
     catalogVersion: catalog.version,
     thresholdPercent: Number(streamer.threshold_percent ?? 2),
     recorded: insertedKeys.length, // 실제로 들어간 수
-    requested: candidates.length,
-    alreadyExisted: candidates.length - insertedKeys.length,
+    requested: previewSet ? previewSet.size : targets.length, // 확인창에서 넣겠다고 한 수(미리보기 기준)
+    alreadyExisted: existedSincePreview + (targets.length - insertedKeys.length),
+    changedSincePreview,
+    notInPreview: previewSet ? notInPreview : 0,
     summary,
-    candidates,
+    candidates: targets,
   };
 }
 

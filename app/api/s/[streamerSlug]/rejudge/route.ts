@@ -20,7 +20,7 @@ export async function POST(request: Request, context: RouteContext) {
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
 
-    const body = await readJson<{ apply?: unknown; confirm?: unknown }>(request);
+    const body = await readJson<{ apply?: unknown; confirm?: unknown; sourceKeys?: unknown }>(request);
     const wantsApply = body.apply === true;
     if (!wantsApply) {
       return jsonOk(await previewRejudgeForStreamer(streamer));
@@ -30,7 +30,18 @@ export async function POST(request: Request, context: RouteContext) {
       (error as Error & { status?: number }).status = 400;
       throw error;
     }
-    return jsonOk(await applyRejudgeForStreamer(streamer));
+    // sourceKeys = 미리보기에서 본 후보 키. 있으면 그 안의 것만 넣는다(없으면 예전처럼 지금 후보 전부).
+    let previewKeys: string[] | undefined;
+    if (body.sourceKeys !== undefined) {
+      const keys = body.sourceKeys;
+      if (!Array.isArray(keys) || keys.length > 50000 || keys.some((k) => typeof k !== "string" || k.length > 300)) {
+        const error = new Error("sourceKeys must be an array of strings");
+        (error as Error & { status?: number }).status = 400;
+        throw error;
+      }
+      previewKeys = keys as string[];
+    }
+    return jsonOk(await applyRejudgeForStreamer(streamer, { previewKeys }));
   } catch (error) {
     return jsonError(error);
   }

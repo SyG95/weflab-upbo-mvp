@@ -2,6 +2,7 @@
 // unique(streamer_id, source_key) + ignore-duplicates + return=representation 을 구현해 검증한다.
 // 왜: 미리보기와 넣기 사이에 실시간 수집·다른 탭이 같은 키를 먼저 넣으면 DB 는 조용히 건너뛰는데,
 //     예전엔 후보 수를 "n건 넣었어요"로 보여 줬다. (미러 서버는 ignore-duplicates 를 흉내 내지 못한다.)
+// 리뷰(M1·L1) 뒤: 화면이 미리보기 키를 보내면 그 안의 것만 넣고, 확인창 숫자와 다른 이유를 따로 센다.
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -24,28 +25,28 @@ const catalog = normalizeCatalogCapture({
   ],
 });
 
-function capture(uid: string) {
+function row(uid: string) {
   return {
-    capturedAt: "2026-10-02T12:00:00.000Z",
-    rows: [
-      {
-        sourceUid: uid,
-        donateTimeText: "2026-10-02 12:00:00",
-        donationType: "별풍선",
-        donationAmount: 33,
-        fanNickname: "테스트팬",
-        fanId: "testfan",
-        results: [{ name: "A단컷", probability: 1, index: 0, total: 1 }],
-      },
-    ],
+    sourceUid: uid,
+    donateTimeText: "2026-10-02 12:00:00",
+    donationType: "별풍선",
+    donationAmount: 33,
+    fanNickname: "테스트팬",
+    fanId: "testfan",
+    results: [{ name: "A단컷", probability: 1, index: 0, total: 1 }],
   };
+}
+
+function capture(uids: string[]) {
+  return { capturedAt: "2026-10-02T12:00:00.000Z", rows: uids.map(row) };
 }
 
 const db = {
   entries: [] as Row[],
   raw: [] as Row[],
   audit: [] as Row[],
-  raceKey: null as string | null, // 넣기 요청 직전에 "다른 경로"가 먼저 넣는 키
+  raceKey: null as string | null, // 넣기 요청(INSERT) 직전에 "다른 경로"가 먼저 넣는 키
+  inserts: 0, // upbo_entries POST 요청 수(청크 수)
 };
 
 const server = http.createServer(async (req, res) => {
@@ -72,6 +73,7 @@ const server = http.createServer(async (req, res) => {
       return send(200, db.raw);
     case "/rest/v1/upbo_entries": {
       if (req.method !== "POST") return send(200, db.entries.map((e) => ({ id: e.id, source_key: e.source_key, created_at: e.created_at })));
+      db.inserts += 1;
       if (db.raceKey) {
         db.entries.push({ id: "other", streamer_id: "s-r", source_key: db.raceKey, created_at: "2026-10-25T00:00:00Z" });
         db.raceKey = null;
@@ -79,14 +81,14 @@ const server = http.createServer(async (req, res) => {
       assert.equal(q.get("on_conflict"), "streamer_id,source_key");
       const ignore = prefer.includes("resolution=ignore-duplicates");
       const inserted: Row[] = [];
-      for (const row of Array.isArray(body) ? body : [body]) {
-        const dup = db.entries.some((e) => e.streamer_id === row.streamer_id && e.source_key === row.source_key);
+      for (const r of Array.isArray(body) ? body : [body]) {
+        const dup = db.entries.some((e) => e.streamer_id === r.streamer_id && e.source_key === r.source_key);
         if (dup) {
           if (!ignore) return send(409, { code: "23505", message: "duplicate key" });
           continue; // ON CONFLICT DO NOTHING
         }
-        db.entries.push(row);
-        inserted.push(row);
+        db.entries.push(r);
+        inserted.push(r);
       }
       if (!prefer.includes("return=representation")) return send(201, "");
       const select = (q.get("select") ?? "*").split(",");
@@ -126,45 +128,131 @@ const STREAMER = { id: "s-r", slug: "rrr", display_name: "R", threshold_percent:
   typeof import("../lib/upboSupabase").applyRejudgeForStreamer
 >[0];
 
-function seed() {
+// 원본 배치 하나에 uid 하나씩(저장 순서대로).
+function seed(uids: string[] = ["uid1", "uid2", "uid3"]) {
   db.entries = [];
   db.audit = [];
   db.raceKey = null;
-  db.raw = ["uid1", "uid2", "uid3"].map((uid, i) => ({
+  db.inserts = 0;
+  db.raw = uids.map((uid, i) => ({
     id: `r${i}`,
     batch_id: `b${i}`,
-    saved_at: `2026-10-02T12:00:0${i}Z`,
-    raw: capture(uid),
+    saved_at: `2026-10-02T12:00:0${i % 10}Z`,
+    raw: capture([uid]),
   }));
 }
 
-test("다른 경로가 끼어들지 않으면: 후보 3건 = 실제로 넣은 3건", async () => {
+const previewKeysOf = async () => (await lib.previewRejudgeForStreamer(STREAMER)).candidates.map((c) => c.sourceKey);
+const lastAudit = () => db.audit.filter((a) => a.action === "rejudge_applied").at(-1)!.payload as Row;
+
+test("다른 경로가 끼어들지 않으면: 미리보기 3건 = 실제로 넣은 3건", async () => {
   seed();
-  const r = await lib.applyRejudgeForStreamer(STREAMER);
+  const keys = await previewKeysOf();
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
   assert.equal(r.requested, 3);
   assert.equal(r.recorded, 3);
   assert.equal(r.alreadyExisted, 0);
-  const audit = db.audit.find((a) => a.action === "rejudge_applied")!.payload as Row;
-  assert.equal(audit.inserted, 3);
-  assert.deepEqual([...(audit.sourceKeys as string[])].sort(), ["uid1::0", "uid2::0", "uid3::0"]);
+  assert.equal(r.changedSincePreview, 0);
+  assert.equal(r.notInPreview, 0);
+  assert.equal(lastAudit().inserted, 3);
+  assert.deepEqual([...(lastAudit().sourceKeys as string[])].sort(), ["uid1::0", "uid2::0", "uid3::0"]);
 });
 
-test("미리보기 뒤 다른 경로가 1건을 먼저 넣으면: 실제로 넣은 수는 2, 이미 있음 1(예전엔 3으로 보였다)", async () => {
+test("미리보기 뒤 다른 경로가 1건을 먼저 넣으면: 미리보기 3건 중 2건, 이미 있음 1건", async () => {
+  seed();
+  const keys = await previewKeysOf();
+  // 미리보기와 넣기 사이에 실시간 수집이 uid2 를 먼저 기록했다
+  db.entries.push({ id: "live", streamer_id: "s-r", source_key: "uid2::0", created_at: "2026-10-25T00:00:00Z" });
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
+  assert.equal(r.requested, 3, "확인창에서 본 수");
+  assert.equal(r.recorded, 2);
+  assert.equal(r.alreadyExisted, 1);
+  assert.equal(r.changedSincePreview, 0);
+  assert.equal(db.entries.filter((e) => e.source_key === "uid2::0").length, 1, "중복 행 없음");
+});
+
+test("넣기 요청 도중(INSERT 직전)에 끼어든 것도 이미 있음으로 센다", async () => {
+  seed();
+  const keys = await previewKeysOf();
+  db.raceKey = "uid2::0";
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
+  assert.equal(r.requested, 3);
+  assert.equal(r.recorded, 2);
+  assert.equal(r.alreadyExisted, 1);
+  assert.deepEqual([...(lastAudit().sourceKeys as string[])].sort(), ["uid1::0", "uid3::0"], "장부에는 실제로 넣은 키만");
+});
+
+test("미리보기 뒤 새로 생긴 후보는 넣지 않고 숫자로만 알린다", async () => {
+  seed(["uid1", "uid2"]);
+  const keys = await previewKeysOf();
+  db.raw.push({ id: "r9", batch_id: "b9", saved_at: "2026-10-02T12:00:09Z", raw: capture(["uid9"]) });
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
+  assert.equal(r.requested, 2);
+  assert.equal(r.recorded, 2);
+  assert.equal(r.notInPreview, 1);
+  assert.equal(db.entries.some((e) => e.source_key === "uid9::0"), false, "확인 안 한 건 안 들어간다");
+  // 다시 미리보기하면 그 1건이 보이고, 넣으면 들어간다
+  const again = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: await previewKeysOf() });
+  assert.equal(again.recorded, 1);
+});
+
+test("미리보기에 있었는데 이제 후보도 아니고 DB 에도 없으면 '바뀌어 빠짐'으로 센다", async () => {
+  seed(["uid1", "uid2"]);
+  const keys = await previewKeysOf();
+  db.raw = db.raw.filter((r) => r.id !== "r1"); // uid2 원본이 더는 후보가 안 되는 상황(예: 표·기준 변경)
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
+  assert.equal(r.requested, 2);
+  assert.equal(r.recorded, 1);
+  assert.equal(r.alreadyExisted, 0);
+  assert.equal(r.changedSincePreview, 1);
+});
+
+test("한 캡처에 같은 줄이 두 번 담겨도 미리보기·넣기 모두 1건(L1)", async () => {
+  seed([]);
+  db.raw = [{ id: "r0", batch_id: "b0", saved_at: "2026-10-02T12:00:00Z", raw: capture(["dup1", "dup1"]) }];
+  const preview = await lib.previewRejudgeForStreamer(STREAMER);
+  assert.equal(preview.summary.wouldRecord, 1);
+  assert.equal(preview.candidates.length, 1);
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: preview.candidates.map((c) => c.sourceKey) });
+  assert.equal(r.requested, 1);
+  assert.equal(r.recorded, 1);
+  assert.equal(r.alreadyExisted, 0, "자기 자신과 겹친 걸 '그사이 이미 들어감'으로 잘못 설명하지 않는다");
+});
+
+test("후보가 500건을 넘으면 나눠 넣어도 실제로 들어간 수가 다 쌓인다", async () => {
+  seed([]);
+  db.raw = [
+    {
+      id: "r0",
+      batch_id: "b0",
+      saved_at: "2026-10-02T12:00:00Z",
+      raw: capture(Array.from({ length: 520 }, (_, i) => `bulk${String(i).padStart(4, "0")}`)),
+    },
+  ];
+  const keys = await previewKeysOf();
+  assert.equal(keys.length, 520);
+  const r = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
+  assert.equal(db.inserts, 2, "500건씩 2번");
+  assert.equal(r.recorded, 520);
+  assert.equal(r.requested, 520);
+});
+
+test("미리보기 키를 안 보내면(옛 화면) 예전처럼 지금 후보 전부", async () => {
   seed();
   db.raceKey = "uid2::0";
   const r = await lib.applyRejudgeForStreamer(STREAMER);
   assert.equal(r.requested, 3);
   assert.equal(r.recorded, 2);
   assert.equal(r.alreadyExisted, 1);
-  const audit = db.audit.find((a) => a.action === "rejudge_applied")!.payload as Row;
-  assert.deepEqual([...(audit.sourceKeys as string[])].sort(), ["uid1::0", "uid3::0"], "장부에는 실제로 넣은 키만");
-  assert.equal(db.entries.filter((e) => e.source_key === "uid2::0").length, 1, "중복 행 없음");
+  assert.equal(r.notInPreview, 0);
 });
 
 test("다시 누르면 넣을 게 없다(멱등)", async () => {
   seed();
-  await lib.applyRejudgeForStreamer(STREAMER);
-  const again = await lib.applyRejudgeForStreamer(STREAMER);
+  await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: await previewKeysOf() });
+  const keys = await previewKeysOf();
+  assert.equal(keys.length, 0);
+  const again = await lib.applyRejudgeForStreamer(STREAMER, { previewKeys: keys });
   assert.equal(again.requested, 0);
   assert.equal(again.recorded, 0);
   assert.equal(db.entries.length, 3);
