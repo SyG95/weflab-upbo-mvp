@@ -4289,45 +4289,53 @@ export async function previewRejudgeForStreamer(streamer: StreamerRow) {
 export async function applyRejudgeForStreamer(streamer: StreamerRow) {
   const { catalog, summary, candidates } = await rejudgeContextForStreamer(streamer);
   const now = new Date().toISOString();
+  // 실제로 들어간 줄만 센다(2026-10-25 R7). 미리보기와 넣기 사이에 실시간 수집·다른 탭이 같은 키를 먼저 넣으면
+  // ignore-duplicates 가 조용히 건너뛰는데, 예전엔 후보 수를 "넣었어요"로 보여 줬다.
+  // ON CONFLICT DO NOTHING + RETURNING 은 실제 삽입 행만 돌려준다(lib/donationEvents.ts 선례).
+  const insertedKeys: string[] = [];
   if (candidates.length > 0) {
     // source_key 는 원본 그대로 쓴다 → unique(streamer_id, source_key)가 중복을 막아
     // 두 번 눌러도 같은 결과가 두 번 들어가지 않는다(멱등).
     // batch_id 는 null(수동기록·정가기록 선례) — 새 수집 배치를 만들지 않기 위해서다.
     for (let i = 0; i < candidates.length; i += 500) {
       const chunk = candidates.slice(i, i + 500);
-      await supabaseFetch(`/${tableName("upbo_entries")}?on_conflict=streamer_id,source_key`, {
-        method: "POST",
-        headers: { prefer: "resolution=ignore-duplicates,return=minimal" },
-        body: JSON.stringify(
-          chunk.map((candidate) => ({
-            id: crypto.randomUUID(),
-            streamer_id: streamer.id,
-            source_key: candidate.sourceKey,
-            batch_id: null,
-            catalog_version: catalog.version,
-            status: "pending",
-            fan_nickname: candidate.fanNickname,
-            fan_id: candidate.fanId,
-            item_name: candidate.itemName,
-            probability: candidate.probability,
-            donate_time_text: candidate.donateTimeText,
-            donation_type: candidate.donationType,
-            donation_amount: candidate.donationAmount,
-            donation_amount_text: candidate.donationAmountText,
-            catalog_group_index: candidate.catalogGroupIndex,
-            amount_range_label: candidate.amountRangeLabel,
-            roulette_index: candidate.rouletteIndex,
-            roulette_total: candidate.rouletteTotal,
-            raw_text: candidate.rawText,
-            public_note: "",
-            // 두배권 미적용이라 effectiveCount 는 항상 1 → admin_note 는 비운다(자동수집분과 동일 규칙).
-            admin_note: "",
-            raw_import_id: null,
-            created_at: now,
-            updated_at: now,
-          })),
-        ),
-      });
+      const inserted = await supabaseFetch<Array<{ source_key: string }> | null>(
+        `/${tableName("upbo_entries")}?on_conflict=streamer_id,source_key&select=source_key`,
+        {
+          method: "POST",
+          headers: { prefer: "resolution=ignore-duplicates,return=representation" },
+          body: JSON.stringify(
+            chunk.map((candidate) => ({
+              id: crypto.randomUUID(),
+              streamer_id: streamer.id,
+              source_key: candidate.sourceKey,
+              batch_id: null,
+              catalog_version: catalog.version,
+              status: "pending",
+              fan_nickname: candidate.fanNickname,
+              fan_id: candidate.fanId,
+              item_name: candidate.itemName,
+              probability: candidate.probability,
+              donate_time_text: candidate.donateTimeText,
+              donation_type: candidate.donationType,
+              donation_amount: candidate.donationAmount,
+              donation_amount_text: candidate.donationAmountText,
+              catalog_group_index: candidate.catalogGroupIndex,
+              amount_range_label: candidate.amountRangeLabel,
+              roulette_index: candidate.rouletteIndex,
+              roulette_total: candidate.rouletteTotal,
+              raw_text: candidate.rawText,
+              public_note: "",
+              // 두배권 미적용이라 effectiveCount 는 항상 1 → admin_note 는 비운다(자동수집분과 동일 규칙).
+              admin_note: "",
+              raw_import_id: null,
+              created_at: now,
+              updated_at: now,
+            })),
+          ),
+        },
+      );
+      for (const row of inserted ?? []) if (row?.source_key) insertedKeys.push(row.source_key);
     }
   }
   await supabaseFetch(`/${tableName("audit_logs")}`, {
@@ -4341,7 +4349,10 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
         catalogVersion: catalog.version,
         thresholdPercent: Number(streamer.threshold_percent ?? 2),
         summary,
-        sourceKeys: candidates.map((candidate) => candidate.sourceKey).slice(0, 1000),
+        requested: candidates.length,
+        inserted: insertedKeys.length,
+        // 실제로 들어간 키만 남긴다(예전엔 후보 키). 읽는 곳 없음 — 감사·되짚기용.
+        sourceKeys: insertedKeys.slice(0, 1000),
       },
     }),
   });
@@ -4350,7 +4361,9 @@ export async function applyRejudgeForStreamer(streamer: StreamerRow) {
     streamerSlug: streamer.slug,
     catalogVersion: catalog.version,
     thresholdPercent: Number(streamer.threshold_percent ?? 2),
-    recorded: candidates.length,
+    recorded: insertedKeys.length, // 실제로 들어간 수
+    requested: candidates.length,
+    alreadyExisted: candidates.length - insertedKeys.length,
     summary,
     candidates,
   };

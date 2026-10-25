@@ -73,9 +73,14 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       }
       if (apply) {
         setPreview(null);
+        // recorded = 실제로 들어간 수. 그사이 다른 경로가 먼저 넣은 건 alreadyExisted 로 따로 알린다.
+        const already = Number(data.alreadyExisted ?? 0);
         setMsg({
           type: "ok",
-          text: `${data.recorded}건을 업보 시트에 넣었어요. 팬 화면에서 바로 보입니다.`,
+          text:
+            already > 0
+              ? `${data.recorded}건을 업보 시트에 넣었어요(${already}건은 그사이 이미 들어가 있었어요). 팬 화면에서 바로 보입니다.`
+              : `${data.recorded}건을 업보 시트에 넣었어요. 팬 화면에서 바로 보입니다.`,
         });
         router.refresh();
       } else {
