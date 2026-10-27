@@ -46,6 +46,7 @@ type AsofPreview = {
   pageCount: number;
   totalRows: number;
   inputFingerprint: string;
+  rawUntil: string | null;
   aliasCandidates?: AliasCandidate[];
 };
 
@@ -163,7 +164,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "donation_time", page }),
+        // 다음 쪽은 첫 쪽과 같은 원본 범위(rawUntil)로 — 방송 중 새 원본이 쌓여도 쪽끼리 어긋나지 않게.
+        body: JSON.stringify({ mode: "donation_time", page, ...(page > 0 && asof?.rawUntil ? { rawUntil: asof.rawUntil } : {}) }),
       });
       const data = await res.json();
       if (!res.ok) {

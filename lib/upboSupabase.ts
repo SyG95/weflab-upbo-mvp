@@ -4461,8 +4461,11 @@ export async function setFeatureFlags(streamer: StreamerRow, patch: unknown): Pr
 const DONATION_TIME_PAGE_SIZE = 2000;
 const USAGE_ENGINE: UsageEngine = { computeEffectiveOverrides, applyCatalogUsage };
 
-async function donationTimeRejudgeContext(streamer: StreamerRow) {
+// rawUntil: 첫 쪽에서 본 원본 마지막 저장 시각. 다음 쪽은 그때까지의 원본만 다시 판정해 방송 중 새 원본이 쌓여도
+// 쪽끼리 같은 행 목록·같은 지문이 된다(없으면 지금까지 전부).
+async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawUntil?: string | null } = {}) {
   const sid = streamer.id;
+  const rawUntilFilter = options.rawUntil ? `&saved_at=lte.${encodeURIComponent(options.rawUntil)}` : "";
   const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases] = await Promise.all([
     supabaseFetchAll<{ id: string; version: number; captured_at: string | null; created_at: string | null; groups: Json }>(
       `/${tableName("catalogs")}?streamer_id=eq.${sid}&select=id,version,captured_at,created_at,groups`,
@@ -4486,7 +4489,7 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
       PAGE_CREATED_ASC,
     ),
     supabaseFetchAll<{ id?: string; batch_id: string | null; raw: Json; saved_at?: string | null }>(
-      `/${tableName("raw_imports")}?streamer_id=eq.${sid}&type=eq.results&select=id,batch_id,saved_at,raw`,
+      `/${tableName("raw_imports")}?streamer_id=eq.${sid}&type=eq.results${rawUntilFilter}&select=id,batch_id,saved_at,raw`,
       [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
     itemAliasesForStreamer(sid),
@@ -4548,6 +4551,7 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
     fanCatalogs,
     fanUsageByVersion: fanUsageByVersionLikeState(history, USAGE_ENGINE),
   });
+  const rawUntil = options.rawUntil ?? rawRows.reduce<string | null>((max, row) => (row.saved_at && (!max || row.saved_at > max) ? row.saved_at : max), null);
   const aliasCandidates = buildAliasCandidates({
     results: collected.aliasUnmatched,
     catalogItems: collected.nowItems,
@@ -4560,17 +4564,21 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
     aliasCandidates,
     latestVersion: history.catalogs.at(-1)?.version ?? null,
     thresholdPercent: currentThreshold,
+    rawUntil,
     // 수동기록(G11)·원본 묶음(G10·새 결과)도 지문에 넣는다 — 미리보기 뒤 생긴 겹침·새 원본을 묶음 4 넣기가 409 로 막게.
     inputFingerprint: judgeInputFingerprint(history, {
       aliases,
       manual: manualEntries.map((m) => `${m.id}:${m.remaining}`).sort(),
-      raw: [rawRows.length, rawRows.reduce((max, row) => (row.saved_at && row.saved_at > max ? row.saved_at : max), "")],
+      raw: [rawRows.length, rawUntil],
     }),
   };
 }
 
-export async function previewDonationTimeRejudgeForStreamer(streamer: StreamerRow, options: { page?: number } = {}) {
-  const ctx = await donationTimeRejudgeContext(streamer);
+export async function previewDonationTimeRejudgeForStreamer(
+  streamer: StreamerRow,
+  options: { page?: number; rawUntil?: string | null } = {},
+) {
+  const ctx = await donationTimeRejudgeContext(streamer, { rawUntil: options.rawUntil });
   const totalRows = ctx.rows.length;
   const pageCount = Math.max(1, Math.ceil(totalRows / DONATION_TIME_PAGE_SIZE));
   const requested = Math.floor(Number(options.page ?? 0));
@@ -4588,6 +4596,7 @@ export async function previewDonationTimeRejudgeForStreamer(streamer: StreamerRo
     pageCount,
     totalRows,
     inputFingerprint: ctx.inputFingerprint,
+    rawUntil: ctx.rawUntil,
     // 이름 연결 재료는 첫 쪽에만 싣는다(다음 쪽 요청마다 같은 걸 또 보내지 않게).
     aliasCandidates: page === 0 ? ctx.aliasCandidates : [],
     aliases: page === 0 ? ctx.aliases : {},

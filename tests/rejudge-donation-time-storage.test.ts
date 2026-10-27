@@ -311,6 +311,26 @@ test("판정 입력 지문: 같은 데이터면 같고, 입력 이벤트 하나�
   assert.notEqual(a, c);
 });
 
+test("다음 쪽은 첫 쪽의 원본 기준 시각(rawUntil)까지만 — 방송 중 새 원본이 쌓여도 지문·행이 같다", async () => {
+  reset(SYNTH_TABLES);
+  const first = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
+  assert.ok(first.rawUntil, "첫 쪽이 기준 시각을 준다");
+  db.raw_imports.push({
+    id: "5e1f0000-0000-4000-8000-0000000004ff",
+    streamer_id: SYNTH_STREAMER.id,
+    type: "results",
+    batch_id: null,
+    saved_at: "2026-10-27T05:00:00.000Z",
+    raw: { rows: [{ sourceUid: "synthlive1", donateTimeText: "2026-10-27 13:59:00", donationAmount: 33, fanId: "viewer30", results: [{ name: "사진 1장", probability: 3 }] }] },
+  });
+  const pinned = await lib.previewDonationTimeRejudgeForStreamer(STREAMER, { rawUntil: first.rawUntil });
+  assert.equal(pinned.inputFingerprint, first.inputFingerprint);
+  assert.equal(pinned.summary.N, first.summary.N);
+  const fresh = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
+  assert.notEqual(fresh.inputFingerprint, first.inputFingerprint, "새 미리보기는 새 원본까지 본다");
+  assert.equal(fresh.summary.N, first.summary.N + 1);
+});
+
 test("시범 스위치: 기본 꺼짐, 켜면 한 줄(전체 값), 팬 페이지 오버레이 조회엔 새 action 이 없다", async () => {
   reset(SYNTH_TABLES);
   assert.deepEqual(await lib.featureFlagsForStreamer(SYNTH_STREAMER.id), { asofRejudge: false, catalogDriftNotice: false });

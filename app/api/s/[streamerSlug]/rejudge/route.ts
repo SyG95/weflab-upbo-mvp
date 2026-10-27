@@ -44,7 +44,14 @@ export async function POST(request: Request, context: RouteContext) {
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
 
-    const body = await readJson<{ apply?: unknown; confirm?: unknown; sourceKeys?: unknown; mode?: unknown; page?: unknown }>(request);
+    const body = await readJson<{
+      apply?: unknown;
+      confirm?: unknown;
+      sourceKeys?: unknown;
+      mode?: unknown;
+      page?: unknown;
+      rawUntil?: unknown;
+    }>(request);
     const mode = body.mode === undefined || body.mode === "now" ? "now" : body.mode === "donation_time" ? "donation_time" : null;
     if (!mode) throw httpError('mode must be "now" or "donation_time"', 400);
     const wantsApply = body.apply === true;
@@ -55,7 +62,12 @@ export async function POST(request: Request, context: RouteContext) {
       if (!flags.asofRejudge) throw httpError("donation_time mode is not enabled for this streamer", 403);
       const page = body.page === undefined ? 0 : Number(body.page);
       if (!Number.isInteger(page) || page < 0 || page > 10_000) throw httpError("page must be a non-negative integer", 400);
-      return jsonOk(await previewDonationTimeRejudgeForStreamer(streamer, { page }));
+      // rawUntil = 첫 쪽 응답이 준 원본 기준 시각(다음 쪽이 같은 원본 범위로 계산하게). 시각 글자만 받는다.
+      const rawUntil = body.rawUntil === undefined || body.rawUntil === null ? null : String(body.rawUntil);
+      if (rawUntil !== null && (rawUntil.length > 40 || !Number.isFinite(Date.parse(rawUntil)))) {
+        throw httpError("rawUntil must be a timestamp", 400);
+      }
+      return jsonOk(await previewDonationTimeRejudgeForStreamer(streamer, { page, rawUntil }));
     }
     if (!wantsApply) {
       return jsonOk(await previewRejudgeForStreamer(streamer));

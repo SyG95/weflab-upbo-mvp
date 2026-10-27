@@ -179,11 +179,12 @@ export function parseDonateTimeMsStrict(text: string | null | undefined): number
 }
 
 // 두배권처럼 보이는 이름. 실시간 후보 탐지(isMultiplierCandidateName)보다 넓게 본다 — 여기서는 🟡 로 올리는 데만
-// 쓰므로 넓게 잡아도 안전하다("다음 룰렛 ×2", "*2", "두배 찬스", "더블 찬스", "2x" 등).
+// 쓰므로 넓게 잡아도 안전하다("다음 룰렛 ×2", "*2", "두배 찬스", "더블 찬스", "2x", 3배 계열 등).
 export function looksLikeMultiplierName(value: unknown): boolean {
   if (isMultiplierCandidateName(value)) return true;
   const text = cleanText(value).toLowerCase();
-  return /두\s*배|2\s*배|[x×✕✖*]\s*2(?!\d)|(?<!\d)2\s*[x×✕✖]|더\s*블|double|배\s*수/.test(text);
+  // "세배"는 설날 리액션 이름일 수 있어 넣지 않는다(두배권이 아니면 스트리머 전체가 🟡 가 된다).
+  return /두\s*배|[23]\s*배|[x×✕✖*]\s*[23](?!\d)|(?<!\d)[23]\s*[x×✕✖]|더\s*블|트\s*리\s*플|double|triple|배\s*수/.test(text);
 }
 
 // "2026년 09월 07일 04시 14분 28초"(위플랩 공개 페이지 "수정시간은 …") → "2026-09-07T04:14:28+09:00". 모양이 다르면 null.

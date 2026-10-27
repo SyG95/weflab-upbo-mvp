@@ -191,10 +191,10 @@ test("parseDonateTimeMsStrict: 달력에 없는 날짜는 굴리지 않고 null"
 });
 
 test("looksLikeMultiplierName: 실시간 후보 탐지보다 넓게(🟡 로 올리는 데만 씀)", () => {
-  for (const name of ["다음 룰렛 2배", "다음 룰렛 ×2", "다음룰렛 *2", "두배 찬스", "더블 찬스", "2x 보상", "Double"]) {
+  for (const name of ["다음 룰렛 2배", "다음 룰렛 ×2", "다음룰렛 *2", "두배 찬스", "더블 찬스", "2x 보상", "Double", "룰렛 ×3", "3배 찬스", "트리플"]) {
     assert.equal(looksLikeMultiplierName(name), true, name);
   }
-  for (const name of ["단컷", "하트", "사진10장", "22개 세트", "x20 묶음"]) assert.equal(looksLikeMultiplierName(name), false, name);
+  for (const name of ["단컷", "하트", "사진10장", "22개 세트", "x20 묶음", "세배하기"]) assert.equal(looksLikeMultiplierName(name), false, name);
 });
 
 test("parseWeflabModifiedAtIso: 위플랩 수정시간 글자 → KST ISO, 모양이 다르거나 없는 날짜면 null", () => {
