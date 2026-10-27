@@ -30,7 +30,6 @@ import {
 } from "@/lib/upboSupabase";
 import type { ExtensionConfig } from "@/lib/extensionStatus";
 import { adminVisitorAccessState, visitorPasswordMatches } from "@/lib/adminVisitorAccess";
-import type { UpboFeatureFlags } from "@/lib/featureFlags";
 import {
   beginMasterAttempt,
   lockedMessage,
@@ -334,6 +333,8 @@ export async function setExtensionConfigForAllAction(
 
 // ── 스트리머별 시범 기능 스위치(확프 0.5.0 1단계 묶음 3~5) ─────────────────
 // 기본은 전부 꺼짐. 화면이 보낸 patch 는 아는 키·boolean 만 받는다(mergeFeatureFlags).
+// (타입을 lib/featureFlags 에서 따로 import 하지 않는 건 보안 줄 브랜치와 import 줄이 겹치지 않게 하려는 것)
+type UpboFeatureFlags = Awaited<ReturnType<typeof setFeatureFlags>>;
 export type FeatureFlagsActionResult = { ok: boolean; error?: string; flags?: UpboFeatureFlags };
 
 export async function setFeatureFlagsAction(
