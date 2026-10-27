@@ -1,6 +1,7 @@
 // 후원 시점 근사 다시판정 — 합성 정답 사례 정확도(PHASE1-TEST-PLAN.md §3-5).
-// 밍가연 10/24 모양(표 3버전, 170 표 예외 45→40%, 늦게 몰려 들어온 원본)을 지어낸 값으로 재현했다(실명·계정ID 0).
-// 합격선: 🟢 로 분류된 건 중 오답 0, 반례는 전부 🟡 이상, 밍가연형 2건은 "새로 기록될 것", 기준 초과 6건은 ⚪.
+// 10/24 검수 사례 모양(표 3버전, 170 표 예외 45→40%, 늦게 몰려 들어온 원본)을 지어낸 값으로 재현했다(실명·계정ID 0,
+// 시각·상품명도 바꿈). 합격선: 🟢 로 분류된 건 중 오답 0, 반례는 전부 🟡 이상, 늦은 수집 2건은 "새로 기록될 것", 기준 초과 6건은 ⚪.
+// 한계: 정답을 구현자가 함께 썼다(독립 정답 아님). 실제 운영 사례 정확도는 운영 읽기 시험(R9) 몫이다.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { collectDonationTimeCandidates, collectRejudgeCandidates } from "../lib/rejudge";
@@ -44,7 +45,6 @@ function runSynthetic() {
     aliases: { "33::하트뿅::1": { itemName: "하트뿅뿅", probability: 1 } },
     fanCatalogs: history.catalogs.map((c) => ({ version: c.version, groups: c.groups })),
     fanUsageByVersion: fanUsageByVersionLikeState(history, engine),
-    fixedPriceConfig: [{ count: 330 }],
   });
 }
 
@@ -81,7 +81,7 @@ test("합성 정답 사례: 결과마다 분류가 정답과 같다(🟢 오답 
   }
 });
 
-test("밍가연형 2건: 그때 표(v2)로는 기록, '지금 표로' 다시판정으로는 0건 — 이번 모드로만 풀린다", () => {
+test("늦은 수집 2건: 그때 표(v2)로는 기록, '지금 표로' 다시판정으로는 0건 — 이번 모드로만 풀린다", () => {
   const { rows } = runSynthetic();
   for (const key of ["synth0101::0", "synth0102::0"]) {
     const row = rows.find((r) => r.sourceKey === key)!;

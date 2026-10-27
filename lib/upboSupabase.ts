@@ -4456,13 +4456,14 @@ export async function setFeatureFlags(streamer: StreamerRow, patch: unknown): Pr
 // ---------- 후원 시점 근사 다시판정 미리보기(1단계 묶음 3, 쓰기 0) ----------
 // 순수 판정은 lib/rejudge.ts(collectDonationTimeCandidates)·lib/judgeInputsAt.ts 가 하고, 여기서는 재료를 한 번에 읽기만 한다.
 // 재료는 전부 페이지 순회로 전량 읽는다(운영 max-rows 1,000 — special_item_rule 1,000행 잘림(F17)도 여기선 없다).
-// 응답은 🟢·🟡·오기록 의심 행만 쪽(200행)으로 나눠 보내고 나머지는 개수로만 보낸다(Vercel 응답 4.5MB 상한).
-const DONATION_TIME_PAGE_SIZE = 200;
+// 응답은 🟢·🟡·오기록 의심 행만 보내고 나머지는 개수로만 보낸다. 쪽(2,000행 ≈ 1MB)으로 나눠 Vercel 응답 4.5MB 상한 안에 두되,
+// 쪽이 작으면 "더 보기"마다 원본 전량을 다시 읽게 되므로(전송량) 한 번에 넉넉히 보내고 화면이 나눠 보여 준다.
+const DONATION_TIME_PAGE_SIZE = 2000;
 const USAGE_ENGINE: UsageEngine = { computeEffectiveOverrides, applyCatalogUsage };
 
 async function donationTimeRejudgeContext(streamer: StreamerRow) {
   const sid = streamer.id;
-  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases, fixedPriceConfig] = await Promise.all([
+  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases] = await Promise.all([
     supabaseFetchAll<{ id: string; version: number; captured_at: string | null; created_at: string | null; groups: Json }>(
       `/${tableName("catalogs")}?streamer_id=eq.${sid}&select=id,version,captured_at,created_at,groups`,
       [{ column: "version", dir: "asc" }, { column: "id", dir: "asc" }],
@@ -4489,7 +4490,6 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
       [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
     itemAliasesForStreamer(sid),
-    latestFixedPriceJudgeConfig(sid),
   ]);
   const currentThreshold = Number(streamer.threshold_percent ?? 2);
   const history = buildJudgeHistory({
@@ -4513,10 +4513,19 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
   );
   const manualEntries: ManualOverlapEntry[] = applyCancelledQuantity(
     entryRows
-      .filter((row) => row.source_key.startsWith("manual:") && (row.status === "pending" || row.status === "completed"))
+      // 숨김(hidden) 수동기록도 "이미 처리한 것"이라 겹침 대상이다. 취소 상태만 뺀다.
+      .filter((row) => row.source_key.startsWith("manual:") && row.status !== "cancelled")
       .map((row) => {
         const e = mapEntry(row, "");
-        return { entryId: row.id, effectiveCount: e.effectiveCount, fanId: e.fanId, fanNickname: e.fanNickname, itemName: e.itemName, donateTimeText: e.donateTimeText };
+        return {
+          entryId: row.id,
+          effectiveCount: e.effectiveCount,
+          fanId: e.fanId,
+          fanNickname: e.fanNickname,
+          itemName: e.itemName,
+          donateTimeText: e.donateTimeText,
+          createdAt: row.created_at ?? null,
+        };
       }),
     cancelled,
   ).map((m) => ({
@@ -4526,6 +4535,7 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
     itemName: m.itemName,
     donateTimeText: m.donateTimeText,
     remaining: Number(m.effectiveCount ?? 1),
+    createdAt: m.createdAt,
   }));
   const fanCatalogs = history.catalogs.map((c) => ({ version: c.version, groups: c.groups }));
   const collected = collectDonationTimeCandidates({
@@ -4537,7 +4547,6 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
     aliases,
     fanCatalogs,
     fanUsageByVersion: fanUsageByVersionLikeState(history, USAGE_ENGINE),
-    fixedPriceConfig,
   });
   const aliasCandidates = buildAliasCandidates({
     results: collected.aliasUnmatched,
@@ -4551,7 +4560,12 @@ async function donationTimeRejudgeContext(streamer: StreamerRow) {
     aliasCandidates,
     latestVersion: history.catalogs.at(-1)?.version ?? null,
     thresholdPercent: currentThreshold,
-    inputFingerprint: judgeInputFingerprint(history, { aliases, fixedPrice: fixedPriceConfig }),
+    // 수동기록(G11)·원본 묶음(G10·새 결과)도 지문에 넣는다 — 미리보기 뒤 생긴 겹침·새 원본을 묶음 4 넣기가 409 로 막게.
+    inputFingerprint: judgeInputFingerprint(history, {
+      aliases,
+      manual: manualEntries.map((m) => `${m.id}:${m.remaining}`).sort(),
+      raw: [rawRows.length, rawRows.reduce((max, row) => (row.saved_at && row.saved_at > max ? row.saved_at : max), "")],
+    }),
   };
 }
 

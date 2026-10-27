@@ -45,6 +45,7 @@ type AsofPreview = {
   page: number;
   pageCount: number;
   totalRows: number;
+  inputFingerprint: string;
   aliasCandidates?: AliasCandidate[];
 };
 
@@ -75,6 +76,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   // 시범 스위치(sy 가 /admin 에서 켬)가 켜졌을 때만 "판정 기준" 선택을 보인다. 못 읽으면 지금처럼 "지금 표로"만.
   const [asofAvailable, setAsofAvailable] = useState(false);
   const [mode, setMode] = useState<Mode>("now");
+  // 서버는 한 번에 2,000행까지 보내고, 화면은 그중 앞부분만 그린 뒤 "더 보기"로 늘린다(서버 재요청은 받은 행을 다 본 뒤에만).
+  const [asofShown, setAsofShown] = useState(MAX_ROWS_SHOWN);
 
   useEffect(() => {
     let alive = true;
@@ -168,16 +171,25 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
         return;
       }
       const next = data as AsofPreview;
+      if (page > 0 && asof && next.inputFingerprint !== asof.inputFingerprint) {
+        // 쪽 사이에 판정 재료(표·설정·원본·수동기록)가 바뀌면 이어 붙이면 행이 겹치거나 빠진다 → 처음부터 다시.
+        await callAsof(0, "그사이 판정 재료가 바뀌어 처음부터 다시 불러왔어요.");
+        return;
+      }
       if (page === 0) {
         setAsof(next);
+        setAsofShown(MAX_ROWS_SHOWN);
         if (noticeAfter) setMsg({ type: "ok", text: noticeAfter });
         else if (next.summary.d === 0 && next.summary.suspectedOver === 0) {
           setMsg({ type: "ok", text: "새로 기록될 게 없어요. 후원 그때 표 기준으로도 빠진 기록이 없습니다." });
         }
       } else {
-        setAsof((prev) =>
-          prev ? { ...next, rows: [...prev.rows, ...next.rows], aliasCandidates: prev.aliasCandidates } : next,
-        );
+        setAsof((prev) => {
+          if (!prev) return next;
+          const seen = new Set(prev.rows.map((r) => r.sourceKey));
+          return { ...next, rows: [...prev.rows, ...next.rows.filter((r) => !seen.has(r.sourceKey))], aliasCandidates: prev.aliasCandidates };
+        });
+        setAsofShown((n) => n + MAX_ROWS_SHOWN);
       }
     } catch {
       setMsg({ type: "err", text: "연결에 실패했어요. 잠시 뒤 다시 시도해 주세요." });
@@ -196,7 +208,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   }
 
   function onModeChange(next: Mode) {
-    if (next === mode) return;
+    if (next === mode || busy !== "") return;
     setMode(next);
     setPreview(null);
     setAsof(null);
@@ -255,7 +267,13 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
           </legend>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", marginTop: 4, fontSize: 13 }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input type="radio" name={`rejudge-mode-${slug}`} checked={mode === "now"} onChange={() => onModeChange("now")} />
+              <input
+                type="radio"
+                name={`rejudge-mode-${slug}`}
+                checked={mode === "now"}
+                disabled={busy !== ""}
+                onChange={() => onModeChange("now")}
+              />
               지금 표로
             </label>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -263,6 +281,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
                 type="radio"
                 name={`rejudge-mode-${slug}`}
                 checked={mode === "donation_time"}
+                disabled={busy !== ""}
                 onChange={() => onModeChange("donation_time")}
               />
               후원 그때 표로(근사·미리보기)
@@ -398,7 +417,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
                   </tr>
                 </thead>
                 <tbody>
-                  {asof.rows.map((r) => (
+                  {asof.rows.slice(0, asofShown).map((r) => (
                     <tr key={r.sourceKey}>
                       <td style={{ whiteSpace: "nowrap" }}>{CLS_LABEL[r.kind === "suspected" ? "grey" : r.cls]}</td>
                       <td style={{ minWidth: 180 }}>
@@ -428,10 +447,14 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
               </table>
             </div>
           ) : null}
-          {asof.page + 1 < asof.pageCount ? (
+          {asofShown < asof.rows.length || asof.page + 1 < asof.pageCount ? (
             <div className={styles.thresholdRow} style={{ marginTop: 10 }}>
-              <button type="button" onClick={() => void callAsof(asof.page + 1)} disabled={busy !== ""}>
-                {busy === "more" ? "불러오는 중…" : `더 보기 (${asof.rows.length}/${asof.totalRows})`}
+              <button
+                type="button"
+                onClick={() => (asofShown < asof.rows.length ? setAsofShown((n) => n + MAX_ROWS_SHOWN) : void callAsof(asof.page + 1))}
+                disabled={busy !== ""}
+              >
+                {busy === "more" ? "불러오는 중…" : `더 보기 (${Math.min(asofShown, asof.rows.length)}/${asof.totalRows})`}
               </button>
             </div>
           ) : null}

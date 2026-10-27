@@ -9,6 +9,8 @@ import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 import { requireSheetAdmin } from "@/lib/sheetAdminAuth";
 
 export const runtime = "nodejs";
+// 후원 시점 근사 미리보기는 원본 전량을 결과마다 다시 판정한다(무거운 스트리머 수 초) — 넉넉히 둔다.
+export const maxDuration = 60;
 
 type RouteContext = { params: Promise<{ streamerSlug: string }> };
 

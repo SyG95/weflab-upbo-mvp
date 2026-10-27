@@ -13,7 +13,7 @@ export type DonationTimeFacts = {
   exactName: boolean; // G1 원문 상품명이 그때 칸 이름과 글자 그대로 같음
   probabilityKnown: boolean; // G2 확률이 1e-6 안에서 같음(원문 확률이 비면 엔진이 이름만으로 맞춤)
   amountKnown: boolean; // G3 후원 금액을 읽음(비면 엔진이 금액 범위 없이 맞춤)
-  tableAmbiguity: "window" | "next_version" | "before_first" | null; // G4
+  tableAmbiguity: "window" | "next_version" | "next_conflict" | "before_first" | null; // G4
   usageApproximate: boolean; // G5
   thresholdSafe: boolean; // G6
   multiplierRisk: boolean; // G7 두배권 칸·확정 규칙이 있는 스트리머이거나 이름이 두배권 같음
@@ -21,6 +21,7 @@ export type DonationTimeFacts = {
   timeKnown: boolean; // G9
   preReset: boolean; // G9
   keyUnstable: boolean; // G10
+  fallbackKey: boolean; // G10 보강: 원본 고유번호 없는 결과(같은 초 같은 후원 2건이 1건으로 합쳐질 수 있음)
   manualOverlapSummary: string | null; // G11
   aliasUsed: boolean; // G12
   hiddenOnFan: boolean; // 꼬리표(분류는 안 바꿈)
@@ -41,6 +42,7 @@ const GREEN_TEXT = "그때 표·기준과 정확히 맞아요";
 const AMBIGUITY_TEXT: Record<NonNullable<DonationTimeFacts["tableAmbiguity"]>, string> = {
   window: "그 무렵 룰렛표가 바뀌는 중이었어요",
   next_version: "그때 표엔 없고 다음 표와 맞아요(표가 바뀌는 중이었을 수 있어요)",
+  next_conflict: "바로 다음 표로 판정하면 결과가 달라요(표가 바뀌던 때일 수 있어요)",
   before_first: "그때 룰렛표가 아직 저장돼 있지 않았어요",
 };
 
@@ -67,13 +69,14 @@ export function classifyDonationTimeRow(facts: DonationTimeFacts): ClassifiedRow
   if (!facts.probabilityKnown) reasons.push("확률이 표와 달라요(원본에 확률이 없어요)");
   if (!facts.amountKnown) reasons.push("후원 금액을 읽지 못했어요");
   if (facts.tableAmbiguity) reasons.push(AMBIGUITY_TEXT[facts.tableAmbiguity]);
-  if (facts.usageApproximate) reasons.push("그때 사용 설정을 정확히 알 수 없어요(8/30 이전)");
+  if (facts.usageApproximate) reasons.push("그때 사용 설정을 정확히 알 수 없어요(승계 규칙 바뀐 배포 확인 전)");
   if (!facts.thresholdSafe) reasons.push("그때 기준확률이 확실하지 않아요");
   if (facts.multiplierRisk) reasons.push("두배권이 있는 룰렛이라 2배 여부 확인이 필요해요");
   if (facts.fixedPriceCandidate) reasons.push("정가 금액과 같아요");
   if (!facts.timeKnown) reasons.push("후원 시각을 읽지 못했어요");
-  else if (facts.preReset) reasons.push("리셋 전 기록이에요");
+  else if (facts.preReset) reasons.push("데이터 초기화 전 기록이라 그때 설정 이력이 없을 수 있어요");
   if (facts.keyUnstable) reasons.push("같은 기록이 다른 상품으로 잡힌 적이 있어요");
+  if (facts.fallbackKey) reasons.push("원본 고유번호가 없는 기록이에요(같은 시각 같은 후원이 합쳐졌을 수 있어요)");
   if (facts.manualOverlapSummary) reasons.push(`수동기록과 같은 건일 수 있어요: ${facts.manualOverlapSummary}`);
   if (facts.aliasUsed) reasons.push("이름 연결로 맞춘 상품이에요");
   return {

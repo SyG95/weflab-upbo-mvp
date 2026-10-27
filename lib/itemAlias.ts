@@ -193,6 +193,17 @@ export function applyItemAliases(
   });
 }
 
+// 이 결과에 걸린 이름 연결(최신 표 기준 키, "업보 아님"은 제외). 없으면 null. 수동기록 겹침 비교에 연결 대상 이름도 쓰려고 둔다.
+export function aliasTargetFor(
+  result: NormalizedResult,
+  latestItems: NormalizedCatalogItem[],
+  aliases: ItemAliasMap,
+): ItemAlias | null {
+  if (Object.keys(aliases).length === 0) return null;
+  const alias = aliases[aliasKey(amountLabelOf(result, latestItems), result.itemName, result.probability)];
+  return alias && !alias.ignored ? alias : null;
+}
+
 // 후원 시점 근사 판정용(1단계 묶음 3): 그 버전에서 원래 이름으로 못 찾을 때만 연결을 쓴다.
 //   - 그때 표에서 꺼진 칸까지 포함해 원래 이름이 맞으면 연결하지 않는다(그때 표가 정답이므로).
 //   - 연결 키는 연결을 만든 기준인 최신 표로 계산하고(applyItemAliases 와 같음), 대상 상품을 그 버전 안에서 다시 찾는다.
@@ -207,8 +218,8 @@ export function applyItemAliasesIfUnmatched(
   const unchanged = { result, aliasUsed: false, aliasTargetMissing: false };
   if (Object.keys(aliases).length === 0) return unchanged;
   if (findCatalogMatch(result, versionItems, { includeDisabled: true })) return unchanged;
-  const alias = aliases[aliasKey(amountLabelOf(result, latestItems), result.itemName, result.probability)];
-  if (!alias || alias.ignored) return unchanged;
+  const alias = aliasTargetFor(result, latestItems, aliases);
+  if (!alias) return unchanged;
   const aliased: NormalizedResult = {
     ...result,
     itemName: alias.itemName,

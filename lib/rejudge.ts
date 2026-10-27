@@ -25,7 +25,6 @@ import {
   cleanText,
   findCatalogMatch,
   isMissionSettlementType,
-  isMultiplierCandidateName,
   normalizeResultCapture,
   reconcileResults,
   type NormalizedCatalogItem,
@@ -34,14 +33,17 @@ import {
   type ResultCapture,
   type SpecialItemRule,
 } from "./upboCore";
-import { applyItemAliases, applyItemAliasesIfUnmatched, type ItemAliasMap } from "./itemAlias";
-import { filterEntriesByCatalogUsage, parseDonateTimeMs, type Catalog, type UpboEntry } from "./api";
-import { judgeFixedPeriod, type FixedPriceJudgeEntry } from "./fixedPricePeriod";
+import { aliasTargetFor, applyItemAliases, applyItemAliasesIfUnmatched, type ItemAliasMap } from "./itemAlias";
+import { filterEntriesByCatalogUsage, type Catalog, type UpboEntry } from "./api";
 import {
   currentJudgeInputs,
   hasMultiplierCells,
+  looksLikeMultiplierName,
+  parseDonateTimeMsStrict,
   pickJudgeInputsAt,
+  resultMatchesVersion,
   thresholdPercentCandidates,
+  versionInputsAt,
   type JudgeHistory,
   type UsageEngine,
   type UsageOverrides,
@@ -52,6 +54,7 @@ import {
   excludeReasonText,
   type DonationTimeClass,
   type DonationTimeExcludeKind,
+  type DonationTimeFacts,
 } from "./rejudgeClassify";
 
 export type RejudgeSourceBatch = {
@@ -229,6 +232,7 @@ export type DonationTimeRow = {
   };
   nowDecision: ReconcileDecision["decision"] | "no_catalog";
   manualOverlap: ManualOverlap | null;
+  ambiguity: DonationTimeFacts["tableAmbiguity"];
 };
 
 export type DonationTimeSummary = {
@@ -259,12 +263,6 @@ function nearly(a: number | null | undefined, b: number | null | undefined): boo
   return a !== null && a !== undefined && b !== null && b !== undefined && Math.abs(Number(a) - Number(b)) < 0.000001;
 }
 
-function fixedPriceCandidate(result: NormalizedResult, config: FixedPriceJudgeEntry[]): boolean {
-  const amount = result.donationAmount;
-  if (amount === null || amount === undefined) return false;
-  return config.some((entry) => entry.count === amount && judgeFixedPeriod(entry, result.donateTimeText) !== "out");
-}
-
 function judgeOne(
   catalogItems: NormalizedCatalogItem[],
   result: NormalizedResult,
@@ -292,7 +290,6 @@ export function collectDonationTimeCandidates({
   aliases = {},
   fanCatalogs,
   fanUsageByVersion,
-  fixedPriceConfig = [],
 }: {
   batches: RejudgeSourceBatch[];
   history: JudgeHistory;
@@ -303,7 +300,6 @@ export function collectDonationTimeCandidates({
   // 팬 화면 필터(filterEntriesByCatalogUsage)에 그대로 넣을 표·사용 설정 맵(getStreamerState 와 같은 규칙).
   fanCatalogs: Catalog[];
   fanUsageByVersion: Record<number, UsageOverrides>;
-  fixedPriceConfig?: FixedPriceJudgeEntry[];
 }): { summary: DonationTimeSummary; rows: DonationTimeRow[]; aliasUnmatched: NormalizedResult[]; nowItems: NormalizedCatalogItem[] } {
   const summary: DonationTimeSummary = {
     batchCount: 0,
@@ -357,7 +353,7 @@ export function collectDonationTimeCandidates({
   for (const [sourceKey, occ] of firstByKey) {
     summary.N += 1;
     const result = occ.result;
-    const known = parseDonateTimeMs(result.donateTimeText);
+    const known = parseDonateTimeMsStrict(result.donateTimeText);
     if (known === null) summary.timeUnknown += 1;
     const savedMs = occ.savedAt ? Date.parse(occ.savedAt) : NaN;
     // 후원 시각을 못 읽으면 원본 저장 시각(없으면 지금)으로 근사한다 — G9 로 🟡 가 된다.
@@ -434,6 +430,7 @@ export function collectDonationTimeCandidates({
           reasons: [],
           tags: [],
           manualOverlap: null,
+          ambiguity: inputs.ambiguity,
         });
       }
       continue;
@@ -454,8 +451,28 @@ export function collectDonationTimeCandidates({
 
     // 새로 기록될 것 — 🟢 엄격 조건 G1~G12.
     const matched = item!;
+    // G4 보강(확프 수집 표처럼 위플랩 수정시간을 모르는 교체): 바로 다음 표에도 같은 칸이 있는데 그 표로 판정하면
+    // 결과가 달라지면(사용 설정·금액대 예외 차이) 어느 표였는지가 판정을 가른다 → 애매.
+    let ambiguity: DonationTimeRow["ambiguity"] = inputs.ambiguity;
+    if (ambiguity === null) {
+      const next = history.catalogs.find((c) => c.version > inputs.version);
+      if (next && resultMatchesVersion(judged, next.version, history)) {
+        const nextInputs = versionInputsAt(tMs, next.version, history, engine);
+        if (judgeOne(nextInputs.items, judged, nextInputs.thresholdPercent.value, nextInputs.specialRules).decision !== "record") {
+          ambiguity = "next_conflict";
+        }
+      }
+    }
+    const aliasTarget = aliasTargetFor(result, nowItems, aliases);
     const manualOverlap = findManualOverlaps(
-      { fanId: result.fanId, fanNickname: result.fanNickname, itemName: result.itemName, donateTimeText: result.donateTimeText },
+      {
+        fanId: result.fanId,
+        fanNickname: result.fanNickname,
+        itemName: result.itemName,
+        donateTimeText: result.donateTimeText,
+        // 그때 표엔 옛 이름이 있어도 수동기록은 새 이름(연결 대상)으로 적었을 수 있다.
+        itemNames: [judged.itemName, matched.itemName, ...(aliasTarget ? [aliasTarget.itemName] : [])],
+      },
       manualEntries,
     );
     const fanView = filterEntriesByCatalogUsage(
@@ -478,17 +495,20 @@ export function collectDonationTimeCandidates({
       exactName: cleanText(result.itemName) === matched.itemName,
       probabilityKnown: result.probability !== null && nearly(judged.probability, matched.probability),
       amountKnown: result.donationAmount !== null,
-      tableAmbiguity: inputs.ambiguity,
+      tableAmbiguity: ambiguity,
       usageApproximate: inputs.usage.approximate,
       thresholdSafe:
         matched.thresholdOverridePercent !== undefined && matched.thresholdOverridePercent !== null
           ? true
           : inputs.thresholdPercent.exact || matched.probability <= thresholdFloor,
-      multiplierRisk: multiplierStreamer || isMultiplierCandidateName(result.itemName),
-      fixedPriceCandidate: fixedPriceCandidate(result, fixedPriceConfig),
+      multiplierRisk: multiplierStreamer || looksLikeMultiplierName(result.itemName),
+      // 정가 설정은 바뀐다(정가 → 룰렛 전환 등) — 그때든 지금이든 정가로 등록된 적 있는 갯수면 🟡.
+      fixedPriceCandidate: result.donationAmount !== null && history.fixedAmountsEver.has(result.donationAmount),
       timeKnown: known !== null,
       preReset: inputs.preReset,
       keyUnstable: unstable.has(sourceKey),
+      // 원본 고유번호(sourceUid)가 없으면 시각·계정·상품 해시가 열쇠라 같은 초의 같은 후원 2건이 1건으로 합쳐질 수 있다.
+      fallbackKey: sourceKey.startsWith("fallback::"),
       manualOverlapSummary: manualOverlap?.summary ?? null,
       aliasUsed: alias.aliasUsed,
       hiddenOnFan,
@@ -498,7 +518,7 @@ export function collectDonationTimeCandidates({
     else summary.yellow += 1;
     if (hiddenOnFan) summary.hiddenOnFan += 1;
     if (nowDecision === "record") summary.alsoNowRecord += 1;
-    rows.push({ ...base, kind: "new", ...classified, manualOverlap });
+    rows.push({ ...base, kind: "new", ...classified, manualOverlap, ambiguity });
   }
 
   // 🟢 → 🟡 → 오기록 의심, 같은 분류 안에서는 후원 시각 순(못 읽은 시각은 뒤).

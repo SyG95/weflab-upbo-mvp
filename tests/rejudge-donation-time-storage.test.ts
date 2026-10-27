@@ -233,7 +233,7 @@ test("이력은 페이지 순회로 전량 읽는다 — special_item_rule 1,200
   assert.ok(auditGets[1].includes("or="));
 });
 
-test("무거운 표본(3만 결과): 응답은 쪽(200행)으로 나뉘고 4.5MB 미만", async () => {
+test("무거운 표본(3만 결과 + 반영 배치 3,000 + 이력 1,500줄): 쪽(2,000행)으로 나뉘고 응답 4.5MB 미만, 계산 시간 상한", async () => {
   const sid = SYNTH_STREAMER.id;
   const groups = normalizeCatalogCapture({
     groups: [{ amountMin: 33, amountMax: 33, items: [{ name: "단컷", probability: 2 }, { name: "하트", probability: 98 }] }],
@@ -246,7 +246,7 @@ test("무거운 표본(3만 결과): 응답은 쪽(200행)으로 나뉘고 4.5MB
       const green = n % 10 === 0; // 10% 는 기록 후보(3,000건), 나머지는 기준 초과
       rows.push({
         sourceUid: `heavy${String(n).padStart(6, "0")}`,
-        donateTimeText: `2026-10-${String(2 + (n % 20)).padStart(2, "0")} 12:${String(n % 60).padStart(2, "0")}:00`,
+        donateTimeText: `2026-10-${String(2 + (n % 20)).padStart(2, "0")} ${String(n % 24).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}:00`,
         donationType: "별풍선",
         donationAmount: 33,
         fanNickname: `시청자${n % 500}`,
@@ -256,10 +256,25 @@ test("무거운 표본(3만 결과): 응답은 쪽(200행)으로 나뉘고 4.5MB
     }
     raw.push({ id: `raw${String(b).padStart(4, "0")}`, streamer_id: sid, type: "results", batch_id: null, saved_at: new Date(Date.parse("2026-10-23T00:00:00Z") + b * 1000).toISOString(), raw: { rows } });
   }
+  // 반영 배치 3,000개(전 스트리머 합계 7,690줄 중 무거운 1명 가정)와 사용 설정·기준% 이력 — 결과마다 다시 정렬하면 느려지던 재료
+  const batches: Row[] = Array.from({ length: 3000 }, (_, i) => ({
+    id: `b${String(i).padStart(5, "0")}`,
+    streamer_id: sid,
+    applied_at: new Date(Date.parse("2026-09-01T00:00:00Z") + i * 900_000).toISOString(),
+    threshold_percent: 10,
+  }));
+  const audits: Row[] = Array.from({ length: 1500 }, (_, i) => ({
+    id: `a${String(i).padStart(5, "0")}`,
+    streamer_id: sid,
+    action: i % 2 ? "catalog_usage_updated" : "threshold_percent_updated",
+    created_at: new Date(Date.parse("2026-09-01T00:00:00Z") + i * 1_700_000).toISOString(),
+    payload: i % 2 ? { catalogVersion: 1, overrides: { "g0-i1": i % 4 === 1 } } : { before: 10, after: 10, source: "settings" },
+  }));
   reset({
     streamers: [SYNTH_STREAMER],
-    catalogs: [{ id: "c1", streamer_id: sid, version: 1, captured_at: "2026-10-01T00:00:00Z", created_at: "2026-10-01T00:00:00Z", groups }],
-    audit_logs: [],
+    catalogs: [{ id: "c1", streamer_id: sid, version: 1, captured_at: "2026-09-01T00:00:00Z", created_at: "2026-09-01T00:00:00Z", groups }],
+    audit_logs: audits,
+    import_batches: batches,
     raw_imports: raw,
   });
   const started = Date.now();
@@ -268,15 +283,16 @@ test("무거운 표본(3만 결과): 응답은 쪽(200행)으로 나뉘고 4.5MB
   assert.equal(first.summary.N, 30000);
   assert.equal(first.summary.d, 3000);
   assert.equal(first.summary.b, 27000);
-  assert.equal(first.rows.length, 200);
-  assert.equal(first.pageCount, 15);
+  assert.equal(first.rows.length, 2000);
+  assert.equal(first.pageCount, 2);
   const bytes = Buffer.byteLength(JSON.stringify(first));
   assert.ok(bytes < 4.5 * 1024 * 1024, `응답 ${bytes} bytes`);
+  assert.ok(elapsed < 20_000, `계산 ${elapsed}ms — Vercel 60초 제한 안쪽 여유`);
   const last = await lib.previewDonationTimeRejudgeForStreamer(STREAMER, { page: 99 });
-  assert.equal(last.page, 14, "넘친 쪽 번호는 마지막 쪽으로");
-  assert.equal(last.rows.length, 200);
+  assert.equal(last.page, 1, "넘친 쪽 번호는 마지막 쪽으로");
+  assert.equal(last.rows.length, 1000);
   assert.deepEqual(last.aliasCandidates, [], "이름 연결 재료는 첫 쪽에만");
-  console.log(`  [heavy] 3만 결과 미리보기 ${elapsed}ms, 첫 쪽 응답 ${(bytes / 1024).toFixed(1)}KB`);
+  console.log(`  [heavy] 3만 결과·배치 3,000·이력 1,500 미리보기 ${elapsed}ms, 첫 쪽 응답 ${(bytes / 1024).toFixed(1)}KB`);
 });
 
 test("판정 입력 지문: 같은 데이터면 같고, 입력 이벤트 하나가 바뀌면 바뀐다", async () => {

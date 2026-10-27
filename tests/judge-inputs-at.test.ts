@@ -6,16 +6,20 @@ import {
   buildJudgeHistory,
   catalogAt,
   fanUsageByVersionLikeState,
+  looksLikeMultiplierName,
+  parseDonateTimeMsStrict,
   parseWeflabModifiedAtIso,
   pickJudgeInputsAt,
   specialRulesAt,
   thresholdOverridesAt,
+  thresholdPercentAtFast,
   usageAt,
   usageByVersionAt,
   type JudgeHistoryRaw,
   type UsageEngine,
 } from "../lib/judgeInputsAt";
 import { applyItemAliasesIfUnmatched } from "../lib/itemAlias";
+import { thresholdPercentAt } from "../lib/thresholdHistory";
 import { applyCatalogUsage, computeEffectiveOverrides } from "../lib/upboSupabase";
 import { normalizeCatalogCapture, normalizeResultCapture, specialRuleKeyForItem, type NormalizedResult } from "../lib/upboCore";
 
@@ -107,7 +111,7 @@ test("usageByVersionAt: 이력이 200건을 넘어도 그때 값이 정확하다
   assert.equal(fanUsageByVersionLikeState(h, engine)[1], undefined);
 });
 
-test("usageAt: 실시간 computeEffectiveOverrides 와 같은 값(그때까지의 저장본으로 부른 결과), 8/31 이전은 근사", () => {
+test("usageAt: 실시간 computeEffectiveOverrides 와 같은 값(그때까지의 저장본으로 부른 결과), 배포 확인 전은 근사", () => {
   const h = history({
     catalogs: [cat(1, "2026-08-01T00:00:00", [T33a]), cat(2, "2026-08-20T00:00:00", [T33b])],
     audits: [audit("catalog_usage_updated", "2026-08-02T00:00:00", { catalogVersion: 1, overrides: { g0: false } })],
@@ -115,24 +119,25 @@ test("usageAt: 실시간 computeEffectiveOverrides 와 같은 값(그때까지�
   const direct = computeEffectiveOverrides(2, h.groupsByVersion[2], { 1: { g0: false } }, h.groupsByVersion);
   const got = usageAt(t("2026-08-25T00:00:00"), 2, h, engine);
   assert.deepEqual(got.overrides, direct);
-  assert.equal(got.approximate, true, "8/30 승계 규칙 변경 전");
-  assert.equal(usageAt(t("2026-08-31T00:00:00"), 2, h, engine).approximate, false);
+  assert.equal(got.approximate, true, "승계 규칙 변경 배포 확인(9/17 09:23) 전");
+  assert.equal(usageAt(t("2026-09-17T09:23:05"), 2, h, engine).approximate, true);
+  assert.equal(usageAt(t("2026-09-17T09:23:06"), 2, h, engine).approximate, false);
 });
 
 test("thresholdOverridesAt: t 이전 최신 스냅샷, 8/14 신설 전은 예외 없음, 키는 금액대 라벨", () => {
   const h = history({
     audits: [
       audit("threshold_overrides_updated", "2026-08-10T00:00:00", { overrides: { "170": 45 } }),
-      audit("threshold_overrides_updated", "2026-10-24T12:46:32", { overrides: { "170": 40 } }),
+      audit("threshold_overrides_updated", "2026-10-24T12:50:00", { overrides: { "170": 40 } }),
     ],
   });
   assert.deepEqual(thresholdOverridesAt(t("2026-08-12T00:00:00"), h.overrides).overrides, {}, "8/14 전은 정답이 '예외 없음'");
-  assert.deepEqual(thresholdOverridesAt(t("2026-10-24T12:46:00"), h.overrides).overrides, { "170": 45 });
-  assert.deepEqual(thresholdOverridesAt(t("2026-10-24T12:46:32"), h.overrides).overrides, { "170": 45 }, "같은 시각은 바뀌기 전");
+  assert.deepEqual(thresholdOverridesAt(t("2026-10-24T12:49:00"), h.overrides).overrides, { "170": 45 });
+  assert.deepEqual(thresholdOverridesAt(t("2026-10-24T12:50:00"), h.overrides).overrides, { "170": 45 }, "같은 시각은 바뀌기 전");
   assert.deepEqual(thresholdOverridesAt(t("2026-10-25T00:00:00"), h.overrides).overrides, { "170": 40 });
 });
 
-test("specialRulesAt: 옛 버전 두배권 칸(확률만 다름)도 같은 금액대·이름이 확정이면 두배권으로 본다", () => {
+test("specialRulesAt: 옛 버전 두배권 칸(확률만 다름)도 t 이전에 같은 금액대·이름이 확정이면 두배권, t 뒤 확정은 안 씀", () => {
   const v1 = groupsOf([{ amount: 33, items: [["다음 룰렛 2배", 3], ["하트", 97]] }]);
   const v2 = groupsOf([{ amount: 33, items: [["다음 룰렛 2배", 5], ["하트", 95]] }]);
   const v2Cell = v2[0].items[0];
@@ -148,13 +153,48 @@ test("specialRulesAt: 옛 버전 두배권 칸(확률만 다름)도 같은 금�
       }),
     ],
   });
-  const oldRules = specialRulesAt(t("2026-10-03T00:00:00"), h.rules, h.catalogs[0].items);
-  assert.equal(oldRules.length, 1);
-  assert.equal(oldRules[0].probability, 3);
-  assert.equal(oldRules[0].status, "confirmed", "옛 칸도 두배권");
-  // 이름이 다른 칸은 건드리지 않는다
-  const other = specialRulesAt(t("2026-10-03T00:00:00"), h.rules, groupsOf([{ amount: 330, items: [["다음 룰렛 2배", 3]] }])[0].items);
+  assert.equal(specialRulesAt(t("2026-10-03T00:00:00"), h.rules, h.catalogs[0].items)[0].status, "candidate", "확정(10/10)보다 앞선 후원엔 안 씀");
+  const later = specialRulesAt(t("2026-10-11T00:00:00"), h.rules, h.catalogs[0].items);
+  assert.equal(later[0].probability, 3);
+  assert.equal(later[0].status, "confirmed", "확정 뒤 후원이면 옛 칸(3%)도 이름으로 두배권");
+  const other = specialRulesAt(t("2026-10-11T00:00:00"), h.rules, groupsOf([{ amount: 330, items: [["다음 룰렛 2배", 3]] }])[0].items);
   assert.equal(other[0].status, "candidate", "다른 금액대는 확정 아님");
+});
+
+test("thresholdPercentAtFast: thresholdHistory.thresholdPercentAt 과 무작위 시각에서 같은 값", () => {
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const audits = [];
+  let before = 2;
+  for (let i = 0; i < 40; i += 1) {
+    const after = [2, 3, 5, 10][Math.floor(rnd() * 4)];
+    const gap = rnd() < 0.2; // 가끔 기록 없이 바뀐 흔적(before 가 직전 after 와 다름)
+    audits.push(audit("threshold_percent_updated", `2026-10-${String(1 + (i % 28)).padStart(2, "0")}T${String(i % 24).padStart(2, "0")}:00:00`, { before: gap ? 7 : before, after, source: "settings" }));
+    before = after;
+  }
+  const batches = Array.from({ length: 60 }, (_, i) => ({ id: `b${i}`, applied_at: kst(`2026-09-${String(1 + (i % 28)).padStart(2, "0")}T${String(i % 24).padStart(2, "0")}:30:00`), threshold_percent: [2, 4, 6][i % 3] }));
+  const h = history({ audits, batches, currentThresholdPercent: 5 });
+  for (let i = 0; i < 500; i += 1) {
+    const tMs = Date.parse("2026-08-25T00:00:00+09:00") + Math.floor(rnd() * 45 * 86_400_000);
+    const want = thresholdPercentAt(tMs, h.thresholdHistory, h.thresholdBatches, 5);
+    assert.deepEqual(thresholdPercentAtFast(tMs, h), want, new Date(tMs).toISOString());
+  }
+});
+
+test("parseDonateTimeMsStrict: 달력에 없는 날짜는 굴리지 않고 null", () => {
+  assert.equal(parseDonateTimeMsStrict("2026-10-21 19:12:40"), Date.parse("2026-10-21T19:12:40+09:00"));
+  assert.equal(parseDonateTimeMsStrict("26-10-21 19:12"), Date.parse("2026-10-21T19:12:00+09:00"));
+  for (const bad of ["2026-02-30 12:00:00", "2026-02-29 12:00:00", "2026-13-01 12:00", "2026-10-01 24:00", ""]) {
+    assert.equal(parseDonateTimeMsStrict(bad), null, bad);
+  }
+  assert.ok(parseDonateTimeMsStrict("2028-02-29 12:00:00") !== null, "윤년");
+});
+
+test("looksLikeMultiplierName: 실시간 후보 탐지보다 넓게(🟡 로 올리는 데만 씀)", () => {
+  for (const name of ["다음 룰렛 2배", "다음 룰렛 ×2", "다음룰렛 *2", "두배 찬스", "더블 찬스", "2x 보상", "Double"]) {
+    assert.equal(looksLikeMultiplierName(name), true, name);
+  }
+  for (const name of ["단컷", "하트", "사진10장", "22개 세트", "x20 묶음"]) assert.equal(looksLikeMultiplierName(name), false, name);
 });
 
 test("parseWeflabModifiedAtIso: 위플랩 수정시간 글자 → KST ISO, 모양이 다르거나 없는 날짜면 null", () => {
@@ -166,7 +206,7 @@ test("parseWeflabModifiedAtIso: 위플랩 수정시간 글자 → KST ISO, 모�
 });
 
 test("ambiguityWindows: 수정 < 수집 구간, 같은 수정시간을 다시 가져온 건 새 구간이 아님", () => {
-  const catalogs = history({ catalogs: [cat(1, "2026-10-01T00:00:00", [T33a]), cat(2, "2026-10-24T12:45:00", [T33b])] }).catalogs;
+  const catalogs = history({ catalogs: [cat(1, "2026-10-01T00:00:00", [T33a]), cat(2, "2026-10-24T12:41:30", [T33b])] }).catalogs;
   const link = (atKst: string, modified: string, fetchedKst = atKst) => ({
     id: atKst,
     atMs: t(atKst),
@@ -175,21 +215,21 @@ test("ambiguityWindows: 수정 < 수집 구간, 같은 수정시간을 다시 �
     modifiedMs: Date.parse(parseWeflabModifiedAtIso(modified) ?? ""),
   });
   const windows = ambiguityWindows(catalogs, [
-    link("2026-10-24T12:45:05", "2026년 10월 24일 12시 43분 38초"),
-    link("2026-10-26T09:00:00", "2026년 10월 24일 12시 43분 38초"),
+    link("2026-10-24T12:41:35", "2026년 10월 24일 12시 38분 05초"),
+    link("2026-10-26T09:00:00", "2026년 10월 24일 12시 38분 05초"),
     link("2026-10-27T09:00:00", "2026년 10월 27일 10시 00분 00초"), // 수정 시각이 가져온 시각보다 뒤(시계 어긋남) → 구간 없음
   ]);
-  assert.deepEqual(windows, [{ fromMs: t("2026-10-24T12:43:38"), toMs: t("2026-10-24T12:45:05"), version: 2, modifiedText: "2026년 10월 24일 12시 43분 38초" }]);
+  assert.deepEqual(windows, [{ fromMs: t("2026-10-24T12:38:05"), toMs: t("2026-10-24T12:41:35"), version: 2, modifiedText: "2026년 10월 24일 12시 38분 05초" }]);
 });
 
 test("pickJudgeInputsAt: 애매 구간에서는 결과의 (상품, 확률)로 버전을 고르고 '애매' 표시", () => {
   const h = history({
-    catalogs: [cat(1, "2026-10-01T00:00:00", [T33a]), cat(2, "2026-10-24T12:45:00", [T33b])],
+    catalogs: [cat(1, "2026-10-01T00:00:00", [T33a]), cat(2, "2026-10-24T12:41:30", [T33b])],
     audits: [
-      audit("weflab_link_updated", "2026-10-24T12:45:05", { link: { lastFetchedAt: kst("2026-10-24T12:45:05"), lastModifiedText: "2026년 10월 24일 12시 43분 38초" } }),
+      audit("weflab_link_updated", "2026-10-24T12:41:35", { link: { lastFetchedAt: kst("2026-10-24T12:41:35"), lastModifiedText: "2026년 10월 24일 12시 38분 05초" } }),
     ],
   });
-  const tIn = t("2026-10-24T12:44:00");
+  const tIn = t("2026-10-24T12:40:00");
   assert.equal(pickJudgeInputsAt(tIn, h, engine, result("단컷", 3))?.version, 2, "새 표 확률(3%)이면 새 표");
   assert.equal(pickJudgeInputsAt(tIn, h, engine, result("단컷", 2))?.version, 1, "옛 표 확률(2%)이면 옛 표");
   assert.equal(pickJudgeInputsAt(tIn, h, engine, result("단컷", 2))?.ambiguity, "window");
@@ -208,16 +248,18 @@ test("pickJudgeInputsAt: 수정시간 모르는 표 교체 — 그때 표엔 없
   assert.equal(none?.ambiguity, null);
 });
 
-test("pickJudgeInputsAt: 룰렛·확률표 리셋 이전 후원은 preReset, 화면 설정만 리셋은 무관", () => {
+test("pickJudgeInputsAt: 그때 재료를 지우는 초기화(룰렛·확률표·화면 설정·비밀번호/링크) 이전 후원은 preReset", () => {
   const h = history({
     catalogs: [cat(1, "2026-10-01T00:00:00", [T33a])],
     audits: [
       audit("data_reset", "2026-10-10T00:00:00", { scope: { roulette: true, catalogs: false } }),
       audit("data_reset", "2026-10-20T00:00:00", { scope: { screenState: true } }),
+      audit("data_reset", "2026-10-25T00:00:00", { scope: { donations: true, coupons: true } }),
     ],
   });
   assert.equal(pickJudgeInputsAt(t("2026-10-09T00:00:00"), h, engine)?.preReset, true);
-  assert.equal(pickJudgeInputsAt(t("2026-10-11T00:00:00"), h, engine)?.preReset, false);
+  assert.equal(pickJudgeInputsAt(t("2026-10-19T00:00:00"), h, engine)?.preReset, true, "화면 설정 리셋은 사용 설정·예외·두배권 이력을 지운다");
+  assert.equal(pickJudgeInputsAt(t("2026-10-21T00:00:00"), h, engine)?.preReset, false, "후원집계·쿠폰 초기화는 무관");
 });
 
 test("applyItemAliasesIfUnmatched: 그 버전에서 원래 이름이 맞으면(꺼진 칸 포함) 연결하지 않고, 안 맞을 때만 쓴다", () => {
