@@ -64,7 +64,8 @@ export async function POST(request: Request, context: RouteContext) {
       if (!Number.isInteger(page) || page < 0 || page > 10_000) throw httpError("page must be a non-negative integer", 400);
       // rawUntil = 첫 쪽 응답이 준 원본 기준 시각(다음 쪽이 같은 원본 범위로 계산하게). 시각 글자만 받는다.
       const rawUntil = body.rawUntil === undefined || body.rawUntil === null ? null : String(body.rawUntil);
-      if (rawUntil !== null && (rawUntil.length > 40 || !Number.isFinite(Date.parse(rawUntil)))) {
+      const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+      if (rawUntil !== null && (!ISO_TIMESTAMP.test(rawUntil) || !Number.isFinite(Date.parse(rawUntil)))) {
         throw httpError("rawUntil must be a timestamp", 400);
       }
       return jsonOk(await previewDonationTimeRejudgeForStreamer(streamer, { page, rawUntil }));

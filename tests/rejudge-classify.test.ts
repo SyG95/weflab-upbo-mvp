@@ -437,3 +437,11 @@ test("헤르메스 재검토: 실시간 탐지가 못 알아보는 이름의 두
   assert.equal(out.summary.excluded.modifier, 1, "v2 칸(5%)은 ruleKey 가 달라도 이름으로 두배권");
   assert.equal(out.rows.length, 0);
 });
+
+test("리뷰 최종: 수량 표기(x3·×2) 상품이 표에 있어도 스트리머 전체를 🟡 로 만들지 않고, 그 상품 결과만 🟡", () => {
+  const tables: Tbl[] = [{ amount: 33, items: [["단컷", 2], ["손편지 x3", 3], ["하트", 95]] }];
+  assert.equal(only(run({ catalogs: [catRow(1, "2026-10-01T00:00:00", tables)] })).cls, "green", "같은 표의 다른 상품");
+  assert.equal(only(run({ catalogs: [catRow(1, "2026-10-01T00:00:00", tables)], rows: [{ item: "손편지 x3", prob: 3 }] })).cls, "yellow");
+  const word: Tbl[] = [{ amount: 33, items: [["단컷", 2], ["두배 찬스", 3], ["하트", 95]] }];
+  assert.equal(only(run({ catalogs: [catRow(1, "2026-10-01T00:00:00", word)] })).cls, "yellow", "낱말형(두배)은 표 전체");
+});

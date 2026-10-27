@@ -491,10 +491,20 @@ export function specialRulesAt(tMs: number, events: RuleEvent[], versionItems: N
   return candidates;
 }
 
-// 이 스트리머에 두배권 칸·확정 규칙이 하나라도 있었나(G7 초기 정책: 있으면 🟢 금지). 이름은 넓게 본다.
+// 표 전체를 볼 때 쓰는 이름 검사: 낱말형(두배·2배·더블·트리플)과, "×2" 표기는 룰렛·다음·권 같은 말과 함께일 때만 본다.
+// "손편지 x3"·"사진 ×2" 같은 수량 표기까지 넣으면 그런 상품 하나 때문에 그 스트리머 행이 전부 🟡 가 된다(리뷰 2026-10-27).
+// 결과 자체의 이름은 looksLikeMultiplierName 으로 넓게 본다.
+function looksLikeMultiplierWord(value: unknown): boolean {
+  if (isMultiplierCandidateName(value)) return true;
+  const text = cleanText(value).toLowerCase();
+  if (/두\s*배|[23]\s*배|더\s*블|트\s*리\s*플|double|triple/.test(text)) return true;
+  return /[x×✕✖*]\s*[23](?!\d)|(?<!\d)[23]\s*[x×✕✖]/.test(text) && /룰렛|다음|next|권|보상/.test(text);
+}
+
+// 이 스트리머에 두배권 칸·확정 규칙이 하나라도 있었나(G7 초기 정책: 있으면 🟢 금지).
 export function hasMultiplierCells(history: JudgeHistory): boolean {
   if (history.rules.some((e) => e.rule.status === "confirmed")) return true;
-  return history.catalogs.some((c) => c.items.some((item) => looksLikeMultiplierName(item.itemName)));
+  return history.catalogs.some((c) => c.items.some((item) => looksLikeMultiplierWord(item.itemName)));
 }
 
 export function lastResetMs(history: JudgeHistory): number | null {
