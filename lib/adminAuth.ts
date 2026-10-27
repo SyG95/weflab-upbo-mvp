@@ -57,6 +57,19 @@ export function sessionMatches(cookie: string | undefined, expected: string | nu
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// 시도 제한용 "요청한 곳" 표지. IP 를 그대로 남기지 않고 서버 비밀키 HMAC 앞 16자만 쓴다.
+// Vercel 은 X-Forwarded-For 를 자기 값으로 덮어써 바깥에서 넣은 값을 버린다(공식 문서: IP 위조 방지).
+// x-vercel-forwarded-for 는 같은 값이고 Vercel 앞에 다른 프록시가 있어도 덮이지 않아 먼저 본다.
+export function clientTag(h: { get(name: string): string | null }): string {
+  const ip =
+    h.get("x-vercel-forwarded-for")?.split(",")[0].trim() ||
+    h.get("x-forwarded-for")?.split(",")[0].trim() ||
+    h.get("x-real-ip")?.trim() ||
+    "unknown";
+  const key = sessionKey() ?? "upbo-session-v1:no-key";
+  return crypto.createHmac("sha256", key).update(`client\n${ip}`).digest("base64url").slice(0, 16);
+}
+
 export function consoleSessionValue(token: string): string | null {
   return signSession("console", "", adminTokenHash(token));
 }

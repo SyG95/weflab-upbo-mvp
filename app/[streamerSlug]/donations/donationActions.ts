@@ -3,9 +3,9 @@
 // 후원집계 잠금 해제 — sheetAdminActions.ts 의 검증된 패턴을 전용 비밀번호로 옮긴 것.
 // 쿠키에는 원문이 아니라 "유효 비밀번호 해시"를 서버 비밀키로 서명한 값만 담고, 비번이 바뀌면 옛 세션은 자동 무효.
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { adminTokenHash, isDeployed, masterPinHash } from "@/lib/adminAuth";
+import { adminTokenHash, clientTag, isDeployed, masterPinHash } from "@/lib/adminAuth";
 import {
   donationAdminAccessState,
   donationAdminCookieName,
@@ -14,7 +14,7 @@ import {
 } from "@/lib/donationAdminAuth";
 import { setDonationPinHashForStreamer } from "@/lib/donationEvents";
 import { getStreamerRowBySlug } from "@/lib/upboSupabase";
-import { beginUnlockAttempt, lockedMessage, recordUnlockSuccess, wrongPasswordMessage } from "@/lib/unlockThrottle";
+import { decideStreamerUnlock, unlockErrorMessage } from "@/lib/unlockThrottle";
 
 // 오픈 리다이렉트 방지: 사이트 내부 경로("/..." 단일 슬래시 시작)만 허용.
 function safeReturn(path: string): string {
@@ -63,26 +63,26 @@ export async function unlockDonationAdmin(
   if (!pinHash && !master) return { error: NOT_SET_ERROR };
 
   // 시도 제한(15분 7회·24시간 30회). 비밀번호를 보기 전에 이 시도를 먼저 센다.
-  // 잠긴 동안엔 마스터키도 받지 않는다(lib/unlockThrottle.ts 머리말).
-  let throttle;
+  // 잠겼으면 마스터키만 받고, 그 시도는 마스터키 셈(요청한 곳별)으로 센다(lib/unlockThrottle.ts).
+  let decision;
   try {
-    throttle = await beginUnlockAttempt("donation", streamer.id);
+    decision = await decideStreamerUnlock({
+      kind: "donation",
+      streamerId: streamer.id,
+      actorTag: clientTag(await headers()),
+      passwordHash: adminTokenHash(password),
+      pinHash,
+      masterHash: master,
+    });
   } catch {
     return { error: "잠시 후 다시 시도해 주세요." };
   }
-  if (throttle.locked) return { error: lockedMessage(throttle.retryAfterSec) };
-
-  const h = adminTokenHash(password);
-  // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 서명값 저장).
-  if (master && h === master) {
-    await recordUnlockSuccess("donation", streamer.id);
-    if (!setSessionCookie(slug, master, await cookies())) return { error: SESSION_CONFIG_ERROR };
-    redirect(returnTo);
+  if (decision.kind !== "pin" && decision.kind !== "master") {
+    return { error: unlockErrorMessage(decision, NOT_SET_ERROR) };
   }
-  if (!pinHash) return { error: NOT_SET_ERROR };
-  if (h !== pinHash) return { error: wrongPasswordMessage(throttle.remaining) };
-  await recordUnlockSuccess("donation", streamer.id);
-  if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
+  // 마스터키 통과면 쿠키엔 마스터 해시 서명값(스트리머 개인 비번 설정 여부와 무관).
+  const secret = decision.kind === "pin" ? pinHash : master;
+  if (!secret || !setSessionCookie(slug, secret, await cookies())) return { error: SESSION_CONFIG_ERROR };
   redirect(returnTo);
 }
 

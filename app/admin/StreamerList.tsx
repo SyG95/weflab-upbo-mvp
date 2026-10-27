@@ -9,6 +9,7 @@ import { useMemo, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import styles from "./admin-index.module.css";
 import PinResetButton from "./PinResetButton";
+import UnlockThrottleButton from "./UnlockThrottleButton";
 import RenameStreamerButton from "./RenameStreamerButton";
 import DeleteStreamerButton from "./DeleteStreamerButton";
 import ResetDataButton from "./ResetDataButton";
@@ -293,6 +294,7 @@ export default function StreamerList({
                         <>
                           <RenameStreamerButton slug={s.slug} current={s.displayName} />
                           <PinResetButton slug={s.slug} />
+                          <UnlockThrottleButton slug={s.slug} />
                           <ResetDataButton slug={s.slug} />
                           <DeleteStreamerButton slug={s.slug} />
                         </>

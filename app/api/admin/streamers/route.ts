@@ -1,4 +1,5 @@
-import { assertAdminToken, upsertStreamer } from "@/lib/upboSupabase";
+import { requireAdminApi } from "@/lib/adminApiAuth";
+import { upsertStreamer } from "@/lib/upboSupabase";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 
 export const runtime = "nodejs";
@@ -12,7 +13,7 @@ type CreateStreamerBody = {
 
 export async function POST(request: Request) {
   try {
-    assertAdminToken(request.headers.get("authorization"));
+    await requireAdminApi(request);
     const body = await readJson<CreateStreamerBody>(request);
     const slug = body.slug || body.streamerSlug;
     if (!slug) throw new Error("slug is required");

@@ -1,6 +1,6 @@
 import { adminTokenHash, randomSheetPin } from "@/lib/adminAuth";
+import { requireAdminApi } from "@/lib/adminApiAuth";
 import {
-  assertAdminToken,
   executeStreamerReset,
   hasResetScope,
   previewStreamerReset,
@@ -31,7 +31,7 @@ type ResetBody = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    assertAdminToken(request.headers.get("authorization"));
+    await requireAdminApi(request);
     const { streamerSlug } = await context.params;
     const body = await readJson<ResetBody>(request);
     const preset = body.preset ? PRESETS[body.preset] : undefined;

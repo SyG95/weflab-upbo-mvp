@@ -1,3 +1,4 @@
+import { clientTag } from "@/lib/adminAuth";
 import { pairExtension } from "@/lib/extensionPairing";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 
@@ -9,7 +10,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const body = await readJson<{ slug?: unknown; password?: unknown }>(request);
-    const { status, ...rest } = await pairExtension(body.slug, body.password);
+    const { status, ...rest } = await pairExtension(body.slug, body.password, clientTag(request.headers));
     return jsonOk(rest, status);
   } catch (error) {
     return jsonError(error);
