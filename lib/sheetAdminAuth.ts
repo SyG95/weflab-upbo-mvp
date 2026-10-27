@@ -5,7 +5,8 @@
 //   - 스트리머별 비번이 저장돼 있으면 그 값으로 검증.
 //   - 아직 없으면 전역 env PIN 으로 폴백(마이그레이션 안전장치 — 아무도 잠기지 않게).
 //   - 둘 다 없으면 미설정 상태.
-// 쿠키에는 원문이 아니라 "유효 비밀번호 해시"만 저장한다. 비번을 바꾸면 옛 세션은 자동 무효.
+// 쿠키에는 원문이 아니라 "유효 비밀번호 해시"를 서버 비밀키로 서명한 값만 저장한다(adminAuth.signSession).
+// 비번을 바꾸면 옛 세션은 자동 무효.
 //
 // 보안 기본값(fail-safe):
 // - 유효 비번 있음      → 비밀번호 확인 필요(locked → 인증 후 authed)
@@ -13,7 +14,7 @@
 // - 없음 + 배포         → blocked-unconfigured (배포 시 깜빡해도 노출 금지)
 
 import { cookies } from "next/headers";
-import { adminTokenHash, isDeployed, masterPinHash } from "./adminAuth";
+import { adminTokenHash, isDeployed, masterPinHash, sessionMatches, signSession } from "./adminAuth";
 import { getSheetAdminPinHash } from "./upboSupabase";
 
 export const SHEET_ADMIN_COOKIE_PREFIX = "upbo_sheet_admin_session_";
@@ -23,6 +24,11 @@ export function sheetAdminCookieName(slug: string): string {
 }
 
 export type SheetAdminAccess = "authed" | "locked" | "open-unconfigured" | "blocked-unconfigured";
+
+// 이 시트 세션 쿠키 값. secretHash = 유효 비밀번호 해시 또는 마스터키 해시.
+export function sheetSessionValue(slug: string, secretHash: string): string | null {
+  return signSession("sheet", slug, secretHash);
+}
 
 // 이 슬러그의 "유효 비밀번호 해시": 스트리머별 저장값이 있으면 그것, 없으면 전역 env PIN 해시.
 // 둘 다 없으면 null(미설정).
@@ -37,10 +43,10 @@ export async function sheetAdminAccessState(slug: string): Promise<SheetAdminAcc
   const cookie = (await cookies()).get(sheetAdminCookieName(slug))?.value;
   // sy 마스터키 세션이면 스트리머 개인 PIN 설정 여부와 무관하게 통과.
   const master = masterPinHash();
-  if (master && cookie === master) return "authed";
+  if (master && sessionMatches(cookie, sheetSessionValue(slug, master))) return "authed";
   const pinHash = await effectiveSheetPinHash(slug);
   if (!pinHash) return isDeployed() ? "blocked-unconfigured" : "open-unconfigured";
-  return cookie && cookie === pinHash ? "authed" : "locked";
+  return sessionMatches(cookie, sheetSessionValue(slug, pinHash)) ? "authed" : "locked";
 }
 
 // 라우트/서버액션에서 쓰는 강제 검사. 인증 안 됐으면 401 을 throw 한다.

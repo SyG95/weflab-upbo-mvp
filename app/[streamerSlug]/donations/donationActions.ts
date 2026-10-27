@@ -1,7 +1,7 @@
 "use server";
 
 // 후원집계 잠금 해제 — sheetAdminActions.ts 의 검증된 패턴을 전용 비밀번호로 옮긴 것.
-// 쿠키에는 원문이 아니라 "유효 비밀번호 해시"만 담고, 비번이 바뀌면 옛 세션은 자동 무효.
+// 쿠키에는 원문이 아니라 "유효 비밀번호 해시"를 서버 비밀키로 서명한 값만 담고, 비번이 바뀌면 옛 세션은 자동 무효.
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -9,6 +9,7 @@ import { adminTokenHash, isDeployed, masterPinHash } from "@/lib/adminAuth";
 import {
   donationAdminAccessState,
   donationAdminCookieName,
+  donationSessionValue,
   effectiveDonationPinHash,
 } from "@/lib/donationAdminAuth";
 import { setDonationPinHashForStreamer } from "@/lib/donationEvents";
@@ -25,6 +26,22 @@ function safeSlug(value: string): string {
   return /^[a-z0-9][a-z0-9_-]{1,62}$/.test(v) ? v : "";
 }
 
+// 서명할 비밀키가 없으면(배포 환경 설정 누락) false — 호출자가 오류로 돌려준다.
+function setSessionCookie(slug: string, hash: string, jar: Awaited<ReturnType<typeof cookies>>): boolean {
+  const value = donationSessionValue(slug, hash);
+  if (!value) return false;
+  jar.set(donationAdminCookieName(slug), value, {
+    httpOnly: true,
+    secure: isDeployed(),
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 12, // 12시간
+  });
+  return true;
+}
+
+const SESSION_CONFIG_ERROR = "서버 설정 문제로 열 수 없어요. 운영자에게 알려 주세요.";
+
 export type DonationUnlockState = { error?: string };
 
 export async function unlockDonationAdmin(
@@ -36,20 +53,10 @@ export async function unlockDonationAdmin(
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/"));
   if (!slug) return { error: "잘못된 접근이에요." };
 
-  function setSessionCookie(jar: Awaited<ReturnType<typeof cookies>>, hash: string) {
-    jar.set(donationAdminCookieName(slug), hash, {
-      httpOnly: true,
-      secure: isDeployed(),
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 12, // 12시간
-    });
-  }
-
   // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 저장).
   const master = masterPinHash();
   if (master && password && adminTokenHash(password) === master) {
-    setSessionCookie(await cookies(), master);
+    if (!setSessionCookie(slug, master, await cookies())) return { error: SESSION_CONFIG_ERROR };
     redirect(returnTo);
   }
   const pinHash = await effectiveDonationPinHash(slug);
@@ -57,7 +64,7 @@ export async function unlockDonationAdmin(
   if (!password || adminTokenHash(password) !== pinHash) {
     return { error: "비밀번호가 올바르지 않습니다." };
   }
-  setSessionCookie(await cookies(), pinHash);
+  if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   redirect(returnTo);
 }
 
@@ -86,12 +93,6 @@ export async function setDonationAdminPassword(
   const pinHash = adminTokenHash(newPassword);
   await setDonationPinHashForStreamer(streamer.id, pinHash);
   // 방금 정한 사람은 계속 열람 유지(쿠키를 새 해시로 갱신). 다른 브라우저의 옛 세션은 무효화됨.
-  (await cookies()).set(donationAdminCookieName(slug), pinHash, {
-    httpOnly: true,
-    secure: isDeployed(),
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 12, // 12시간
-  });
+  if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   return { ok: true };
 }

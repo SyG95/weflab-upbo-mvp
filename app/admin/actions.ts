@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ADMIN_COOKIE, adminAccessState, adminTokenHash, isDeployed } from "@/lib/adminAuth";
+import { ADMIN_COOKIE, adminAccessState, adminTokenHash, consoleSessionValue, isDeployed } from "@/lib/adminAuth";
 import {
   createExtensionToken,
   deleteStreamer,
@@ -35,7 +35,9 @@ export async function unlockAdmin(_prev: UnlockState, formData: FormData): Promi
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/admin"));
   if (!token) return { error: "서버에 관리자 토큰(UPBO_ADMIN_TOKEN)이 설정돼 있지 않습니다." };
   if (!password || password !== token) return { error: "비밀번호가 올바르지 않습니다." };
-  (await cookies()).set(ADMIN_COOKIE, adminTokenHash(token), {
+  const session = consoleSessionValue(token);
+  if (!session) return { error: "서버 설정 문제로 세션을 만들 수 없습니다(SUPABASE_SERVICE_ROLE_KEY 확인)." };
+  (await cookies()).set(ADMIN_COOKIE, session, {
     httpOnly: true,
     secure: isDeployed(),
     sameSite: "lax",

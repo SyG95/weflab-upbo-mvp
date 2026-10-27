@@ -1,7 +1,7 @@
 "use server";
 
 // 팬 시트 관리자 모드 잠금 해제 / 비밀번호 설정 — 스트리머(슬러그)별.
-// 쿠키는 슬러그별로 격리되고, 값은 "유효 비밀번호 해시"만 담는다.
+// 쿠키는 슬러그별로 격리되고, 값은 "유효 비밀번호 해시"를 서버 비밀키로 서명한 값만 담는다.
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -10,6 +10,7 @@ import {
   sheetAdminCookieName,
   effectiveSheetPinHash,
   sheetAdminAccessState,
+  sheetSessionValue,
 } from "@/lib/sheetAdminAuth";
 import { setSheetAdminPinHash } from "@/lib/upboSupabase";
 
@@ -24,15 +25,21 @@ function safeSlug(value: string): string {
   return /^[a-z0-9][a-z0-9_-]{1,62}$/.test(v) ? v : "";
 }
 
-function setSessionCookie(slug: string, pinHash: string, jar: Awaited<ReturnType<typeof cookies>>) {
-  jar.set(sheetAdminCookieName(slug), pinHash, {
+// 서명할 비밀키가 없으면(배포 환경 설정 누락) false — 호출자가 오류로 돌려준다.
+function setSessionCookie(slug: string, pinHash: string, jar: Awaited<ReturnType<typeof cookies>>): boolean {
+  const value = sheetSessionValue(slug, pinHash);
+  if (!value) return false;
+  jar.set(sheetAdminCookieName(slug), value, {
     httpOnly: true,
     secure: isDeployed(),
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 12, // 12시간
   });
+  return true;
 }
+
+const SESSION_CONFIG_ERROR = "서버 설정 문제로 로그인할 수 없어요. 운영자에게 알려 주세요.";
 
 export type SheetUnlockState = { error?: string };
 
@@ -44,7 +51,7 @@ export async function unlockSheetAdmin(_prev: SheetUnlockState, formData: FormDa
   // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 저장).
   const master = masterPinHash();
   if (master && password && adminTokenHash(password) === master) {
-    setSessionCookie(slug, master, await cookies());
+    if (!setSessionCookie(slug, master, await cookies())) return { error: SESSION_CONFIG_ERROR };
     redirect(returnTo);
   }
   const pinHash = await effectiveSheetPinHash(slug);
@@ -52,7 +59,7 @@ export async function unlockSheetAdmin(_prev: SheetUnlockState, formData: FormDa
   if (!password || adminTokenHash(password) !== pinHash) {
     return { error: "비밀번호가 올바르지 않습니다." };
   }
-  setSessionCookie(slug, pinHash, await cookies());
+  if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   redirect(returnTo);
 }
 
@@ -79,6 +86,6 @@ export async function setSheetAdminPassword(
   const pinHash = adminTokenHash(newPassword);
   await setSheetAdminPinHash(slug, pinHash);
   // 방금 정한 사람은 계속 로그인 유지(쿠키를 새 해시로 갱신). 다른 브라우저의 옛 세션은 무효화됨.
-  setSessionCookie(slug, pinHash, await cookies());
+  if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   return { ok: true };
 }
