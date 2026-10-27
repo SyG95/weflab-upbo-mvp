@@ -106,9 +106,9 @@
 
 /* 유리 카드(테마 glass): 검색창만 가볍게 — 컷 이미지가 주인공이라 연출은 여기까지 */
 .page[data-glass] .searchRow input {
-  -webkit-backdrop-filter: blur(16px) saturate(1.25);
-  backdrop-filter: blur(16px) saturate(1.25);
-  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
+  -webkit-backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  border: var(--mat-border, 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)));
 }
 
 .empty {

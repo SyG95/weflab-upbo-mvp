@@ -48,10 +48,24 @@
 .page[data-glass] .stateCard,
 .page[data-glass] .gateCard,
 .page[data-glass] .pwSection {
-  -webkit-backdrop-filter: blur(16px) saturate(1.25);
-  backdrop-filter: blur(16px) saturate(1.25);
-  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
-  box-shadow: 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45));
+  -webkit-backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  border: var(--mat-border, 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)));
+  box-shadow: var(--mat-shadow, 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45)));
+}
+
+/* 질감 프리셋(lib/materials.ts): 카드 바탕 투명도 */
+.page[data-material] .periodPanel,
+.page[data-material] .summaryStrip,
+.page[data-material] .podiumCard,
+.page[data-material] .ledgerCard,
+.page[data-material] .subCard,
+.page[data-material] .receiptCard,
+.page[data-material] .condCard,
+.page[data-material] .stateCard,
+.page[data-material] .gateCard,
+.page[data-material] .pwSection {
+  background: var(--mat-surface, var(--surface));
 }
 
 /* ---------- 머리말 ---------- */
@@ -136,7 +150,8 @@
 }
 
 .presetActive {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   border-color: var(--stamp);
   color: var(--on-accent);
 }
@@ -146,7 +161,8 @@
   padding: 0 16px;
   border: 0;
   border-radius: 8px;
-  background: var(--ink);
+  background: var(--accent-fill, var(--ink));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 13px;
   font-weight: 700;
@@ -353,7 +369,8 @@
 
 .podiumRank1 .podiumBar {
   height: 132px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -418,7 +435,8 @@
 .condBadge {
   padding: 4px 12px;
   border-radius: 999px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 12px;
   font-weight: 800;
@@ -699,7 +717,8 @@
   padding: 8px 18px;
   border: 0;
   border-radius: 8px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 13px;
   font-weight: 700;
@@ -772,7 +791,8 @@
   height: 42px;
   border: 0;
   border-radius: 10px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 14px;
   font-weight: 700;
@@ -821,7 +841,8 @@
 }
 
 .tabActive {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -856,7 +877,8 @@
 }
 
 .rouletteChipOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   border-color: var(--stamp);
   color: var(--on-accent);
 }
@@ -1195,7 +1217,8 @@
   padding: 0 18px;
   border: 0;
   border-radius: 10px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 14px;
   font-weight: 800;
@@ -1247,7 +1270,8 @@
 .betaTag {
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 11px;
   font-weight: 800;
@@ -1519,7 +1543,8 @@
 .deltaNew {
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 10px;
   font-weight: 800;

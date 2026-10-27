@@ -11,10 +11,12 @@ const NebulaBackground = dynamic(() => import("./NebulaBackground"), { ssr: fals
 export default function ThemeLiveBackground({
   fx,
   palette,
+  contained,
 }: {
   fx?: string;
   palette?: NebulaPalette;
+  contained?: boolean;
 }) {
-  if (fx === "nebula") return <NebulaBackground palette={palette} />;
+  if (fx === "nebula") return <NebulaBackground palette={palette} contained={contained} />;
   return null;
 }

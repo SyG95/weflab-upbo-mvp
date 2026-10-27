@@ -57,7 +57,8 @@ function createProgram(gl: WebGLRenderingContext, vertexSource: string, fragment
   return program;
 }
 
-export default function NebulaBackground({ palette }: { palette?: NebulaPalette }) {
+// contained=true 면 화면 전체(fixed) 대신 부모 상자 안에만 깐다(설정 화면 미리보기용).
+export default function NebulaBackground({ palette, contained = false }: { palette?: NebulaPalette; contained?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [webglFailed, setWebglFailed] = useState(false);
   const paletteKey = JSON.stringify(palette ?? DEFAULT_PALETTE);
@@ -155,8 +156,10 @@ export default function NebulaBackground({ palette }: { palette?: NebulaPalette 
 
       const resize = () => {
         const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-        const width = Math.max(1, Math.floor(window.innerWidth * dpr));
-        const height = Math.max(1, Math.floor(window.innerHeight * dpr));
+        // contained 면 미리보기 상자 크기만큼만 그린다(창 전체 크기로 그리면 늘어나 보이고 GPU 낭비).
+        const box = contained ? canvas.parentElement : null;
+        const width = Math.max(1, Math.floor((box ? box.clientWidth : window.innerWidth) * dpr));
+        const height = Math.max(1, Math.floor((box ? box.clientHeight : window.innerHeight) * dpr));
 
         if (canvas.width !== width || canvas.height !== height) {
           canvas.width = width;
@@ -182,8 +185,14 @@ export default function NebulaBackground({ palette }: { palette?: NebulaPalette 
 
       window.addEventListener("resize", resize);
       render(0);
+      // 미리보기 상자(contained)는 크기가 바뀔 수 있다(팬 화면↔배송관리 전환 등). 모션 줄이기면 루프가 없으니 그때 한 번 다시 그린다.
+      const observer = contained && prefersReducedMotion && canvas.parentElement && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => render(0))
+        : null;
+      if (observer && canvas.parentElement) observer.observe(canvas.parentElement);
 
       return () => {
+        observer?.disconnect();
         window.removeEventListener("resize", resize);
         window.cancelAnimationFrame(animationFrame);
         gl.deleteBuffer(buffer);
@@ -193,13 +202,13 @@ export default function NebulaBackground({ palette }: { palette?: NebulaPalette 
       setWebglFailed(true);
       window.cancelAnimationFrame(animationFrame);
     }
-  }, [paletteKey]);
+  }, [paletteKey, contained]);
 
   return (
     <div
       aria-hidden="true"
       style={{
-        position: "fixed",
+        position: contained ? "absolute" : "fixed",
         inset: 0,
         zIndex: 0,
         overflow: "hidden",

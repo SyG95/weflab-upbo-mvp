@@ -57,7 +57,8 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 800;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   white-space: nowrap;
 }
@@ -157,7 +158,8 @@
 }
 
 .showcasePosterOpen:hover {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -393,7 +395,8 @@
   }
 }
 
-/* 유리 모드: 주요 카드가 반투명 + 뒤 배경 블러. 테두리/그림자는 테마 변수로 조정 */
+/* 유리 모드: 주요 카드가 반투명 + 뒤 배경 블러. 테두리/그림자는 테마 변수로 조정.
+   질감 프리셋(lib/materials.ts)을 고르면 --mat-* 변수가 들어와 표면을 바꾼다. 없으면 기존 유리 값. */
 .page[data-glass] .cover,
 .page[data-glass] .ledger,
 .page[data-glass] .finder,
@@ -402,10 +405,34 @@
 .page[data-glass] .showcaseNotice,
 .page[data-glass] .ieCard,
 .page[data-glass] .ieFilter {
-  -webkit-backdrop-filter: blur(16px) saturate(1.25);
-  backdrop-filter: blur(16px) saturate(1.25);
-  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14));
-  box-shadow: 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45));
+  -webkit-backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  backdrop-filter: var(--mat-filter, blur(16px) saturate(1.25));
+  border: var(--mat-border, 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)));
+  box-shadow: var(--mat-shadow, 0 18px 48px var(--glass-shadow, rgba(2, 6, 26, 0.45)));
+}
+
+.page[data-material] .ledger,
+.page[data-material] .finder,
+.page[data-material] .showcaseBanner,
+.page[data-material] .showcasePoster,
+.page[data-material] .showcaseNotice,
+.page[data-material] .ieCard,
+.page[data-material] .ieFilter {
+  background: var(--mat-surface, var(--surface));
+}
+
+.page[data-material] .cover {
+  background: var(--mat-cover, var(--cover));
+}
+
+/* 검색(.finder)과 장부(.ledger)는 붙어 있는 한 장 카드 — 질감이 있으면 이음매의 테두리를 감춰
+   선이 겹치거나 두 장으로 갈라져 보이지 않게 한다. */
+.page[data-material] .finder {
+  border-bottom-color: transparent;
+}
+
+.page[data-material] .ledger {
+  border-top-color: transparent;
 }
 
 /* ---------- cover (notebook cover, not a hero banner) ---------- */
@@ -458,7 +485,7 @@
   padding: 10px 12px 8px;
   border-radius: 0 0 10px 10px;
   background: #fff;
-  color: var(--cover);
+  color: var(--cover-on-white, var(--cover));
   font-size: 12px;
   font-weight: 700;
   text-decoration: none;
@@ -467,7 +494,7 @@
 }
 
 .adminTab:hover {
-  background: var(--stamp-soft);
+  background: var(--tab-hover, var(--stamp-soft));
 }
 
 /* ---------- finder (index tab into the notebook) ---------- */
@@ -518,7 +545,8 @@
   padding: 0 20px;
   border: 0;
   border-radius: 12px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-weight: 700;
   font-size: 13px;
@@ -527,6 +555,7 @@
 
 .searchRow button:hover {
   background: var(--cover);
+  color: var(--on-cover);
 }
 
 /* ---------- perforation between finder and ledger ---------- */
@@ -801,8 +830,9 @@
 .stationBtn {
   display: block;
   margin-top: 12px;
-  background: var(--stamp);
-  color: var(--on-accent, #fff);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
   border-radius: 10px;
   padding: 12px 0;
   font-size: 13.5px;
@@ -1045,7 +1075,7 @@
   padding: 1px 6px;
   border-radius: 6px;
   background: var(--stamp-soft);
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
   font-size: 10px;
   font-weight: 800;
   white-space: nowrap;
@@ -1086,7 +1116,8 @@
 }
 
 .tabActiveLink {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -1173,7 +1204,8 @@
   font-weight: 800;
   border-radius: 999px;
   padding: 2px 8px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   white-space: nowrap;
 }
@@ -1377,7 +1409,8 @@
 }
 
 .subTabActiveLink {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   border-color: var(--stamp);
 }
@@ -1559,8 +1592,9 @@
   padding: 0 20px;
   border: 0;
   border-radius: 12px;
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
   font-weight: 700;
   font-size: 13px;
   cursor: pointer;
@@ -1568,6 +1602,7 @@
 
 .thresholdRow button:disabled {
   background: var(--muted);
+  color: var(--paper);
   cursor: default;
 }
 
@@ -1790,8 +1825,9 @@
 }
 
 .cmEditOn {
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
 }
 
 .cmSummary {
@@ -2009,7 +2045,8 @@
   padding: 0 18px;
   border: 0;
   border-radius: 10px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-weight: 800;
   font-size: 13px;
@@ -2061,7 +2098,8 @@
 
 .sortToggleOn {
   border: 1px solid var(--stamp);
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -2284,8 +2322,9 @@
 
 .dmAllBtn {
   border: 0;
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
 }
 
 .dmClearBtn {
@@ -2419,8 +2458,9 @@
   padding: 0 20px;
   border: 0;
   border-radius: 10px;
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
@@ -2530,8 +2570,9 @@
   padding: 0 22px;
   border: 0;
   border-radius: 12px;
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
@@ -2539,6 +2580,7 @@
 
 .modalConfirm:hover {
   background: var(--cover);
+  color: var(--on-cover);
 }
 
 .multiplierBadge {
@@ -2592,8 +2634,9 @@
   padding: 0 12px;
   border: 0;
   border-radius: 10px;
-  background: var(--stamp);
-  color: #fff;
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
@@ -2712,7 +2755,8 @@
 }
 
 .ieFilterOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   border-color: var(--stamp);
 }
@@ -2768,7 +2812,7 @@
 .ieToValue {
   font-size: 13px;
   font-weight: 700;
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
 }
 
 .ieId {
@@ -2818,7 +2862,7 @@
   font-weight: 800;
   white-space: nowrap;
   background: var(--stamp-soft);
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
 }
 
 .ieLogKind {
@@ -2829,7 +2873,7 @@
   font-weight: 800;
   white-space: nowrap;
   background: var(--stamp-soft);
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
 }
 
 .ieActions {
@@ -2892,11 +2936,11 @@
 }
 
 .ieRestoreBtn {
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
 }
 
 .ieRestoreBtn:hover {
-  border-color: var(--cover);
+  border-color: var(--cover-ink, var(--cover));
   background: var(--stamp-soft);
 }
 
@@ -3284,7 +3328,7 @@
   border-radius: 8px;
   border: 1px dashed var(--paper-line);
   background: var(--surface);
-  color: var(--cover);
+  color: var(--cover-ink, var(--cover));
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -3292,7 +3336,7 @@
 }
 
 .ieRevertBtn:hover {
-  border-color: var(--cover);
+  border-color: var(--cover-ink, var(--cover));
   background: var(--stamp-soft);
 }
 
@@ -3337,7 +3381,8 @@
 }
 
 .ieTabOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   border-color: var(--stamp);
 }
@@ -3636,7 +3681,8 @@
 }
 
 .wardrobeDoor:hover {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
 }
 
@@ -3927,7 +3973,8 @@
 }
 
 .dmPeriodChipActive {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   border-color: var(--stamp);
   color: var(--on-accent);
 }
@@ -3997,3 +4044,67 @@
 }
 .slotTop > .showcaseSide:only-child,.slotBottom > .showcaseSide:only-child {width:fit-content;max-width:100%;justify-self:center;}
 .slotTop > .showcaseSide:only-child img,.slotBottom > .showcaseSide:only-child img {width:auto;max-width:100%;}
+
+/* ---------- 디자인 질감 (lib/materials.ts kind:"design") ----------
+   표면만이 아니라 표지·탭·칩·버튼·장부 모양까지 바꾼다(지금은 버블 1종 — 다이어리·매거진은 10/27 sy 판정으로 제거). 그림 장식(테이프·종이결·떠다니는 스티커)은 그리지 않고
+   모양·선·흐림 없는 그림자·노트 줄 같은 "물건 관계"만 쓴다(10/16 래스터 규칙, 아이코 일정표 해부 §6).
+   색은 전부 테마 변수(--mat-edge 등은 materials.ts 가 테마 색에서 계산)라 어느 색 테마와도 조합된다. */
+
+/* 버블: 둥근 알약 — 큰 둥근 모서리, 부드러운 색 그림자, 칩·버튼 위쪽 하이라이트, 표지 바인더 구멍 숨김 */
+.page[data-material="bubble"] .cover {
+  padding-left: 28px;
+  border-radius: 32px;
+}
+
+.page[data-material="bubble"] .cover::before {
+  display: none;
+}
+
+.page[data-material="bubble"] .finder {
+  border-radius: 28px 28px 0 0;
+}
+
+.page[data-material="bubble"] .ledger {
+  border-radius: 0 0 28px 28px;
+}
+
+.page[data-material="bubble"] .showcaseBanner,
+.page[data-material="bubble"] .showcasePoster,
+.page[data-material="bubble"] .showcaseNotice {
+  border-radius: 24px;
+}
+
+.page[data-material="bubble"] .upboChip {
+  padding: 4px 11px;
+  border-radius: 999px;
+  border-color: var(--mat-edge);
+  box-shadow: var(--mat-gloss), 0 2px 6px -3px color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+.page[data-material="bubble"] .rouletteTab,
+.page[data-material="bubble"] .rouletteTabActive,
+.page[data-material="bubble"] .countPill {
+  box-shadow: var(--mat-gloss);
+}
+
+.page[data-material="bubble"] .searchRow input {
+  border-radius: 999px;
+  padding: 0 18px;
+}
+
+.page[data-material="bubble"] .searchRow button,
+.page[data-material="bubble"] .tabActiveLink {
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent), var(--mat-gloss), 0 6px 14px -8px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+
+/* 좁은 화면: 배너·표지 높이가 낮아 큰 둥근 모서리가 그림을 많이 깎는다 */
+@media (max-width: 600px) {
+  .page[data-material="bubble"] .showcaseBanner {
+    border-radius: 16px;
+  }
+
+  .page[data-material="bubble"] .cover {
+    border-radius: 24px;
+  }
+}

@@ -50,6 +50,7 @@ export default async function DonationsPage({ params, searchParams }: PageProps)
       style={themeStyle}
       data-fx={theme.fx?.background}
       data-glass={theme.fx?.glass ? "1" : undefined}
+      data-material={theme.fx?.material}
     >
       <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />
       {sheetFontLink ? <link rel="stylesheet" href={sheetFontLink} /> : null}

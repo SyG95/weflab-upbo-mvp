@@ -62,7 +62,8 @@
 }
 
 .tabOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   border-color: var(--stamp);
 }

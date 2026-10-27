@@ -65,6 +65,7 @@ import { redirect } from "next/navigation";
 import WardrobeManager from "./WardrobeManager";
 import { groupFanCoupons, filterFanCoupons } from "../../lib/fanCouponView";
 import { resolveTheme } from "../../lib/themes";
+import { isMaterialId } from "../../lib/materials";
 import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
 import { normalizeSheetFont, sheetFontCss, sheetFontHref } from "../../lib/sheetFonts";
 import ThemeLiveBackground from "./ThemeLiveBackground";
@@ -128,6 +129,7 @@ type PageProps = {
     tab?: string;
     atab?: string;
     theme?: string;
+    material?: string;
     rtab?: string;
     // 정가 탭 하위 유형(팬 표시 방식 subtabs 일 때): sig | event | server
     sfk?: string;
@@ -343,7 +345,7 @@ async function loadStreamerState(slug: string): Promise<StateResult> {
 export default async function StreamerUpboPage({ params, searchParams }: PageProps) {
   const { streamerSlug } = await params;
   // 팬 화면의 완료/미완료 필터(status)는 2026-09-17 제거 — 스트리머의 표시방법 설정이 팬에게 보이는 범위를 정한다.
-  const { admin, q, tab, atab, theme: themePreview, rtab, sfk, w, layout, month, design, preview, product, multi } = await searchParams;
+  const { admin, q, tab, atab, theme: themePreview, material: materialPreview, rtab, sfk, w, layout, month, design, preview, product, multi } = await searchParams;
   const selectedDesign = designId("ref-u");
   const isAdminMode = admin === "1";
   const searchQuery = (q ?? "").trim();
@@ -389,7 +391,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const sheetTitle = (result.ok && result.state.sheetTitle?.trim()) || defaultSheetTitle;
   // ?theme=<id> 는 저장 없이 화면에서만 테마를 미리 보는 용도(저장값 불변).
   const savedThemeId = result.ok ? result.state.settings?.accentColor : undefined;
-  const theme = resolveTheme(themePreview || savedThemeId, themePreview ? null : result.ok ? result.state.settings?.customTheme : null);
+  // ?material=<id> 는 ?theme= 과 함께 질감만 저장 없이 얹어 본다.
+  const theme = resolveTheme(themePreview || savedThemeId, themePreview ? (isMaterialId(materialPreview) ? { version: 2, material: materialPreview } : null) : result.ok ? result.state.settings?.customTheme : null);
   // 시트 글씨체(스트리머 선택, sheetFonts 화이트리스트) — 고르면 제목·탭·상품 칩까지 통일,
   // 미설정·오염값은 현행 개구체 그대로(변수 미주입 = CSS 기본값). 테마 vars 뒤에 얹어 항상 우선.
   const sheetFontKey = result.ok ? normalizeSheetFont(result.state.sheetFontKey) : "";
@@ -519,6 +522,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
       style={themeStyle}
       data-fx={theme.fx?.background}
       data-glass={theme.fx?.glass ? "1" : undefined}
+      data-material={theme.fx?.material}
       data-showcase={showcaseOn ? "1" : undefined}
     >
       <ThemeLiveBackground fx={theme.fx?.background} palette={theme.fx?.nebulaPalette} />

@@ -7,7 +7,8 @@
   align-items: center;
   padding: 1px 8px;
   border-radius: 999px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 10px;
   font-weight: 800;
@@ -81,7 +82,8 @@
   padding: 0 14px;
   border: 0;
   border-radius: 8px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 12px;
   font-weight: 800;
@@ -165,7 +167,8 @@
 }
 
 .dmTabOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   border-color: var(--stamp);
 }

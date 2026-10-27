@@ -80,7 +80,8 @@
 }
 
 .chipOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   border-color: var(--stamp);
   color: var(--on-accent);
 }
@@ -161,7 +162,8 @@
 }
 
 .variantChipOn {
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   border-color: var(--stamp);
   color: var(--on-accent);
 }
@@ -173,7 +175,8 @@
   z-index: 1;
   padding: 2px 7px;
   border-radius: 4px;
-  background: var(--stamp);
+  background: var(--accent-fill, var(--stamp));
+  box-shadow: inset 0 0 0 1px var(--accent-edge, transparent);
   color: var(--on-accent);
   font-size: 0.65rem;
   font-weight: 700;

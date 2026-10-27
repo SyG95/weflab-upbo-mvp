@@ -1,4 +1,6 @@
-import { applyCustomTheme } from "./customTheme";
+import { applyCustomTheme, themeFromTone } from "./customTheme";
+import type { ToneMode } from "./toneTheme";
+import type { BuiltinMaterialId } from "./materials";
 // 팬 업보시트(/[streamerSlug]) 테마 프리셋.
 //
 // 각 프리셋은 globals.css 의 CSS 변수 한 세트를 갈아끼운다(색/배경/포인트/글꼴 느낌만).
@@ -20,10 +22,12 @@ export type NebulaPalette = {
 // 테마 부가 효과(아이코 /s/aiko 디자인의 레퍼런스 부품).
 // background: 살아있는 배경(WebGL). nebulaPalette 로 테마별 색을 입힌다.
 // glass: 카드 유리 질감(반투명 + 뒤 배경 블러).
+// material: 질감 프리셋(materials.ts). 고르면 glass 규칙 위에 --mat-* 변수로 표면을 바꾼다.
 export type ThemeFx = {
   background?: "nebula";
   nebulaPalette?: NebulaPalette;
   glass?: boolean;
+  material?: BuiltinMaterialId;
 };
 
 export type Theme = {
@@ -33,6 +37,10 @@ export type Theme = {
   blurb: string;
   vars: ThemeVars;
   fx?: ThemeFx;
+  // 설정 화면 묶음. 없으면 "기본 테마".
+  group?: "pastel";
+  // 톤 생성기로 만든 예시 테마의 씨앗 — "이 테마에서 시작해 직접 수정" 이 그대로 이어받는다.
+  tone?: { mode: ToneMode; main: string; sub: string | null };
 };
 
 // vars 키 = CSS 커스텀 프로퍼티.
@@ -43,10 +51,17 @@ export type Theme = {
 // [--rule-line: 노트 줄무늬 색. 없으면 --paper-line]
 // [--glass-border/--glass-shadow: 유리 카드 테두리/그림자. 없으면 다크용 기본값]
 // [--modal-bg: 팝업 배경. 없으면 흰색 — 다크 테마는 필수 지정]
+// [--cover-ink: 표지색을 "글자"로 쓰는 칩(.upboSet 등)용. 없으면 --cover]
+// [--cover-on-white: 관리자 탭(흰 바탕·마우스 올림 옅은 강조) 글자. 없으면 --cover]
+// [--tab-hover: 관리자 탭 마우스 올림 바탕(불투명). 없으면 --stamp-soft — 반투명이면 뒤 표지가 비쳐 글자가 묻힌다]
+// [--accent-fill: 글자가 올라가는 버튼·선택 탭 바탕. 없으면 --stamp. 파스텔은 옅은 채움 + 진한 --on-accent]
+// [--accent-edge: 버튼·선택 탭 안쪽 1px 테두리. 없으면 투명. 파스텔은 옅은 채움이라 선택 상태를 선으로도 구분]
+// 2026-10-27 글자 대비 4.5:1 보정: 밝은 7종(paper·sky·lavender·spring·mintsoda·honey·sunset)의 --stamp·--cover 를
+// 같은 색상각에서 명도만 내렸고, 표지색을 글자로 쓰는 곳은 위 두 변수로 따로 맞췄다(값 계산=흐르는 배경 실색 기준).
 export const THEMES: Theme[] = [
   {
     id: "paper",
-    label: "종이 영수증",
+    label: "핑크",
     emoji: "🧾",
     blurb: "핑크 종이 위로 아침빛이 흐르는 아날로그 장부 (기본)",
     fx: {
@@ -63,18 +78,20 @@ export const THEMES: Theme[] = [
       "--muted": "#87687f",
       "--paper-line": "#f3c9dc",
       "--rule-line": "rgba(232, 64, 126, 0.10)",
-      "--stamp": "#e8407e",
+      "--stamp": "#c41161",
       "--stamp-soft": "#fbdce8",
-      "--cover": "rgba(194, 52, 114, 0.88)",
+      "--cover": "rgba(190, 48, 111, 0.88)",
       "--on-cover": "#ffffff",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.72)",
       "--glass-shadow": "rgba(194, 52, 114, 0.16)",
+      "--cover-ink": "#b1356e",
+      "--cover-on-white": "#b1356e",
     },
   },
   {
     id: "nebula",
-    label: "성운",
+    label: "네이비",
     emoji: "🌌",
     blurb: "살아 움직이는 딥블루→보라 성운 + 유리 카드, 밤하늘 무드",
     fx: {
@@ -97,11 +114,14 @@ export const THEMES: Theme[] = [
       "--on-cover": "#cfe0ff",
       "--on-accent": "#0a1030",
       "--modal-bg": "#141b47",
+      "--cover-ink": "#8b9bd2",
+      "--cover-on-white": "#656a88",
+      "--tab-hover": "#e7edff",
     },
   },
   {
     id: "aurora",
-    label: "오로라",
+    label: "다크 민트",
     emoji: "🌠",
     blurb: "청록→연두→보라가 흐르는 극광 + 유리 카드, 자유로운 다크 무드",
     fx: {
@@ -124,11 +144,14 @@ export const THEMES: Theme[] = [
       "--on-cover": "#a7f3d0",
       "--on-accent": "#04120c",
       "--modal-bg": "#0c2a30",
+      "--cover-ink": "#89a8ae",
+      "--cover-on-white": "#5e7275",
+      "--tab-hover": "#e1f8ef",
     },
   },
   {
     id: "berry",
-    label: "베리 네온",
+    label: "다크 퍼플",
     emoji: "🫐",
     blurb: "다크 퍼플 위로 번지는 핑크 네온, 달콤한 밤 무드",
     fx: {
@@ -151,11 +174,14 @@ export const THEMES: Theme[] = [
       "--on-cover": "#fbcfe8",
       "--on-accent": "#2a0a25",
       "--modal-bg": "#2b1030",
+      "--cover-ink": "#b88cba",
+      "--cover-on-white": "#7c637d",
+      "--tab-hover": "#fde6f2",
     },
   },
   {
     id: "deepforest",
-    label: "딥 포레스트",
+    label: "다크 그린",
     emoji: "🌲",
     blurb: "깊은 숲의 어둠 사이로 흐르는 초록빛, 차분한 다크 무드",
     fx: {
@@ -178,11 +204,14 @@ export const THEMES: Theme[] = [
       "--on-cover": "#bbf7d0",
       "--on-accent": "#06130b",
       "--modal-bg": "#0e2b1c",
+      "--cover-ink": "#8dae9a",
+      "--cover-on-white": "#617369",
+      "--tab-hover": "#e2faeb",
     },
   },
   {
     id: "midnight",
-    label: "미드나잇",
+    label: "블랙",
     emoji: "🖤",
     blurb: "블랙 위로 금빛이 은은하게 흐르는 고급 다크 무드",
     fx: {
@@ -205,11 +234,14 @@ export const THEMES: Theme[] = [
       "--on-cover": "#e6cf96",
       "--on-accent": "#171204",
       "--modal-bg": "#1a1a24",
+      "--cover-ink": "#92929e",
+      "--tab-hover": "#f9f5eb",
+      "--cover-on-white": "#6a6a71",
     },
   },
   {
     id: "sky",
-    label: "스카이",
+    label: "블루",
     emoji: "☁️",
     blurb: "맑은 하늘색 구름이 흐르는 청량한 무드",
     fx: {
@@ -226,18 +258,20 @@ export const THEMES: Theme[] = [
       "--muted": "#50718a",
       "--paper-line": "#c6e0f5",
       "--rule-line": "rgba(29, 138, 224, 0.10)",
-      "--stamp": "#1d8ae0",
+      "--stamp": "#006db8",
       "--stamp-soft": "#dcedfe",
-      "--cover": "rgba(24, 115, 196, 0.85)",
+      "--cover": "rgba(0, 101, 180, 0.85)",
       "--on-cover": "#ffffff",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(24, 115, 196, 0.18)",
+      "--cover-ink": "#126eb0",
+      "--cover-on-white": "#126eb0",
     },
   },
   {
     id: "lavender",
-    label: "라벤더 파스텔",
+    label: "퍼플",
     emoji: "💜",
     blurb: "연보라 빛무리가 부드럽게 흐르는 차분한 무드",
     fx: {
@@ -254,18 +288,20 @@ export const THEMES: Theme[] = [
       "--muted": "#73678e",
       "--paper-line": "#ded1f2",
       "--rule-line": "rgba(139, 92, 246, 0.10)",
-      "--stamp": "#8b5cf6",
+      "--stamp": "#7744de",
       "--stamp-soft": "#ecdffd",
-      "--cover": "rgba(109, 79, 196, 0.85)",
+      "--cover": "rgba(108, 77, 194, 0.85)",
       "--on-cover": "#ffffff",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(109, 79, 196, 0.18)",
+      "--cover-ink": "#6f53b5",
+      "--cover-on-white": "#6f54b6",
     },
   },
   {
     id: "spring",
-    label: "스프링 그린",
+    label: "그린",
     emoji: "🌿",
     blurb: "연둣빛 봄기운이 흐르는 산뜻한 무드",
     fx: {
@@ -282,18 +318,20 @@ export const THEMES: Theme[] = [
       "--muted": "#657753",
       "--paper-line": "#d8ecc0",
       "--rule-line": "rgba(101, 163, 13, 0.10)",
-      "--stamp": "#65a30d",
+      "--stamp": "#497a00",
       "--stamp-soft": "#e9f6cf",
-      "--cover": "rgba(77, 124, 15, 0.85)",
+      "--cover": "rgba(63, 105, 0, 0.85)",
       "--on-cover": "#f7ffe8",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(77, 124, 15, 0.15)",
+      "--cover-ink": "#55781d",
+      "--cover-on-white": "#54771b",
     },
   },
   {
     id: "mintsoda",
-    label: "민트 소다",
+    label: "민트",
     emoji: "🧊",
     blurb: "톡 쏘는 민트·청록 빛이 흐르는 시원한 무드",
     fx: {
@@ -310,18 +348,20 @@ export const THEMES: Theme[] = [
       "--muted": "#4f7972",
       "--paper-line": "#bfe9de",
       "--rule-line": "rgba(20, 184, 166, 0.10)",
-      "--stamp": "#0d9488",
+      "--stamp": "#00786e",
       "--stamp-soft": "#d3f5ec",
-      "--cover": "rgba(15, 118, 110, 0.82)",
+      "--cover": "rgba(0, 104, 97, 0.82)",
       "--on-cover": "#ffffff",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(13, 148, 136, 0.16)",
+      "--cover-ink": "#1d7771",
+      "--cover-on-white": "#1e7771",
     },
   },
   {
     id: "honey",
-    label: "허니 골드",
+    label: "옐로",
     emoji: "🍯",
     blurb: "꿀빛·금빛이 따뜻하게 흐르는 무드",
     fx: {
@@ -338,18 +378,20 @@ export const THEMES: Theme[] = [
       "--muted": "#827049",
       "--paper-line": "#f3e3ae",
       "--rule-line": "rgba(202, 138, 4, 0.10)",
-      "--stamp": "#ca8a04",
+      "--stamp": "#946400",
       "--stamp-soft": "#fdf0c4",
-      "--cover": "rgba(161, 98, 7, 0.85)",
+      "--cover": "rgba(136, 81, 0, 0.85)",
       "--on-cover": "#fffbeb",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(161, 98, 7, 0.15)",
+      "--cover-ink": "#92641d",
+      "--cover-on-white": "#92641d",
     },
   },
   {
     id: "sunset",
-    label: "선셋 듀오",
+    label: "오렌지",
     emoji: "🌇",
     blurb: "오렌지→핑크 노을빛이 흐르는 따뜻한 무드",
     fx: {
@@ -366,18 +408,20 @@ export const THEMES: Theme[] = [
       "--muted": "#90635e",
       "--paper-line": "#f6d2c1",
       "--rule-line": "rgba(216, 79, 99, 0.09)",
-      "--stamp": "#f2634e",
+      "--stamp": "#c03422",
       "--stamp-soft": "#ffe1d6",
-      "--cover": "rgba(216, 79, 99, 0.88)",
+      "--cover": "rgba(190, 54, 78, 0.88)",
       "--on-cover": "#ffffff",
       "--on-accent": "#ffffff",
       "--glass-border": "rgba(255, 255, 255, 0.70)",
       "--glass-shadow": "rgba(216, 79, 99, 0.16)",
+      "--cover-ink": "#b33d54",
+      "--cover-on-white": "#b33d54",
     },
   },
   {
     id: "crimson",
-    label: "크림슨",
+    label: "레드",
     emoji: "🌹",
     blurb: "크림 바탕에 딥레드 빛이 스미는 클래식 무드",
     fx: {
@@ -405,7 +449,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: "mono",
-    label: "화이트 미니멀",
+    label: "화이트",
     emoji: "🤍",
     blurb: "은빛 안개가 옅게 흐르는 깔끔한 무채색 무드",
     fx: {
@@ -437,10 +481,33 @@ export const DEFAULT_THEME_ID = "paper";
 
 export const THEME_IDS: string[] = THEMES.map((t) => t.id);
 
-for (const [id,label,background,accent] of [['peachlight','피치 크림','#fff4eb','#ac4933'],['mintlight','민트 가든','#effcf5','#24674b'],['lilaclight','라일락 밀크','#f7f0ff','#754395']]) {
+for (const [id,label,background,accent] of [['peachlight','피치','#fff4eb','#ac4933'],['mintlight','라이트 그린','#effcf5','#24674b'],['lilaclight','라이트 퍼플','#f7f0ff','#754395']]) {
  const theme=applyCustomTheme(THEMES[0],{version:1,background,surface:'#ffffff',accent,motion:false});
  THEMES.push({...theme,id,label,emoji:'🌷',blurb:'밝고 부드러운 색상 · 정적 배경'});
  THEME_IDS.push(id);
+}
+
+// 파스텔·투톤 라인업: 톤 생성기(toneTheme.ts)로 만든 색 + 흐르는 배경 + 기본 질감 "아크릴".
+// 파스텔은 아이코 일정표 실측 문법(옅은 채움 L .88~.93 + 같은 계열 진한 글자, 대각선 투톤 배경, 색 바닥판 판)을 따른다.
+// 주색=배경·표지·선 계열, 보조색=버튼·칩·포인트 글자 계열. 글자 대비 4.5:1 이상은 생성기가 보장한다(테스트로 확인).
+const PASTEL_TONES: [id: string, label: string, mode: ToneMode, main: string, sub: string | null][] = [
+  ["pastelpink", "파스텔 핑크", "pastel", "#ffc7dc", null],
+  ["pastelblue", "파스텔 블루", "pastel", "#bcdcff", null],
+  ["pastelpurple", "파스텔 퍼플", "pastel", "#d9ccff", null],
+  ["pastelyellow", "파스텔 옐로", "pastel", "#ffeaa6", null],
+  ["pastelmint", "파스텔 민트", "pastel", "#bdeedd", null],
+  ["bluepink", "블루 + 핑크", "pastel", "#bfe3ff", "#ffc2df"],
+  ["pinkpurple", "핑크 + 퍼플", "pastel", "#ffc9df", "#d6c8ff"],
+  ["peachmint", "피치 + 민트", "pastel", "#ffd2bf", "#bdebd9"],
+  ["purpleyellow", "퍼플 + 옐로", "pastel", "#d8ccff", "#ffe39a"],
+  ["vividblueorange", "선명 블루 + 오렌지", "vivid", "#3d7bff", "#ff8a3d"],
+  ["darknavypink", "다크 네이비 + 핑크", "dark", "#3a4a8c", "#ff7aa2"],
+];
+
+for (const [id, label, mode, main, sub] of PASTEL_TONES) {
+  const tone = { mode, main, sub };
+  THEMES.push(themeFromTone({ id, label, emoji: "", blurb: label, group: "pastel", tone, vars: {} }, { ...tone, motion: true }));
+  THEME_IDS.push(id);
 }
 
 // v1(20개) → v2/v3 이행 매핑. DB accent_color 에 남아 있는 옛 id 를

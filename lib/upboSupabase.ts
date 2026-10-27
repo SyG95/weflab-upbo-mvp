@@ -1,4 +1,4 @@
-import { parseCustomTheme, customThemeColors, type CustomTheme } from "./customTheme";
+import { parseCustomTheme, customThemeIsSafe, type CustomTheme } from "./customTheme";
 import crypto from "node:crypto";
 
 import { WARDROBE_PARTS } from "./wardrobeShared";
@@ -1340,7 +1340,7 @@ export async function setStreamerTheme(streamer: StreamerRow, theme: string, cus
     throw new Error("unknown theme preset");
   }
   const parsed = parseCustomTheme(custom);
-  if (parsed && customThemeColors(parsed).ratio < 4.5) throw new Error("Background and card need compatible brightness for readable text");
+  if (parsed && !customThemeIsSafe(parsed)) throw new Error("Background and card need compatible brightness for readable text");
   const rows = await supabaseFetch<StreamerRow[]>(`/${tableName("streamers")}?id=eq.${streamer.id}`, {
     method: "PATCH",
     headers: { prefer: "return=representation" },
