@@ -1118,18 +1118,3 @@ export function allocateDeliveryToRefs(
     } as RefAllocation;
   });
 }
-
-export async function fetchStreamerState(slug: string): Promise<StateResult> {
-  try {
-    const res = await fetch(`${API_BASE}/api/s/${encodeURIComponent(slug)}/state`, {
-      cache: "no-store",
-    });
-    if (res.status === 404) return { ok: false, reason: "notfound" };
-    if (!res.ok) return { ok: false, reason: "error" };
-    const state = (await res.json()) as StreamerState;
-    return { ok: true, state };
-  } catch {
-    // API 서버가 꺼져 있거나 연결 불가
-    return { ok: false, reason: "offline" };
-  }
-}
