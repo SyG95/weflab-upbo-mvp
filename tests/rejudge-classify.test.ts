@@ -404,3 +404,36 @@ test("리뷰: 위플랩 수정시간을 모르는 표 교체 — 다음 표로 �
   assert.equal(row.ambiguity, "next_conflict");
   assert.equal(row.cls, "yellow");
 });
+
+test("헤르메스 재검토: 같은 결과 키인데 원본 묶음마다 후원 시각·종류가 다르면 🟡(G10)", () => {
+  const timeDiff = run({
+    batches: [
+      { batchId: "b1", capture: capture([{ uid: "k1", time: "2026-10-10 12:00:00" }]) },
+      { batchId: "b2", capture: capture([{ uid: "k1", time: "2026-10-20 12:00:00" }]) },
+    ],
+  });
+  assert.ok(only(timeDiff).reasonText.includes("다른 상품으로 잡힌 적"));
+  const typeDiff = run({
+    batches: [
+      { batchId: "b1", capture: capture([{ uid: "k1" }]) },
+      { batchId: "b2", capture: capture([{ uid: "k1", type: "도전미션 별풍선 성공" }]) },
+    ],
+  });
+  assert.equal(only(typeDiff).cls, "yellow");
+});
+
+test("헤르메스 재검토: 실시간 탐지가 못 알아보는 이름의 두배권도 t 이전 확정이면 옛·새 버전 칸 모두 ⚪", () => {
+  const v1: Tbl[] = [{ amount: 33, items: [["행운권", 3], ["하트", 97]] }];
+  const v2: Tbl[] = [{ amount: 33, items: [["행운권", 5], ["하트", 95]] }];
+  const cell = normalizeCatalogCapture({ groups: [{ amountMin: 33, amountMax: 33, items: [{ name: "행운권", probability: 3, sortOrder: 0 }] }] }).items[0];
+  const out = run({
+    catalogs: [catRow(1, "2026-10-01T00:00:00", v1), catRow(2, "2026-10-10T00:00:00", v2)],
+    audits: [
+      BASELINE(),
+      audit("special_item_rule", "2026-10-02T00:00:00", { rule: { ruleKey: specialRuleKeyForItem(cell), ruleType: "next_result_multiplier", status: "confirmed", multiplier: 2, amountRangeLabel: "33", itemName: cell.itemName, normalizedName: cell.normalizedName, probability: 3 } }),
+    ],
+    rows: [{ item: "행운권", prob: 5, time: "2026-10-12 12:00:00" }],
+  });
+  assert.equal(out.summary.excluded.modifier, 1, "v2 칸(5%)은 ruleKey 가 달라도 이름으로 두배권");
+  assert.equal(out.rows.length, 0);
+});

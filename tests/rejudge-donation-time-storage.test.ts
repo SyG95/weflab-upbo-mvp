@@ -331,6 +331,24 @@ test("다음 쪽은 첫 쪽의 원본 기준 시각(rawUntil)까지만 — 방�
   assert.equal(fresh.summary.N, first.summary.N + 1);
 });
 
+test("행 목록 지문(rowsToken): 쪽 사이에 목록 앞쪽 결과가 기록되면 바뀌고(화면이 처음부터 다시), 수동기록 내용이 바뀌면 판정 지문도 바뀐다", async () => {
+  reset(SYNTH_TABLES);
+  const first = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
+  const again = await lib.previewDonationTimeRejudgeForStreamer(STREAMER, { rawUntil: first.rawUntil });
+  assert.equal(again.rowsToken, first.rowsToken);
+  // 목록 첫 행(🟢)이 그사이 실시간 수집으로 기록됐다 → 이어 붙이면 다음 쪽 첫 행이 밀려 빠진다
+  db.upbo_entries.push({ ...db.upbo_entries[0], id: "5e1f0000-0000-4000-8000-0000000005fe", source_key: first.rows[0].sourceKey });
+  const shifted = await lib.previewDonationTimeRejudgeForStreamer(STREAMER, { rawUntil: first.rawUntil });
+  assert.notEqual(shifted.rowsToken, first.rowsToken);
+  // 수동기록의 상품 이름만 고쳐도 판정 지문이 바뀐다(G11 재료)
+  reset(SYNTH_TABLES);
+  const base = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
+  const manual = db.upbo_entries.find((e) => String(e.source_key).startsWith("manual:"))!;
+  manual.item_name = "사진 1장";
+  const edited = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
+  assert.notEqual(edited.inputFingerprint, base.inputFingerprint);
+});
+
 test("시범 스위치: 기본 꺼짐, 켜면 한 줄(전체 값), 팬 페이지 오버레이 조회엔 새 action 이 없다", async () => {
   reset(SYNTH_TABLES);
   assert.deepEqual(await lib.featureFlagsForStreamer(SYNTH_STREAMER.id), { asofRejudge: false, catalogDriftNotice: false });

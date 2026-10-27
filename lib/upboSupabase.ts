@@ -4568,7 +4568,10 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
     // 수동기록(G11)·원본 묶음(G10·새 결과)도 지문에 넣는다 — 미리보기 뒤 생긴 겹침·새 원본을 묶음 4 넣기가 409 로 막게.
     inputFingerprint: judgeInputFingerprint(history, {
       aliases,
-      manual: manualEntries.map((m) => `${m.id}:${m.remaining}`).sort(),
+      // 겹침 판정(G11)에 쓰는 값 전부 — 같은 수동기록의 상품명·날짜만 고쳐도 지문이 바뀌게.
+      manual: manualEntries
+        .map((m) => [m.id, m.remaining, m.fanId, m.fanNickname, m.itemName, m.donateTimeText, m.createdAt ?? ""].join("|"))
+        .sort(),
       raw: [rawRows.length, rawUntil],
     }),
   };
@@ -4596,6 +4599,13 @@ export async function previewDonationTimeRejudgeForStreamer(
     pageCount,
     totalRows,
     inputFingerprint: ctx.inputFingerprint,
+    // 행 목록 자체의 지문(분류 순서 그대로). 화면은 쪽을 이어 붙이기 전에 이것이 첫 쪽과 같은지 본다 — 쪽 사이에
+    // 목록 앞쪽 결과가 기록되거나 분류가 바뀌어 순서가 밀리면(행 건너뜀) 처음부터 다시 부른다.
+    rowsToken: crypto
+      .createHash("sha1")
+      .update(ctx.rows.map((row) => `${row.sourceKey}:${row.kind}:${row.cls}`).join("\n"))
+      .digest("hex")
+      .slice(0, 16),
     rawUntil: ctx.rawUntil,
     // 이름 연결 재료는 첫 쪽에만 싣는다(다음 쪽 요청마다 같은 걸 또 보내지 않게).
     aliasCandidates: page === 0 ? ctx.aliasCandidates : [],

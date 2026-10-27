@@ -27,6 +27,7 @@ import {
   findCatalogMatch,
   isMultiplierCandidateName,
   normalizeName,
+  specialRuleKeyForItem,
   type NormalizedCatalogItem,
   type NormalizedResult,
   type SpecialItemRule,
@@ -451,17 +452,43 @@ function labelNameKey(amountRangeLabel: unknown, normalizedName: unknown): strin
 //   t 뒤에 확정된 것은 쓰지 않는다(명세 "t 이전"). 그런 칸은 이름이 두배권 같으면 G7 로 🟡 가 된다.
 export function specialRulesAt(tMs: number, events: RuleEvent[], versionItems: NormalizedCatalogItem[]): SpecialItemRule[] {
   const before = latestRuleByKey(events, tMs);
-  const nameStatus = new Map<string, SpecialItemRule["status"]>();
+  const nameRule = new Map<string, SpecialItemRule>();
   for (const e of events) {
     if (e.atMs >= tMs) break;
-    nameStatus.set(labelNameKey(e.rule.amountRangeLabel, e.rule.normalizedName || normalizeName(e.rule.itemName)), e.rule.status);
+    nameRule.set(labelNameKey(e.rule.amountRangeLabel, e.rule.normalizedName || normalizeName(e.rule.itemName)), e.rule);
   }
-  const candidates = buildSpecialItemRuleCandidates(versionItems, [...before.values()]);
-  return candidates.map((rule) =>
-    rule.status === "candidate" && nameStatus.get(labelNameKey(rule.amountRangeLabel, rule.normalizedName)) === "confirmed"
+  const confirmedByName = (label: unknown, name: unknown) => {
+    const rule = nameRule.get(labelNameKey(label, name));
+    return rule?.status === "confirmed" ? rule : null;
+  };
+  const candidates = buildSpecialItemRuleCandidates(versionItems, [...before.values()]).map((rule) =>
+    rule.status === "candidate" && confirmedByName(rule.amountRangeLabel, rule.normalizedName)
       ? { ...rule, status: "confirmed" as const }
       : rule,
   );
+  // 실시간 후보 탐지(isMultiplierCandidateName)가 못 알아보는 이름으로 확정된 칸은 후보 목록에 아예 안 올라온다 →
+  // 옛 버전 칸(확률만 달라 ruleKey 가 다름)도 이름으로 맞으면 근사 판정 전용 확정 규칙을 만들어 준다.
+  const known = new Set(candidates.map((rule) => rule.ruleKey));
+  for (const item of versionItems) {
+    const ruleKey = specialRuleKeyForItem(item);
+    if (known.has(ruleKey)) continue;
+    const named = confirmedByName(item.amountRangeLabel, item.normalizedName);
+    if (!named) continue;
+    known.add(ruleKey);
+    candidates.push({
+      ruleKey,
+      ruleType: "next_result_multiplier",
+      status: "confirmed",
+      multiplier: Math.max(2, Number(named.multiplier || 2)),
+      groupIndex: item.groupIndex,
+      amountRangeLabel: item.amountRangeLabel,
+      itemName: item.itemName,
+      normalizedName: item.normalizedName,
+      probability: item.probability,
+      itemEnabled: item.enabled !== false,
+    });
+  }
+  return candidates;
 }
 
 // 이 스트리머에 두배권 칸·확정 규칙이 하나라도 있었나(G7 초기 정책: 있으면 🟢 금지). 이름은 넓게 본다.

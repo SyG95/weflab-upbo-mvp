@@ -255,8 +255,17 @@ export type DonationTimeSummary = {
 
 type Occurrence = { result: NormalizedResult; savedAt: string | null; signature: string };
 
+// 같은 결과 키가 원본 묶음마다 "판정에 영향을 주는 값"이 같은지(G10). 후원 시각·종류도 본다 — 시각이 다르면 그때 표·설정이,
+// 종류가 다르면 미션 정산 여부가 달라진다. 닉네임은 시청자가 바꿀 수 있고 판정과 무관해 뺀다.
 function occurrenceSignature(r: NormalizedResult): string {
-  return [cleanText(r.itemName), r.probability ?? "", r.donationAmount ?? "", cleanText(r.fanId)].join("|");
+  return [
+    cleanText(r.itemName),
+    r.probability ?? "",
+    r.donationAmount ?? "",
+    cleanText(r.fanId),
+    cleanText(r.donateTimeText),
+    cleanText(r.donationType),
+  ].join("|");
 }
 
 function nearly(a: number | null | undefined, b: number | null | undefined): boolean {

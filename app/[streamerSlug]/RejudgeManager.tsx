@@ -46,6 +46,7 @@ type AsofPreview = {
   pageCount: number;
   totalRows: number;
   inputFingerprint: string;
+  rowsToken: string;
   rawUntil: string | null;
   aliasCandidates?: AliasCandidate[];
 };
@@ -173,8 +174,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
         return;
       }
       const next = data as AsofPreview;
-      if (page > 0 && asof && next.inputFingerprint !== asof.inputFingerprint) {
-        // 쪽 사이에 판정 재료(표·설정·원본·수동기록)가 바뀌면 이어 붙이면 행이 겹치거나 빠진다 → 처음부터 다시.
+      if (page > 0 && asof && (next.rowsToken !== asof.rowsToken || next.inputFingerprint !== asof.inputFingerprint)) {
+        // 쪽 사이에 행 목록(앞쪽 결과가 기록됨·분류 바뀜)이나 판정 재료가 바뀌면 이어 붙일 때 행이 빠진다 → 처음부터 다시.
         await callAsof(0, "그사이 판정 재료가 바뀌어 처음부터 다시 불러왔어요.");
         return;
       }
