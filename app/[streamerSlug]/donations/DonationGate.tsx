@@ -26,7 +26,7 @@ export default function DonationGate({
         <h2 className={styles.gateTitle}>후원집계 비밀번호를 아직 안 정했어요</h2>
         <p className={styles.gateDesc}>
           업보시트 관리자 화면에 로그인한 뒤 다시 열면, 들어와서 후원집계 전용 비밀번호를 정할 수 있어요.{" "}
-          <a href={`/${slug}?admin=1`}>업보시트 관리자 로그인</a>
+          <a href={`/${encodeURIComponent(slug)}?admin=1`}>업보시트 관리자 로그인</a>
         </p>
       </div>
     );
