@@ -21,6 +21,7 @@ import {
   type ResetScope,
 } from "@/lib/upboSupabase";
 import type { ExtensionConfig } from "@/lib/extensionStatus";
+import { beginUnlockAttempt, lockedMessage, recordUnlockSuccess, wrongPasswordMessage } from "@/lib/unlockThrottle";
 
 // 오픈 리다이렉트 방지: /admin 으로 시작하는 경로만 허용.
 function safeReturn(path: string): string {
@@ -34,7 +35,18 @@ export async function unlockAdmin(_prev: UnlockState, formData: FormData): Promi
   const password = String(formData.get("password") ?? "");
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/admin"));
   if (!token) return { error: "서버에 관리자 토큰(UPBO_ADMIN_TOKEN)이 설정돼 있지 않습니다." };
-  if (!password || password !== token) return { error: "비밀번호가 올바르지 않습니다." };
+  if (!password) return { error: "비밀번호를 입력해 주세요." };
+  // 시도 제한: 콘솔은 sy 한 명이라 슬러그가 없다 → 전역 카운터 1개(15분 10회, streamer_id 비움).
+  // 비밀번호를 보기 전에 이 시도를 먼저 센다(lib/unlockThrottle.ts). 누가 일부러 틀리면 sy 도 15분 잠긴다.
+  let throttle;
+  try {
+    throttle = await beginUnlockAttempt("console", null);
+  } catch {
+    return { error: "잠시 후 다시 시도해 주세요." };
+  }
+  if (throttle.locked) return { error: lockedMessage(throttle.retryAfterSec) };
+  if (adminTokenHash(password) !== adminTokenHash(token)) return { error: wrongPasswordMessage(throttle.remaining) };
+  await recordUnlockSuccess("console", null);
   const session = consoleSessionValue(token);
   if (!session) return { error: "서버 설정 문제로 세션을 만들 수 없습니다(SUPABASE_SERVICE_ROLE_KEY 확인)." };
   (await cookies()).set(ADMIN_COOKIE, session, {
