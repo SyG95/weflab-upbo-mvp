@@ -49,7 +49,16 @@ import {
   type SpecialItemRule,
 } from "./upboCore";
 import type { JudgeRules } from "./upboCore";
-import { collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
+import { collectDonationTimeCandidates, collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
+import {
+  buildJudgeHistory,
+  DONATION_TIME_AUDIT_ACTIONS,
+  fanUsageByVersionLikeState,
+  judgeInputFingerprint,
+  type UsageEngine,
+} from "./judgeInputsAt";
+import type { ManualOverlapEntry } from "./manualOverlap";
+import { FEATURE_FLAGS_ACTION, mergeFeatureFlags, normalizeFeatureFlags, type UpboFeatureFlags } from "./featureFlags";
 import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAlias";
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
@@ -4422,6 +4431,152 @@ export async function applyRejudgeForStreamer(
     notInPreview: previewSet ? notInPreview : 0,
     summary,
     candidates: targets,
+  };
+}
+
+// ---------- 시범 기능 스위치(스트리머별, 1단계 묶음 3~5) ----------
+// audit_logs 최신 1건(전체 값을 한 줄로 다시 적는다). 팬 페이지 오버레이 목록·공개 /state 에는 넣지 않는다.
+export async function featureFlagsForStreamer(streamerId: string): Promise<UpboFeatureFlags> {
+  const rows = await supabaseFetch<Array<{ payload: unknown }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${FEATURE_FLAGS_ACTION}&select=payload&order=created_at.desc&limit=1`,
+  );
+  return normalizeFeatureFlags(rows[0]?.payload);
+}
+
+export async function setFeatureFlags(streamer: StreamerRow, patch: unknown): Promise<UpboFeatureFlags> {
+  const next = mergeFeatureFlags(await featureFlagsForStreamer(streamer.id), patch);
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({ streamer_id: streamer.id, action: FEATURE_FLAGS_ACTION, actor: "operator", payload: next }),
+  });
+  return next;
+}
+
+// ---------- 후원 시점 근사 다시판정 미리보기(1단계 묶음 3, 쓰기 0) ----------
+// 순수 판정은 lib/rejudge.ts(collectDonationTimeCandidates)·lib/judgeInputsAt.ts 가 하고, 여기서는 재료를 한 번에 읽기만 한다.
+// 재료는 전부 페이지 순회로 전량 읽는다(운영 max-rows 1,000 — special_item_rule 1,000행 잘림(F17)도 여기선 없다).
+// 응답은 🟢·🟡·오기록 의심 행만 쪽(200행)으로 나눠 보내고 나머지는 개수로만 보낸다(Vercel 응답 4.5MB 상한).
+const DONATION_TIME_PAGE_SIZE = 200;
+const USAGE_ENGINE: UsageEngine = { computeEffectiveOverrides, applyCatalogUsage };
+
+async function donationTimeRejudgeContext(streamer: StreamerRow) {
+  const sid = streamer.id;
+  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases, fixedPriceConfig] = await Promise.all([
+    supabaseFetchAll<{ id: string; version: number; captured_at: string | null; created_at: string | null; groups: Json }>(
+      `/${tableName("catalogs")}?streamer_id=eq.${sid}&select=id,version,captured_at,created_at,groups`,
+      [{ column: "version", dir: "asc" }, { column: "id", dir: "asc" }],
+    ),
+    supabaseFetchAll<{ id: string; action: string; payload: Json; created_at: string }>(
+      `/${tableName("audit_logs")}?streamer_id=eq.${sid}&action=in.(${DONATION_TIME_AUDIT_ACTIONS.join(",")})&select=id,action,payload,created_at`,
+      PAGE_CREATED_ASC,
+    ),
+    supabaseFetchAll<{ id: string; applied_at: string; threshold_percent: number }>(
+      `/${tableName("import_batches")}?streamer_id=eq.${sid}&select=id,applied_at,threshold_percent`,
+      [{ column: "applied_at", dir: "asc" }, { column: "id", dir: "asc" }],
+    ),
+    supabaseFetchAll<UpboEntryRow>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${sid}&select=id,source_key,status,item_name,fan_id,fan_nickname,donate_time_text,admin_note,created_at`,
+      PAGE_CREATED_ASC,
+    ),
+    // 수동기록 겹침은 취소를 반영한 남은 개수로 본다(쿠폰 소급과 같은 읽기·규칙).
+    supabaseFetchAll<{ id: string; upbo_entry_id: string; event_type: string; quantity_delta?: number | null; after_json?: unknown; created_at?: string }>(
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${sid}&event_type=in.(cancel,void,admin_adjustment)&select=id,upbo_entry_id,event_type,quantity_delta,after_json,created_at`,
+      PAGE_CREATED_ASC,
+    ),
+    supabaseFetchAll<{ id?: string; batch_id: string | null; raw: Json; saved_at?: string | null }>(
+      `/${tableName("raw_imports")}?streamer_id=eq.${sid}&type=eq.results&select=id,batch_id,saved_at,raw`,
+      [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
+    ),
+    itemAliasesForStreamer(sid),
+    latestFixedPriceJudgeConfig(sid),
+  ]);
+  const currentThreshold = Number(streamer.threshold_percent ?? 2);
+  const history = buildJudgeHistory({
+    catalogs: catalogRows,
+    audits: auditRows,
+    batches: batchRows,
+    currentThresholdPercent: currentThreshold,
+  });
+  const cancelled = cancelledQuantityByEntry(
+    cancelRows.map((ev) => {
+      const after = ev.after_json && typeof ev.after_json === "object" ? (ev.after_json as Record<string, unknown>) : null;
+      const rid = after?.revertOfEventId;
+      return {
+        id: ev.id,
+        upboEntryId: ev.upbo_entry_id,
+        eventType: ev.event_type,
+        quantityDelta: ev.quantity_delta ?? null,
+        revertOfEventId: typeof rid === "string" ? rid : null,
+      };
+    }),
+  );
+  const manualEntries: ManualOverlapEntry[] = applyCancelledQuantity(
+    entryRows
+      .filter((row) => row.source_key.startsWith("manual:") && (row.status === "pending" || row.status === "completed"))
+      .map((row) => {
+        const e = mapEntry(row, "");
+        return { entryId: row.id, effectiveCount: e.effectiveCount, fanId: e.fanId, fanNickname: e.fanNickname, itemName: e.itemName, donateTimeText: e.donateTimeText };
+      }),
+    cancelled,
+  ).map((m) => ({
+    id: m.entryId,
+    fanId: m.fanId,
+    fanNickname: m.fanNickname,
+    itemName: m.itemName,
+    donateTimeText: m.donateTimeText,
+    remaining: Number(m.effectiveCount ?? 1),
+  }));
+  const fanCatalogs = history.catalogs.map((c) => ({ version: c.version, groups: c.groups }));
+  const collected = collectDonationTimeCandidates({
+    batches: rawRows.map((row) => ({ batchId: row.batch_id ?? "", capture: (row.raw ?? {}) as ResultCapture, savedAt: row.saved_at ?? null })),
+    history,
+    engine: USAGE_ENGINE,
+    existingSourceKeys: new Set(entryRows.map((row) => row.source_key)),
+    manualEntries,
+    aliases,
+    fanCatalogs,
+    fanUsageByVersion: fanUsageByVersionLikeState(history, USAGE_ENGINE),
+    fixedPriceConfig,
+  });
+  const aliasCandidates = buildAliasCandidates({
+    results: collected.aliasUnmatched,
+    catalogItems: collected.nowItems,
+    aliases,
+    thresholdPercent: currentThreshold,
+  }).map((group) => ({ ...group, options: group.options.slice(0, 5) }));
+  return {
+    ...collected,
+    aliases,
+    aliasCandidates,
+    latestVersion: history.catalogs.at(-1)?.version ?? null,
+    thresholdPercent: currentThreshold,
+    inputFingerprint: judgeInputFingerprint(history, { aliases, fixedPrice: fixedPriceConfig }),
+  };
+}
+
+export async function previewDonationTimeRejudgeForStreamer(streamer: StreamerRow, options: { page?: number } = {}) {
+  const ctx = await donationTimeRejudgeContext(streamer);
+  const totalRows = ctx.rows.length;
+  const pageCount = Math.max(1, Math.ceil(totalRows / DONATION_TIME_PAGE_SIZE));
+  const requested = Math.floor(Number(options.page ?? 0));
+  const page = Number.isFinite(requested) ? Math.min(Math.max(0, requested), pageCount - 1) : 0;
+  return {
+    applied: false,
+    mode: "donation_time" as const,
+    streamerSlug: streamer.slug,
+    latestVersion: ctx.latestVersion,
+    thresholdPercent: ctx.thresholdPercent,
+    summary: ctx.summary,
+    rows: ctx.rows.slice(page * DONATION_TIME_PAGE_SIZE, (page + 1) * DONATION_TIME_PAGE_SIZE),
+    page,
+    pageSize: DONATION_TIME_PAGE_SIZE,
+    pageCount,
+    totalRows,
+    inputFingerprint: ctx.inputFingerprint,
+    // 이름 연결 재료는 첫 쪽에만 싣는다(다음 쪽 요청마다 같은 걸 또 보내지 않게).
+    aliasCandidates: page === 0 ? ctx.aliasCandidates : [],
+    aliases: page === 0 ? ctx.aliases : {},
   };
 }
 

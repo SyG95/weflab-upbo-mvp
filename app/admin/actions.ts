@@ -22,6 +22,7 @@ import {
   renameStreamer,
   setExtensionConfig,
   setExtensionConfigForAll,
+  setFeatureFlags,
   setSheetAdminPinHash,
   upsertStreamer,
   type ResetCount,
@@ -29,6 +30,7 @@ import {
 } from "@/lib/upboSupabase";
 import type { ExtensionConfig } from "@/lib/extensionStatus";
 import { adminVisitorAccessState, visitorPasswordMatches } from "@/lib/adminVisitorAccess";
+import type { UpboFeatureFlags } from "@/lib/featureFlags";
 import {
   beginMasterAttempt,
   lockedMessage,
@@ -327,5 +329,26 @@ export async function setExtensionConfigForAllAction(
     return { ok: true, count };
   } catch (error) {
     return { ok: false, error: (error as Error).message || "전체 확프 설정 저장에 실패했어요." };
+  }
+}
+
+// ── 스트리머별 시범 기능 스위치(확프 0.5.0 1단계 묶음 3~5) ─────────────────
+// 기본은 전부 꺼짐. 화면이 보낸 patch 는 아는 키·boolean 만 받는다(mergeFeatureFlags).
+export type FeatureFlagsActionResult = { ok: boolean; error?: string; flags?: UpboFeatureFlags };
+
+export async function setFeatureFlagsAction(
+  slug: string,
+  patch: Partial<UpboFeatureFlags>,
+): Promise<FeatureFlagsActionResult> {
+  try {
+    await assertConsoleAdmin();
+    const clean = String(slug ?? "").trim().toLowerCase();
+    if (!SLUG_RE.test(clean)) return { ok: false, error: "잘못된 슬러그예요." };
+    const streamer = await getStreamerRowBySlug(clean);
+    const flags = await setFeatureFlags(streamer, patch ?? {});
+    revalidatePath(`/admin/${clean}`);
+    return { ok: true, flags };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message || "시범 기능 저장에 실패했어요." };
   }
 }

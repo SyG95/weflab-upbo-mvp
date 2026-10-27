@@ -18,9 +18,12 @@ import {
 } from "@/lib/accuracyStats";
 import { adminAccessState } from "@/lib/adminAuth";
 import { adminVisitorAccessState } from "@/lib/adminVisitorAccess";
+import { featureFlagsForStreamer, getStreamerRowBySlug } from "@/lib/upboSupabase";
+import type { UpboFeatureFlags } from "@/lib/featureFlags";
 import { lockAdminOrVisitor } from "../visitorActions";
 import AdminGate from "../AdminGate";
 import VisitorDashboard from "./VisitorDashboard";
+import FeatureFlagToggle from "./FeatureFlagToggle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,6 +99,13 @@ export default async function AdminDashboardPage({ params, searchParams }: PageP
   const result: AdminDashboardResult = isMock
     ? { ok: true, data: getMockAdminDashboardData(streamerSlug) }
     : await getAdminDashboardData(streamerSlug);
+  // 시범 기능 스위치(확프 0.5.0 1단계). 읽기 실패(없는 슬러그 등)면 스위치만 숨긴다 — 검증실 본문은 그대로.
+  const featureFlags: UpboFeatureFlags | null =
+    isMock || !result.ok
+      ? null
+      : await getStreamerRowBySlug(streamerSlug)
+          .then((streamer) => featureFlagsForStreamer(streamer.id))
+          .catch(() => null);
 
   return (
     <main className={styles.page}>
@@ -132,6 +142,7 @@ export default async function AdminDashboardPage({ params, searchParams }: PageP
             위플랩 원본 수집 데이터와 업보 자동 판단을 한 화면에서 추적·검증합니다. 이 화면은{" "}
             <strong>읽기 전용</strong>이며 원본 데이터를 변경하지 않습니다.
           </p>
+          {featureFlags ? <FeatureFlagToggle slug={streamerSlug} initial={featureFlags} /> : null}
         </header>
 
         {unconfigured ? (

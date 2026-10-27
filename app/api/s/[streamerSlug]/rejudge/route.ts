@@ -1,6 +1,8 @@
 import {
   applyRejudgeForStreamer,
+  featureFlagsForStreamer,
   getStreamerRowBySlug,
+  previewDonationTimeRejudgeForStreamer,
   previewRejudgeForStreamer,
 } from "@/lib/upboSupabase";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
@@ -10,18 +12,49 @@ export const runtime = "nodejs";
 
 type RouteContext = { params: Promise<{ streamerSlug: string }> };
 
+function httpError(message: string, status: number): Error {
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = status;
+  return error;
+}
+
+// 이 스트리머가 쓸 수 있는 판정 기준(화면이 "판정 기준" 선택을 보일지 정한다). 시범 스위치는 sy 가 /admin 에서 켠다.
+export async function GET(_request: Request, context: RouteContext) {
+  try {
+    const { streamerSlug } = await context.params;
+    await requireSheetAdmin(streamerSlug);
+    const streamer = await getStreamerRowBySlug(streamerSlug);
+    const flags = await featureFlagsForStreamer(streamer.id);
+    return jsonOk({ modes: { now: true, donationTime: flags.asofRejudge } });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
 // 재판정: 저장된 원본을 현재 확률표로 다시 돌려, 기록됐어야 할 결과만 새로 넣는다.
 // - 기본은 미리보기(dryRun). 실제 저장은 apply:true + confirm=<슬러그> 둘 다 있어야 한다
 //   (데이터 초기화와 같은 확인 게이트).
 // - 기존 기록은 절대 수정·삭제하지 않는다. 새로 넣는 것만 한다.
+// - mode: "now"(기본, 현행) | "donation_time"(후원 그때 표로 근사 — 1단계 묶음 3, 미리보기만·쓰기 0, 시범 스위치 필요).
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
 
-    const body = await readJson<{ apply?: unknown; confirm?: unknown; sourceKeys?: unknown }>(request);
+    const body = await readJson<{ apply?: unknown; confirm?: unknown; sourceKeys?: unknown; mode?: unknown; page?: unknown }>(request);
+    const mode = body.mode === undefined || body.mode === "now" ? "now" : body.mode === "donation_time" ? "donation_time" : null;
+    if (!mode) throw httpError('mode must be "now" or "donation_time"', 400);
     const wantsApply = body.apply === true;
+    if (mode === "donation_time") {
+      // 넣기는 묶음 4(실제 삽입 id 장부·void 되돌리기)가 붙기 전까지 막는다.
+      if (wantsApply) throw httpError("donation_time mode is preview-only for now", 400);
+      const flags = await featureFlagsForStreamer(streamer.id);
+      if (!flags.asofRejudge) throw httpError("donation_time mode is not enabled for this streamer", 403);
+      const page = body.page === undefined ? 0 : Number(body.page);
+      if (!Number.isInteger(page) || page < 0 || page > 10_000) throw httpError("page must be a non-negative integer", 400);
+      return jsonOk(await previewDonationTimeRejudgeForStreamer(streamer, { page }));
+    }
     if (!wantsApply) {
       return jsonOk(await previewRejudgeForStreamer(streamer));
     }

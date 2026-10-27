@@ -13,7 +13,7 @@
 //   - 판정 엔진(reconcileResults/findCatalogMatch)은 수정하지 않는다. 판정에 넣기 직전
 //     결과의 상품명·확률만 "지금 표의 값"으로 바꿔서 넘긴다.
 
-import { cleanText, normalizeName, type NormalizedCatalogItem, type NormalizedResult } from "./upboCore";
+import { cleanText, findCatalogMatch, normalizeName, type NormalizedCatalogItem, type NormalizedResult } from "./upboCore";
 
 // 이름 하나를 "이모지·기호·공백 뺀 알맹이"로 줄인다. 추천용 비교에만 쓴다.
 // 💙얼낙즉방 → 얼낙즉방, ☁️애교/매도 → 애교/매도
@@ -191,6 +191,32 @@ export function applyItemAliases(
       probability: alias.probability,
     };
   });
+}
+
+// 후원 시점 근사 판정용(1단계 묶음 3): 그 버전에서 원래 이름으로 못 찾을 때만 연결을 쓴다.
+//   - 그때 표에서 꺼진 칸까지 포함해 원래 이름이 맞으면 연결하지 않는다(그때 표가 정답이므로).
+//   - 연결 키는 연결을 만든 기준인 최신 표로 계산하고(applyItemAliases 와 같음), 대상 상품을 그 버전 안에서 다시 찾는다.
+//     그 버전에 대상이 없으면 바꾸지 않고 aliasTargetMissing 만 알린다(🟡/검토 판단은 호출자).
+// applyItemAliases(현행 "지금 표로" 모드)는 그대로 둔다.
+export function applyItemAliasesIfUnmatched(
+  result: NormalizedResult,
+  versionItems: NormalizedCatalogItem[],
+  latestItems: NormalizedCatalogItem[],
+  aliases: ItemAliasMap,
+): { result: NormalizedResult; aliasUsed: boolean; aliasTargetMissing: boolean } {
+  const unchanged = { result, aliasUsed: false, aliasTargetMissing: false };
+  if (Object.keys(aliases).length === 0) return unchanged;
+  if (findCatalogMatch(result, versionItems, { includeDisabled: true })) return unchanged;
+  const alias = aliases[aliasKey(amountLabelOf(result, latestItems), result.itemName, result.probability)];
+  if (!alias || alias.ignored) return unchanged;
+  const aliased: NormalizedResult = {
+    ...result,
+    itemName: alias.itemName,
+    normalizedName: normalizeName(alias.itemName),
+    probability: alias.probability,
+  };
+  if (!findCatalogMatch(aliased, versionItems, { includeDisabled: true })) return { ...unchanged, aliasTargetMissing: true };
+  return { result: aliased, aliasUsed: true, aliasTargetMissing: false };
 }
 
 // 저장 전 검증: 키 형식과 값이 멀쩡한 것만 남긴다.
