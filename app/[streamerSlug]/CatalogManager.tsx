@@ -59,7 +59,15 @@ function sortItems(items: { item: CatalogItem; idx: number }[], sort: SortKey) {
   return arr;
 }
 
-export default function CatalogManager({
+// 편집 상태(overrides·savedOverrides)는 그 버전의 usageByVersion 으로 처음 한 번만 읽는다.
+// "지금 가져오기"로 새 표 버전이 생겨 서버가 다시 그려도 상태는 옛 버전 그대로 남아, 바로 저장하면
+// 옛 표의 칸 설정(그룹 번호 기준)이 새 버전에 저장됐다(2026-08-24 이후 결함 — 꾸야 두배권이 우연히 켜진 원인).
+// 버전을 key 로 줘서 버전이 바뀌면 화면 상태를 새 버전 기준으로 새로 읽는다(2026-10-27).
+export default function CatalogManager(props: Parameters<typeof CatalogManagerBody>[0]) {
+  return <CatalogManagerBody key={props.version ?? "none"} {...props} />;
+}
+
+function CatalogManagerBody({
   slug,
   groups,
   threshold,
