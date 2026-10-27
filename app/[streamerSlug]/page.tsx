@@ -69,6 +69,8 @@ import { isMaterialId } from "../../lib/materials";
 import { noticeFontCss, noticeFontHref } from "../../lib/noticeFonts";
 import { normalizeSheetFont, sheetFontCss, sheetFontHref } from "../../lib/sheetFonts";
 import ThemeLiveBackground from "./ThemeLiveBackground";
+import AdminNoticeBar from "./AdminNoticeBar";
+import { THEME_UPDATE_NOTICE } from "../../lib/adminNotice";
 import ShowcaseManager from "./ShowcaseManager";
 import SignatureCountsManager from "./SignatureCountsManager";
 import ManualEntryManager from "./ManualEntryManager";
@@ -2127,6 +2129,8 @@ function AdminPanel({
           로그인·권한은 다음 단계입니다.
         </p>
         <p className={styles.fieldHint}>마지막 반영 {fmtKst(latest?.appliedAt)}</p>
+        {/* 기간 한정 공지(닫기 가능, 기한·닫음은 브라우저에서 판정) — lib/adminNotice.ts */}
+        <AdminNoticeBar notice={THEME_UPDATE_NOTICE} />
         {/* 기간 한정 정가 수시 알림(sy 확정 2026-08-09 — 관리자 머리 위치, D-7 이하만 강조). */}
         {(() => {
           const details = state.signatureDetails ?? [];

@@ -1463,6 +1463,51 @@
   line-height: 1.55;
 }
 
+/* 관리자 머리말 기간 한정 공지(AdminNoticeBar) — 옅은 강조 바탕 + 본문 글자 */
+.adminNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 6px 10px 14px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--stamp-soft);
+}
+
+.adminNoticeText {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 2px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.adminNoticeClose {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin: -8px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.adminNoticeClose:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.adminNoticeClose:focus-visible {
+  outline: 2px solid var(--stamp);
+  outline-offset: 1px;
+}
+
 .adminCard {
   padding: 18px 18px 20px;
   background: var(--surface);
