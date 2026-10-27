@@ -410,15 +410,28 @@ function makeExtensionToken(): string {
   return `upbo_ext_${crypto.randomBytes(24).toString("base64url")}`;
 }
 
+// 관리자 API(스트리머 생성·데이터 초기화·확프 토큰 발급) Bearer 검사.
+// env 가 없으면 거부한다(fail-closed, 2026-10-27). 예전엔 env 가 없으면 그냥 통과했다 —
+// Preview 처럼 토큰을 깜빡한 배포에서 위 API 가 인증 없이 열리는 구멍이었다.
 export function assertAdminToken(authHeader: string | null) {
   const expected = process.env.UPBO_ADMIN_TOKEN;
-  if (!expected) return;
+  if (!expected) {
+    const error = new Error("admin API disabled: UPBO_ADMIN_TOKEN is not set");
+    (error as Error & { status?: number }).status = 503;
+    throw error;
+  }
   const actual = bearerToken(authHeader);
-  if (actual !== expected) {
+  // 길이·내용 비교 시간을 일정하게: 해시끼리 timingSafeEqual.
+  const same = crypto.timingSafeEqual(tokenHashBuffer(actual), tokenHashBuffer(expected));
+  if (!actual || !same) {
     const error = new Error("invalid admin token");
     (error as Error & { status?: number }).status = 401;
     throw error;
   }
+}
+
+function tokenHashBuffer(value: string): Buffer {
+  return crypto.createHash("sha256").update(value).digest();
 }
 
 export function bearerToken(authHeader: string | null): string {
