@@ -15,7 +15,7 @@
 // - 잠긴 동안엔 마스터키도 받지 않는다. 잠금 중 마스터키만 통과시키면 "틀림=잠김 / 맞음=통과"로
 //   마스터키를 끝없이 대입하는 통로가 된다.
 
-export type UnlockKind = "sheet" | "donation" | "console";
+export type UnlockKind = "sheet" | "pair" | "donation" | "console";
 
 export type ThrottleWindow = { ms: number; max: number };
 
@@ -46,6 +46,14 @@ export const UNLOCK_POLICIES: Record<UnlockKind, ThrottlePolicy> = {
   sheet: {
     failed: "sheet_admin_unlock_failed",
     ok: "sheet_admin_unlock_ok",
+    countedFailures: ["sheet_admin_unlock_failed", "extension_pair_failed"],
+    resets: ["sheet_admin_unlock_ok", "extension_pair_ok", "sheet_admin_pin_updated"],
+    windows: STREAMER_WINDOWS,
+  },
+  // 확프 페어링(lib/extensionPairing.ts)은 시트 관리자 비밀번호를 검사하므로 시트와 같은 셈을 쓴다(기록 action 만 다름).
+  pair: {
+    failed: "extension_pair_failed",
+    ok: "extension_pair_ok",
     countedFailures: ["sheet_admin_unlock_failed", "extension_pair_failed"],
     resets: ["sheet_admin_unlock_ok", "extension_pair_ok", "sheet_admin_pin_updated"],
     windows: STREAMER_WINDOWS,
