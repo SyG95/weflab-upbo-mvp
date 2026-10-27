@@ -1,7 +1,7 @@
 #!/bin/bash
 # 운영 배포 가드 — 규칙: ① main 에서만 ② 커밋 안 한 변경 없이 ③ 한 번에 한 배포(잠금)
 #   ④ 타입·lint·테스트 통과 ⑤ GitHub 에 먼저 올린 뒤 ⑥ vercel deploy --prod ⑦ 배포 대장 1줄.
-# 배포가 끝나면 git 태그 prod-live 가 라이브 커밋을 가리키고(GitHub 에도 푸시), deploy-YYYYMMDD-HHMM 태그로 이력을 남긴다.
+# 배포가 끝나면 git 태그 prod-live 가 라이브 커밋을 가리키고(GitHub 에도 푸시), deploy-YYYYMMDD-HHMMSS 태그로 이력을 남긴다.
 # 사용: DEPLOY_BY="누가(세션·사람 이름)" scripts/deploy-prod.sh   (프로젝트 루트나 워크트리 어디서 실행해도 됨)
 # 배포 대장: deploy-* 태그 메시지(git tag -n1 -l 'deploy-*', GitHub 에도 남음) + 이 맥의 .git/deploy-ledger.tsv
 set -euo pipefail
@@ -30,9 +30,17 @@ fi
 # 2026-10-25~27 사흘 동안 서로 다른 세션이 4번 배포했다 — 겹치면 prod-live 태그와 라이브가 어긋난다.
 LOCK="$GIT_COMMON/deploy-prod.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "[deploy] 다른 배포가 진행 중입니다: $(cat "$LOCK/owner" 2>/dev/null || echo '정보 없음')"
-  echo "[deploy] 그 배포 프로세스가 이미 끝났는데 잠금만 남았다면: rm -rf \"$LOCK\""
-  exit 1
+  OWNER_PID="$(sed -n 's/^pid=\([0-9]*\).*/\1/p' "$LOCK/owner" 2>/dev/null || true)"
+  if [ -n "$OWNER_PID" ] && ! kill -0 "$OWNER_PID" 2>/dev/null; then
+    # 잠금을 잡은 프로세스가 이미 없다(강제 종료 등) → 남은 잠금만 치우고 다시 잡는다.
+    echo "[deploy] 끝난 배포(pid $OWNER_PID)가 남긴 잠금을 치웁니다: $(cat "$LOCK/owner" 2>/dev/null)"
+    rm -rf "$LOCK"
+  fi
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "[deploy] 다른 배포가 진행 중입니다: $(cat "$LOCK/owner" 2>/dev/null || echo '정보 없음')"
+    echo "[deploy] 그 배포 프로세스가 이미 끝났는데 잠금만 남았다면: rm -rf \"$LOCK\""
+    exit 1
+  fi
 fi
 trap 'rm -rf "$LOCK"' EXIT
 echo "pid=$$ by=$DEPLOY_BY at=$(date '+%Y-%m-%d %H:%M:%S') head=$(git rev-parse --short HEAD)" > "$LOCK/owner"
@@ -51,6 +59,9 @@ echo "[deploy] 배포 전 검사: 타입 → lint → 테스트"
 if ! npx tsc --noEmit; then echo "[deploy] 타입 검사 실패 — 배포 중단"; exit 1; fi
 if ! npm run lint --silent; then echo "[deploy] lint 실패 — 배포 중단"; exit 1; fi
 if ! npx tsx --test tests/*.test.ts tests/*.test.mjs; then echo "[deploy] 테스트 실패 — 배포 중단"; exit 1; fi
+for t in tests/*.cjs; do
+  if ! node "$t" >/dev/null; then echo "[deploy] 테스트 실패($t) — 배포 중단"; exit 1; fi
+done
 echo "[deploy] 검사 통과"
 
 if [ "$LOCAL" != "$REMOTE" ]; then
@@ -78,13 +89,14 @@ else
   npx vercel deploy --prod --yes
 fi
 
-STAMP="$(date +%Y%m%d-%H%M)"
+STAMP="$(date +%Y%m%d-%H%M%S)"
 WHEN="$(date '+%Y-%m-%d %H:%M')"
 # ⑦ 배포 대장 1줄: 언제 · 누가 · 무엇(라이브 커밋, 새 커밋 수, 마지막 커밋 제목) · 롤백 대상
 LEDGER_LINE="$WHEN	by=$DEPLOY_BY	live=$SHORT	new=$NEW_COUNT	rollback=${PREV_SHORT:-none}	$SUBJECT"
 git tag -f prod-live "$LOCAL" >/dev/null
-git tag -f -a "deploy-$STAMP" -m "$LEDGER_LINE" "$LOCAL" >/dev/null
-git push -f origin prod-live "deploy-$STAMP" >/dev/null 2>&1 || echo "[deploy] 태그 푸시 실패 — 나중에 git push -f origin prod-live deploy-$STAMP 로 다시 올리세요."
+git tag -a "deploy-$STAMP" -m "$LEDGER_LINE" "$LOCAL" >/dev/null
+git push -f origin prod-live >/dev/null 2>&1 && git push origin "deploy-$STAMP" >/dev/null 2>&1 \
+  || echo "[deploy] 태그 푸시 실패 — 나중에 git push -f origin prod-live && git push origin deploy-$STAMP 로 다시 올리세요."
 LEDGER="$GIT_COMMON/deploy-ledger.tsv"
 [ -f "$LEDGER" ] || printf 'when\tby\tlive\tnew\trollback\tsubject\n' > "$LEDGER"
 printf '%s\n' "$LEDGER_LINE" >> "$LEDGER"
