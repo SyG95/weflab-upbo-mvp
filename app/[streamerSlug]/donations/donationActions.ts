@@ -14,6 +14,7 @@ import {
 } from "@/lib/donationAdminAuth";
 import { setDonationPinHashForStreamer } from "@/lib/donationEvents";
 import { getStreamerRowBySlug } from "@/lib/upboSupabase";
+import { beginUnlockAttempt, lockedMessage, recordUnlockSuccess, wrongPasswordMessage } from "@/lib/unlockThrottle";
 
 // 오픈 리다이렉트 방지: 사이트 내부 경로("/..." 단일 슬래시 시작)만 허용.
 function safeReturn(path: string): string {
@@ -41,6 +42,7 @@ function setSessionCookie(slug: string, hash: string, jar: Awaited<ReturnType<ty
 }
 
 const SESSION_CONFIG_ERROR = "서버 설정 문제로 열 수 없어요. 운영자에게 알려 주세요.";
+const NOT_SET_ERROR = "서버에 후원집계 비밀번호가 설정돼 있지 않습니다.";
 
 export type DonationUnlockState = { error?: string };
 
@@ -52,18 +54,34 @@ export async function unlockDonationAdmin(
   const password = String(formData.get("password") ?? "");
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/"));
   if (!slug) return { error: "잘못된 접근이에요." };
+  if (!password) return { error: "비밀번호를 입력해 주세요." };
+  const streamer = await getStreamerRowBySlug(slug).catch(() => null);
+  if (!streamer) return { error: "잘못된 접근이에요." };
 
-  // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 저장).
   const master = masterPinHash();
-  if (master && password && adminTokenHash(password) === master) {
+  const pinHash = await effectiveDonationPinHash(slug);
+  if (!pinHash && !master) return { error: NOT_SET_ERROR };
+
+  // 시도 제한(15분 7회·24시간 30회). 비밀번호를 보기 전에 이 시도를 먼저 센다.
+  // 잠긴 동안엔 마스터키도 받지 않는다(lib/unlockThrottle.ts 머리말).
+  let throttle;
+  try {
+    throttle = await beginUnlockAttempt("donation", streamer.id);
+  } catch {
+    return { error: "잠시 후 다시 시도해 주세요." };
+  }
+  if (throttle.locked) return { error: lockedMessage(throttle.retryAfterSec) };
+
+  const h = adminTokenHash(password);
+  // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 서명값 저장).
+  if (master && h === master) {
+    await recordUnlockSuccess("donation", streamer.id);
     if (!setSessionCookie(slug, master, await cookies())) return { error: SESSION_CONFIG_ERROR };
     redirect(returnTo);
   }
-  const pinHash = await effectiveDonationPinHash(slug);
-  if (!pinHash) return { error: "서버에 후원집계 비밀번호가 설정돼 있지 않습니다." };
-  if (!password || adminTokenHash(password) !== pinHash) {
-    return { error: "비밀번호가 올바르지 않습니다." };
-  }
+  if (!pinHash) return { error: NOT_SET_ERROR };
+  if (h !== pinHash) return { error: wrongPasswordMessage(throttle.remaining) };
+  await recordUnlockSuccess("donation", streamer.id);
   if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   redirect(returnTo);
 }

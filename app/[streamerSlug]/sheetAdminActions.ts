@@ -12,7 +12,8 @@ import {
   sheetAdminAccessState,
   sheetSessionValue,
 } from "@/lib/sheetAdminAuth";
-import { setSheetAdminPinHash } from "@/lib/upboSupabase";
+import { getStreamerRowBySlug, setSheetAdminPinHash } from "@/lib/upboSupabase";
+import { beginUnlockAttempt, lockedMessage, recordUnlockSuccess, wrongPasswordMessage } from "@/lib/unlockThrottle";
 
 // 오픈 리다이렉트 방지: 사이트 내부 경로("/..." 단일 슬래시 시작)만 허용.
 function safeReturn(path: string): string {
@@ -40,6 +41,7 @@ function setSessionCookie(slug: string, pinHash: string, jar: Awaited<ReturnType
 }
 
 const SESSION_CONFIG_ERROR = "서버 설정 문제로 로그인할 수 없어요. 운영자에게 알려 주세요.";
+const NOT_ISSUED_ERROR = "이 시트의 관리자 비밀번호가 아직 발급되지 않았어요. 운영자에게 발급을 요청해 주세요.";
 
 export type SheetUnlockState = { error?: string };
 
@@ -48,17 +50,34 @@ export async function unlockSheetAdmin(_prev: SheetUnlockState, formData: FormDa
   const password = String(formData.get("password") ?? "");
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/"));
   if (!slug) return { error: "잘못된 접근이에요." };
-  // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 저장).
+  if (!password) return { error: "비밀번호를 입력해 주세요." };
+  const streamer = await getStreamerRowBySlug(slug).catch(() => null);
+  if (!streamer) return { error: "잘못된 접근이에요." };
+
   const master = masterPinHash();
-  if (master && password && adminTokenHash(password) === master) {
+  const pinHash = await effectiveSheetPinHash(slug);
+  if (!pinHash && !master) return { error: NOT_ISSUED_ERROR };
+
+  // 시도 제한(15분 7회·24시간 30회, 확프 페어링 실패 포함). 비밀번호를 보기 전에 이 시도를 먼저 센다.
+  // 잠긴 동안엔 마스터키도 받지 않는다(lib/unlockThrottle.ts 머리말).
+  let throttle;
+  try {
+    throttle = await beginUnlockAttempt("sheet", streamer.id);
+  } catch {
+    return { error: "잠시 후 다시 시도해 주세요." };
+  }
+  if (throttle.locked) return { error: lockedMessage(throttle.retryAfterSec) };
+
+  const h = adminTokenHash(password);
+  // sy 마스터키면 스트리머 개인 비번 설정 여부와 무관하게 통과(쿠키엔 마스터 해시 서명값 저장).
+  if (master && h === master) {
+    await recordUnlockSuccess("sheet", streamer.id);
     if (!setSessionCookie(slug, master, await cookies())) return { error: SESSION_CONFIG_ERROR };
     redirect(returnTo);
   }
-  const pinHash = await effectiveSheetPinHash(slug);
-  if (!pinHash) return { error: "서버에 관리자 비밀번호가 설정돼 있지 않습니다." };
-  if (!password || adminTokenHash(password) !== pinHash) {
-    return { error: "비밀번호가 올바르지 않습니다." };
-  }
+  if (!pinHash) return { error: NOT_ISSUED_ERROR };
+  if (h !== pinHash) return { error: wrongPasswordMessage(throttle.remaining) };
+  await recordUnlockSuccess("sheet", streamer.id);
   if (!setSessionCookie(slug, pinHash, await cookies())) return { error: SESSION_CONFIG_ERROR };
   redirect(returnTo);
 }
