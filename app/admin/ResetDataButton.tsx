@@ -7,6 +7,7 @@
 
 import { useActionState, useState } from "react";
 import { resetStreamerDataAction, type ResetDataState } from "./actions";
+import CopyField from "./CopyField";
 import styles from "./admin-index.module.css";
 
 const INITIAL: ResetDataState = {};
@@ -17,7 +18,7 @@ const OPTIONS = [
   { name: "scope_catalogs", scopeKey: "catalogs", label: "확률표" },
   { name: "scope_coupons", scopeKey: "coupons", label: "쿠폰 장부" },
   { name: "scope_screen", scopeKey: "screenState", label: "화면 설정·상태(배너·레이아웃·특수룰 등)" },
-  { name: "scope_pins", scopeKey: "pins", label: "비밀번호·위플랩 링크까지 (지우면 공통 기본값으로 돌아감)" },
+  { name: "scope_pins", scopeKey: "pins", label: "비밀번호·위플랩 링크까지 (지우면 새 시트 비밀번호를 바로 발급)" },
 ] as const;
 
 type OptionName = (typeof OPTIONS)[number]["name"];
@@ -60,6 +61,7 @@ export default function ResetDataButton({ slug }: { slug: string }) {
             </li>
           ))}
         </ul>
+        {state.newPin ? <CopyField label="새 시트 비밀번호" value={state.newPin} /> : null}
       </div>
     );
   }

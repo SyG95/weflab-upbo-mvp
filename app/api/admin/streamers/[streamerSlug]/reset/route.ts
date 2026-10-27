@@ -1,8 +1,10 @@
+import { adminTokenHash, randomSheetPin } from "@/lib/adminAuth";
 import {
   assertAdminToken,
   executeStreamerReset,
   hasResetScope,
   previewStreamerReset,
+  setSheetAdminPinHash,
   type ResetScope,
 } from "@/lib/upboSupabase";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
@@ -56,6 +58,12 @@ export async function POST(request: Request, context: RouteContext) {
       throw new Error("confirm must equal the streamer slug to execute");
     }
     const result = await executeStreamerReset(streamerSlug, scope);
+    // pins 범위는 개별 비번을 지운다 → 공용 PIN 으로 돌아가지 않게 새 랜덤 시트 비번을 바로 발급(1회 응답).
+    if (scope.pins) {
+      const newSheetPin = randomSheetPin();
+      await setSheetAdminPinHash(streamerSlug, adminTokenHash(newSheetPin));
+      return jsonOk({ ok: true, dryRun: false, scope, ...result, newSheetPin });
+    }
     return jsonOk({ ok: true, dryRun: false, scope, ...result });
   } catch (error) {
     return jsonError(error);

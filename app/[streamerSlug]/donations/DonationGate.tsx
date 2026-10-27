@@ -1,7 +1,7 @@
 "use client";
 
 // 후원집계 잠금 화면. SheetAdminGate 패턴을 후원 원장 톤으로 옮긴 것.
-// - blocked: 배포 환경인데 UPBO_DONATION_ADMIN_PIN 미설정 → 안내(입력 폼 없음)
+// - blocked: 이 스트리머의 후원집계 전용 비밀번호가 아직 없음 → 업보시트 관리자 로그인 안내(입력 폼 없음)
 // - 그 외(locked): 비밀번호 입력 폼
 
 import { useActionState } from "react";
@@ -23,10 +23,10 @@ export default function DonationGate({
     return (
       <div className={styles.gateCard}>
         <div className={styles.gateLock}>⛔</div>
-        <h2 className={styles.gateTitle}>후원집계 비밀번호 미설정</h2>
+        <h2 className={styles.gateTitle}>후원집계 비밀번호를 아직 안 정했어요</h2>
         <p className={styles.gateDesc}>
-          배포 환경에서 <code>UPBO_DONATION_ADMIN_PIN</code> 이 설정되지 않아 안전을 위해 후원집계
-          화면을 막았습니다. Vercel 환경변수에 비밀번호를 설정하면 잠금이 켜집니다.
+          업보시트 관리자 화면에 로그인한 뒤 다시 열면, 들어와서 후원집계 전용 비밀번호를 정할 수 있어요.{" "}
+          <a href={`/${slug}?admin=1`}>업보시트 관리자 로그인</a>
         </p>
       </div>
     );

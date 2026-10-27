@@ -61,6 +61,17 @@ export function consoleSessionValue(token: string): string | null {
   return signSession("console", "", adminTokenHash(token));
 }
 
+// 스트리머 시트 관리자 비밀번호 랜덤 발급(콘솔 생성·비번 리셋·데이터 초기화 pins 범위).
+// 4자리 숫자. 콘솔 마스터키(UPBO_ADMIN_TOKEN)와 같은 값은 피한다(시트 비번으로 콘솔 문을 열 수 없게).
+export function randomSheetPin(): string {
+  const master = process.env.UPBO_ADMIN_TOKEN;
+  let pin = "";
+  do {
+    pin = String(crypto.randomInt(0, 10000)).padStart(4, "0");
+  } while (pin === master);
+  return pin;
+}
+
 export type AdminAccess = "authed" | "locked" | "open-unconfigured" | "blocked-unconfigured";
 
 export async function adminAccessState(): Promise<AdminAccess> {

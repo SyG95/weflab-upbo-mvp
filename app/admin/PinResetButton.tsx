@@ -1,7 +1,7 @@
 "use client";
 
 // 목록 각 줄의 "비번 리셋" 버튼. 확인 한 번 거친 뒤 랜덤 4자리로 리셋하고
-// 새 비밀번호를 복사 버튼으로 보여준다(기존 포로미·채루를 8031 공용키에서 끌어내는 용도 겸).
+// 새 비밀번호를 복사 버튼으로 보여준다(공용 PIN 을 쓰던 시트를 개별 비번으로 옮기는 용도 겸).
 
 import { useActionState, useState } from "react";
 import { resetStreamerPinAction, type ResetPinState } from "./actions";

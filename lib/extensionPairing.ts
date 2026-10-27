@@ -13,7 +13,7 @@
 // 검증 3경로(하나라도 통과하면 성공, 잠기지 않았을 때만):
 //   1) 마스터키(sy 전용 UPBO_ADMIN_TOKEN 해시) — 아무 시트나 페어링 허용.
 //   2) 그 시트 개별 관리자 비번 해시.
-//   3) 전역 폴백 PIN 해시(개별 비번 미설정 시). — 2·3은 effectiveSheetPinHash 안에 함께 포함됨.
+//   3) 전역 폴백 PIN 해시(개별 비번 미설정 시, 로컬 전용). — 2·3은 effectiveSheetPinHash 안에 함께 포함됨.
 
 import { adminTokenHash, masterPinHash } from "./adminAuth";
 import { effectiveSheetPinHash } from "./sheetAdminAuth";

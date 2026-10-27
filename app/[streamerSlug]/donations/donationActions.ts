@@ -42,7 +42,7 @@ function setSessionCookie(slug: string, hash: string, jar: Awaited<ReturnType<ty
 }
 
 const SESSION_CONFIG_ERROR = "서버 설정 문제로 열 수 없어요. 운영자에게 알려 주세요.";
-const NOT_SET_ERROR = "서버에 후원집계 비밀번호가 설정돼 있지 않습니다.";
+const NOT_SET_ERROR = "후원집계 전용 비밀번호가 아직 없어요. 업보시트 관리자로 먼저 로그인해 주세요.";
 
 export type DonationUnlockState = { error?: string };
 
@@ -89,7 +89,7 @@ export async function unlockDonationAdmin(
 export type DonationPasswordState = { error?: string; ok?: boolean };
 
 // 이 스트리머만의 후원집계 비밀번호 설정/변경. 반드시 이미 열람 중(인증됨)이어야 한다.
-// 설정하면 이 스트리머는 공용 env 값 대신 여기서 정한 비밀번호로만 열린다.
+// 설정하면 이 스트리머는 업보시트 관리자 세션 대신 여기서 정한 비밀번호로만 열린다.
 export async function setDonationAdminPassword(
   _prev: DonationPasswordState,
   formData: FormData,

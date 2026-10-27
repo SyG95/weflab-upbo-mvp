@@ -1,10 +1,16 @@
 "use server";
 
-import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ADMIN_COOKIE, adminAccessState, adminTokenHash, consoleSessionValue, isDeployed } from "@/lib/adminAuth";
+import {
+  ADMIN_COOKIE,
+  adminAccessState,
+  adminTokenHash,
+  consoleSessionValue,
+  isDeployed,
+  randomSheetPin,
+} from "@/lib/adminAuth";
 import {
   createExtensionToken,
   deleteStreamer,
@@ -77,17 +83,6 @@ async function assertConsoleAdmin(): Promise<void> {
   throw new Error("관리자 인증이 필요합니다.");
 }
 
-// 스트리머 초기 4자리 비밀번호. 콘솔 마스터키(UPBO_ADMIN_TOKEN)와 같은 값은 피한다
-// (스트리머가 자기 시트 비번으로 대장 콘솔 문을 열 수 있으면 안 되므로).
-function randomPin(): string {
-  const master = process.env.UPBO_ADMIN_TOKEN;
-  let pin = "";
-  do {
-    pin = String(crypto.randomInt(0, 10000)).padStart(4, "0");
-  } while (pin === master);
-  return pin;
-}
-
 async function streamerExists(slug: string): Promise<boolean> {
   try {
     await getStreamerRowBySlug(slug);
@@ -122,7 +117,7 @@ export async function createStreamerAction(
     }
     const streamer = await upsertStreamer({ slug, displayName: displayName || slug });
     const tokenResult = await createExtensionToken(slug, "console-onboarding");
-    const pin = randomPin();
+    const pin = randomSheetPin();
     await setSheetAdminPinHash(slug, adminTokenHash(pin));
     revalidatePath("/admin");
     return {
@@ -194,6 +189,8 @@ export type ResetDataState = {
   scope?: ResetScope;
   items?: ResetCount[];
   total?: number;
+  // pins 범위를 지웠으면 새로 발급한 시트 관리자 비밀번호(1회 표시용).
+  newPin?: string;
 };
 
 function scopeFromForm(formData: FormData): ResetScope {
@@ -231,8 +228,14 @@ export async function resetStreamerDataAction(
       return { error: `확인 문구가 달라요. "${slug}" 를 똑같이 입력해야 실행돼요.` };
     }
     const result = await executeStreamerReset(slug, scope);
+    // pins 범위는 개별 비번을 지운다. 예전엔 그러면 공용 PIN 으로 돌아갔다 → 지금은 새 랜덤 비번을 바로 발급.
+    let newPin: string | undefined;
+    if (scope.pins) {
+      newPin = randomSheetPin();
+      await setSheetAdminPinHash(slug, adminTokenHash(newPin));
+    }
     revalidatePath("/admin");
-    return { ok: true, mode, slug, scope, items: result.items, total: result.total };
+    return { ok: true, mode, slug, scope, items: result.items, total: result.total, newPin };
   } catch (error) {
     return { error: (error as Error).message || "데이터 초기화에 실패했어요." };
   }
@@ -240,7 +243,7 @@ export async function resetStreamerDataAction(
 
 export type ResetPinState = { ok?: boolean; error?: string; slug?: string; pin?: string };
 
-// 기존 스트리머의 시트 비밀번호를 랜덤 4자리로 강제 리셋. 8031 공용키에서 끌어내는 용도 겸.
+// 기존 스트리머의 시트 비밀번호를 랜덤 4자리로 강제 리셋(공용 PIN 을 쓰던 시트를 개별 비번으로 옮기는 용도 겸).
 export async function resetStreamerPinAction(
   _prev: ResetPinState,
   formData: FormData,
@@ -250,7 +253,7 @@ export async function resetStreamerPinAction(
     const slug = String(formData.get("slug") ?? "").trim().toLowerCase();
     if (!slug) return { error: "슬러그가 없어요." };
     if (!(await streamerExists(slug))) return { error: `없는 슬러그예요(/${slug}).` };
-    const pin = randomPin();
+    const pin = randomSheetPin();
     await setSheetAdminPinHash(slug, adminTokenHash(pin));
     return { ok: true, slug, pin };
   } catch (error) {
