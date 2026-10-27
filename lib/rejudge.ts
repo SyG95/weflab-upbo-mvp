@@ -257,7 +257,8 @@ type Occurrence = { result: NormalizedResult; savedAt: string | null; signature:
 
 // 같은 결과 키가 원본 묶음마다 "판정에 영향을 주는 값"이 같은지(G10). 후원 시각·종류도 본다 — 시각이 다르면 그때 표·설정이,
 // 종류가 다르면 미션 정산 여부가 달라진다. 닉네임은 시청자가 바꿀 수 있고 판정과 무관해 뺀다.
-function occurrenceSignature(r: NormalizedResult): string {
+// 후원 시각을 못 읽는 결과는 원본 저장 시각으로 판정하므로(G9) 그때는 저장 시각도 모양에 넣는다.
+function occurrenceSignature(r: NormalizedResult, savedAt: string | null): string {
   return [
     cleanText(r.itemName),
     r.probability ?? "",
@@ -265,6 +266,7 @@ function occurrenceSignature(r: NormalizedResult): string {
     cleanText(r.fanId),
     cleanText(r.donateTimeText),
     cleanText(r.donationType),
+    parseDonateTimeMsStrict(r.donateTimeText) === null ? savedAt ?? "" : "",
   ].join("|");
 }
 
@@ -343,7 +345,7 @@ export function collectDonationTimeCandidates({
     summary.scannedResults += normalized.results.length;
     const savedAt = batch.savedAt ?? normalized.capturedAt ?? null;
     for (const result of normalized.results) {
-      const signature = occurrenceSignature(result);
+      const signature = occurrenceSignature(result, savedAt);
       const variants = variantsByKey.get(result.sourceKey);
       if (!variants) variantsByKey.set(result.sourceKey, [{ result, savedAt, signature }]);
       else if (!variants.some((v) => v.signature === signature)) {

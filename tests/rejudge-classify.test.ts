@@ -472,3 +472,22 @@ test("헤르메스 최종: 같은 버전에 같은 이름 두배권 칸이 둘�
   assert.equal(out.summary.excluded.modifier, 1, "확정한 3% 칸만 ⚪");
   assert.equal(only(out).cls, "yellow", "5% 칸은 기록 후보 🟡");
 });
+
+test("헤르메스 최종: 후원 시각을 못 읽는 결과는 저장 시각이 다른 묶음끼리도 다른 모양 — 순서와 무관하게 🟡", () => {
+  // 단컷 3% 칸: v1(10/01)에선 10/02 에 꺼 둠, v2(10/12, 같은 내용)는 10/12 12:00 저장본 {}(전부 켬).
+  // 시각을 못 읽는 같은 결과가 10/10 저장 묶음(→ v1, 그때 꺼짐 ⚪)과 10/15 저장 묶음(→ v2, 기록)에 담겼다.
+  const t3: Tbl[] = [{ amount: 33, items: [["단컷", 3], ["하트", 97]] }];
+  const catalogs = [catRow(1, "2026-10-01T00:00:00", t3), catRow(2, "2026-10-12T00:00:00", t3)];
+  const audits = [
+    BASELINE(),
+    audit("catalog_usage_updated", "2026-10-02T00:00:00", { catalogVersion: 1, overrides: { "g0-i0": false } }),
+    audit("catalog_usage_updated", "2026-10-12T12:00:00", { catalogVersion: 2, overrides: {} }),
+  ];
+  const at = (when: string) => ({ batchId: when, capture: capture([{ uid: "k1", time: "어제", prob: 3 }]), savedAt: kst(when) });
+  for (const order of [["2026-10-10T00:00:00", "2026-10-15T00:00:00"], ["2026-10-15T00:00:00", "2026-10-10T00:00:00"]]) {
+    const row = only(run({ catalogs, audits, batches: order.map(at) }));
+    assert.equal(row.cls, "yellow", order.join("→"));
+    assert.equal(row.judged.version, 2, order.join("→"));
+    assert.ok(row.reasons.some((r) => r.includes("다른 상품으로 잡힌 적")), order.join("→"));
+  }
+});
