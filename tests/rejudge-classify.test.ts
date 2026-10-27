@@ -445,3 +445,30 @@ test("리뷰 최종: 수량 표기(x3·×2) 상품이 표에 있어도 스트리
   const word: Tbl[] = [{ amount: 33, items: [["단컷", 2], ["두배 찬스", 3], ["하트", 95]] }];
   assert.equal(only(run({ catalogs: [catRow(1, "2026-10-01T00:00:00", word)] })).cls, "yellow", "낱말형(두배)은 표 전체");
 });
+
+test("헤르메스 최종: 키가 흔들릴 때 원본 순서와 무관하게 기록이 되는 모양이 있으면 🟡 로 보인다", () => {
+  for (const order of [["mission", "plain"], ["plain", "mission"]]) {
+    const batches = order.map((kind, i) => ({
+      batchId: `b${i}`,
+      capture: capture([{ uid: "k1", ...(kind === "mission" ? { type: "도전미션 별풍선 성공" } : {}) }]),
+    }));
+    const row = only(run({ batches }));
+    assert.equal(row.cls, "yellow", order.join("→"));
+    assert.ok(row.reasons.some((r) => r.includes("다른 상품으로 잡힌 적")), order.join("→"));
+  }
+});
+
+test("헤르메스 최종: 같은 버전에 같은 이름 두배권 칸이 둘인데 한 칸만 확정이면, 다른 칸은 이름으로 넓히지 않는다(🟡)", () => {
+  const tables: Tbl[] = [{ amount: 33, items: [["다음 룰렛 2배", 3], ["다음 룰렛 2배", 5], ["하트", 92]] }];
+  const cell = normalizeCatalogCapture({ groups: [{ amountMin: 33, amountMax: 33, items: [{ name: "다음 룰렛 2배", probability: 3, sortOrder: 0 }] }] }).items[0];
+  const out = run({
+    catalogs: [catRow(1, "2026-10-01T00:00:00", tables)],
+    audits: [
+      BASELINE(),
+      audit("special_item_rule", "2026-10-02T00:00:00", { rule: { ruleKey: specialRuleKeyForItem(cell), ruleType: "next_result_multiplier", status: "confirmed", multiplier: 2, amountRangeLabel: "33", itemName: cell.itemName, normalizedName: cell.normalizedName, probability: 3 } }),
+    ],
+    rows: [{ uid: "a", item: "다음 룰렛 2배", prob: 3 }, { uid: "b", item: "다음 룰렛 2배", prob: 5 }],
+  });
+  assert.equal(out.summary.excluded.modifier, 1, "확정한 3% 칸만 ⚪");
+  assert.equal(only(out).cls, "yellow", "5% 칸은 기록 후보 🟡");
+});

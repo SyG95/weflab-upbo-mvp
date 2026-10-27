@@ -457,7 +457,14 @@ export function specialRulesAt(tMs: number, events: RuleEvent[], versionItems: N
     if (e.atMs >= tMs) break;
     nameRule.set(labelNameKey(e.rule.amountRangeLabel, e.rule.normalizedName || normalizeName(e.rule.itemName)), e.rule);
   }
+  // 같은 버전에 같은 금액대·이름 칸이 여럿이고 그중 한 칸만 (키로) 따로 정해 뒀다면, 나머지 칸은 스트리머가 일부러
+  // 남긴 것일 수 있다 → 그 버전에서는 이름으로 넓히지 않는다(두배권 ⚪ 대신 기록 후보 🟡 로 보이게).
+  const decidedInVersion = new Set<string>();
+  for (const item of versionItems) {
+    if (before.has(specialRuleKeyForItem(item))) decidedInVersion.add(labelNameKey(item.amountRangeLabel, item.normalizedName));
+  }
   const confirmedByName = (label: unknown, name: unknown) => {
+    if (decidedInVersion.has(labelNameKey(label, name))) return null;
     const rule = nameRule.get(labelNameKey(label, name));
     return rule?.status === "confirmed" ? rule : null;
   };

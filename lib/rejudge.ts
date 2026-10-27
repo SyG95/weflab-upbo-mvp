@@ -328,8 +328,8 @@ export function collectDonationTimeCandidates({
     timeUnknown: 0,
   };
 
-  // 1) 결과 키 단위로 모은다(첫 묶음 값 + 뒤 묶음의 다른 모양 여부).
-  const firstByKey = new Map<string, Occurrence>();
+  // 1) 결과 키 단위로 모은다(묶음마다 모양이 다르면 다른 모양을 전부 남기고 "키 흔들림"으로 표시).
+  const variantsByKey = new Map<string, Occurrence[]>();
   const unstable = new Set<string>();
   for (const batch of batches) {
     let normalized;
@@ -344,9 +344,12 @@ export function collectDonationTimeCandidates({
     const savedAt = batch.savedAt ?? normalized.capturedAt ?? null;
     for (const result of normalized.results) {
       const signature = occurrenceSignature(result);
-      const prev = firstByKey.get(result.sourceKey);
-      if (!prev) firstByKey.set(result.sourceKey, { result, savedAt, signature });
-      else if (prev.signature !== signature) unstable.add(result.sourceKey);
+      const variants = variantsByKey.get(result.sourceKey);
+      if (!variants) variantsByKey.set(result.sourceKey, [{ result, savedAt, signature }]);
+      else if (!variants.some((v) => v.signature === signature)) {
+        variants.push({ result, savedAt, signature });
+        unstable.add(result.sourceKey);
+      }
     }
   }
 
@@ -359,15 +362,29 @@ export function collectDonationTimeCandidates({
   const rows: DonationTimeRow[] = [];
   const aliasUnmatched: NormalizedResult[] = [];
 
-  for (const [sourceKey, occ] of firstByKey) {
-    summary.N += 1;
-    const result = occ.result;
-    const known = parseDonateTimeMsStrict(result.donateTimeText);
-    if (known === null) summary.timeUnknown += 1;
+  // 후원 시각을 못 읽으면 원본 저장 시각(없으면 지금)으로 근사한다 — G9 로 🟡 가 된다.
+  const timeOf = (occ: Occurrence) => {
+    const known = parseDonateTimeMsStrict(occ.result.donateTimeText);
     const savedMs = occ.savedAt ? Date.parse(occ.savedAt) : NaN;
-    // 후원 시각을 못 읽으면 원본 저장 시각(없으면 지금)으로 근사한다 — G9 로 🟡 가 된다.
-    const tMs = known ?? (Number.isFinite(savedMs) ? savedMs : Number.MAX_SAFE_INTEGER);
+    return { known, tMs: known ?? (Number.isFinite(savedMs) ? savedMs : Number.MAX_SAFE_INTEGER) };
+  };
+  const recordsAt = (occ: Occurrence): boolean => {
+    const inputs = pickJudgeInputsAt(timeOf(occ).tMs, history, engine, occ.result);
+    if (!inputs) return false;
+    const versionItems = history.catalogs.find((c) => c.version === inputs.version)?.items ?? [];
+    const judged = applyItemAliasesIfUnmatched(occ.result, versionItems, nowItems, aliases).result;
+    return judgeOne(inputs.items, judged, inputs.thresholdPercent.value, inputs.specialRules).decision === "record";
+  };
+
+  for (const [sourceKey, variants] of variantsByKey) {
+    summary.N += 1;
     const existing = existingSourceKeys.has(sourceKey);
+    // 키가 흔들리면(묶음마다 시각·종류·상품이 다름) 원본 순서에 따라 결과가 달라지지 않게, 어느 모양이든 기록이 되는
+    // 모양이 있으면 그걸로 판정해 🟡(G10)로 보여 준다. 모두 제외·검토면 첫 모양 그대로.
+    const occ = !existing && variants.length > 1 ? variants.find(recordsAt) ?? variants[0] : variants[0];
+    const result = occ.result;
+    const { known, tMs } = timeOf(occ);
+    if (known === null) summary.timeUnknown += 1;
 
     // "지금 표로"(현행 다시판정과 같은 재료) — 비교 표시용.
     let nowDecision: DonationTimeRow["nowDecision"] = existing ? "duplicate" : "no_catalog";
