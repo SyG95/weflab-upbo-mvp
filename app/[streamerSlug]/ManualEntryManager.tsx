@@ -75,7 +75,8 @@ function tabNameOfHint(hint: ManualTabHint | null | undefined, tabChoices: TabCh
   if (same.length === 1) return `룰렛 ${same[0].label}`;
   const byRid = same.length >= 2 && hint.rid ? same.find((t) => t.rid === hint.rid) : undefined;
   if (byRid) return `룰렛 ${byRid.label}`;
-  return `이전 표 · ${hint.label}`;
+  // 2026-10-28: 표에서 사라진 금액대 기록은 라벨별 탭이 아니라 "지난 룰렛" 한 탭으로 모인다(lib/fanPastTab mergePastTabKey).
+  return `지난 룰렛 (옛 금액대 ${hint.label})`;
 }
 
 // 저장된 힌트 → 목록 [탭 바꾸기] select 의 초깃값. 표에서 사라진 룰렛 탭이면 ""(표에 없음)에서 다시 고른다.
@@ -410,8 +411,8 @@ export default function ManualEntryManager({
       if (current) return current;
       if (current === "") return "보관된 룰렛(팬 화면에 안 보임)";
       if (!L) return "표에 없음";
-      if (currentLabels.has(L)) return `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «이전 표 · ${L}»)`;
-      return `이전 표 · ${L}`;
+      if (currentLabels.has(L)) return `룰렛 ${L} (현재 표 금액대 — 구성이 많이 다르면 «지난 룰렛»)`;
+      return `지난 룰렛 (옛 금액대 ${L})`;
     }
     return null;
   })();
@@ -445,7 +446,7 @@ export default function ManualEntryManager({
     if (current !== undefined) return current || "보관된 룰렛(팬 화면에 안 보임)";
     const L = e.amountRangeLabel?.trim() ?? "";
     if (e.catalogVersion == null || !L) return "표에 없음";
-    return currentLabels.has(L) ? `룰렛 ${L}` : `이전 표 · ${L}`;
+    return currentLabels.has(L) ? `룰렛 ${L}` : `지난 룰렛 (옛 금액대 ${L})`;
   }
 
   // 여러 건 한 번에 탭 바꾸기(2026-09-29) — 정가는 대상이 아니다.
@@ -877,7 +878,7 @@ export default function ManualEntryManager({
             </span>
           ) : pastTable.status === "ready" ? (
             <span className={styles.ieFormHint}>
-              «그날 표» 상품을 고르면 그 당시 금액대 탭(현재 표에 없으면 «이전 표 · 금액대» 탭)으로 들어가요.
+              «그날 표» 상품을 고르면 그 당시 금액대 탭(현재 표에 없으면 «지난 룰렛» 탭)으로 들어가요.
             </span>
           ) : null}
         </label>

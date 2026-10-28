@@ -17,6 +17,12 @@ export const PAST_TAB_PREFIX = "past:";
 // partitionHoldingsByRoulette 의 "기타" 키와 같은 값이어야 한다(page.tsx OTHER).
 export const OTHER_TAB_KEY = "__other__";
 export const PAST_TAB_DEFAULT_PREFIX = "이전 표 · ";
+// 2026-10-28 땜질(sy 승인): "이전 표 · L" 탭을 라벨별로 쪼개지 않고 한 탭으로 합친다.
+// 합친 탭의 라벨 키는 "*" 한 글자 — 금액대 라벨은 숫자·범위("33~50")라 "*" 와 겹치지 않는다.
+// 이름 오버레이(pastLabels["*"])로 스트리머가 바꿔 부를 수 있고, 기본 이름은 "지난 룰렛".
+// 배정표(룰렛 고정 번호) 구조가 들어오면 이 탭은 "아직 배정 안 된 옛 칸 기록"의 임시 자리로 그대로 쓴다.
+export const PAST_MERGED_LABEL = "*";
+export const PAST_MERGED_DEFAULT_NAME = "지난 룰렛";
 
 export type PastTabItem = {
   catalogVersion?: number | null;
@@ -63,10 +69,22 @@ export function pastLabelOfKey(key: string): string {
   return isPastTabKey(key) ? key.slice(PAST_TAB_PREFIX.length) : "";
 }
 
-// 팬 화면 표시 이름: 관리자가 지은 이름(pastLabels[L]) > 기본 "이전 표 · L".
+// 기본 이름: 합친 탭("*")은 "지난 룰렛", 그 외(옛 라벨별 탭)는 "이전 표 · L".
+export function pastTabDefaultName(label: string): string {
+  return label === PAST_MERGED_LABEL ? PAST_MERGED_DEFAULT_NAME : PAST_TAB_DEFAULT_PREFIX + label;
+}
+
+// 팬 화면 표시 이름: 관리자가 지은 이름(pastLabels[L]) > 기본 이름(pastTabDefaultName).
 export function pastTabLabel(label: string, pastLabels?: Record<string, string> | null): string {
   const custom = pastLabels?.[label];
-  return (typeof custom === "string" && custom.trim()) || PAST_TAB_DEFAULT_PREFIX + label;
+  return (typeof custom === "string" && custom.trim()) || pastTabDefaultName(label);
+}
+
+// 되짚기가 고른 rid 가 "past:L" 이면 합친 탭 키 "past:*" 로 바꾼다. 그 외(룰렛 rid·기타·custom)는 그대로.
+// partitionHoldingsByRoulette 가 탭을 나누기 직전에 한 번 거친다 — resolvePastTabRid 자체는 손대지 않아
+// 라벨별 판정(어느 L 로 되짚었는지)은 기존 테스트·검증실 재현과 그대로 같다.
+export function mergePastTabKey(rid: string): string {
+  return isPastTabKey(rid) ? pastTabKey(PAST_MERGED_LABEL) : rid;
 }
 
 // 금액대 라벨 숫자순("33~50" < "330" < "1000"). 같은 숫자면 문자열 비교.

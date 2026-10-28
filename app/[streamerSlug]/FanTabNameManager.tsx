@@ -16,7 +16,7 @@ import {
   type FanTabLabelEntry,
   type FanTabOrderItem,
 } from "../../lib/api";
-import { PAST_TAB_DEFAULT_PREFIX, pastTabKey } from "../../lib/fanPastTab";
+import { pastTabDefaultName, pastTabKey } from "../../lib/fanPastTab";
 import styles from "./page.module.css";
 
 export type FanTabForNaming = {
@@ -149,13 +149,15 @@ export default function FanTabNameManager({
         .map((r) => (r.kind === "tab" ? { kind: "tab" as const, groups: r.tab.groups } : { kind: r.kind }));
       // "이전 표" 탭 이름: 지금 안 뜬 L 의 저장값은 보존, 뜬 L 은 입력값으로(빈 값 = 지움 = 기본 이름).
       const shownPast = new Set(pastRows.map((r) => r.label));
+      // 지금 뜬 탭(합친 "지난 룰렛" = "*")의 이름을 먼저 넣는다 — 서버 sanitizePastLabels 가 50개에서 끊으므로
+      // 옛 라벨별 이름이 많아도 "*" 가 뒤로 밀려 잘리지 않게(리뷰 지적 2026-10-28).
       const pastLabels: Record<string, string> = {};
-      for (const [label, name] of Object.entries(existingPastLabels)) {
-        if (!shownPast.has(label) && name.trim()) pastLabels[label] = name.trim();
-      }
       for (const r of pastRows) {
         const name = (pastNames[r.label] ?? "").trim();
         if (name) pastLabels[r.label] = name;
+      }
+      for (const [label, name] of Object.entries(existingPastLabels)) {
+        if (!shownPast.has(label) && name.trim() && !(label in pastLabels)) pastLabels[label] = name.trim();
       }
       const res = await fetch(`/api/s/${encodeURIComponent(slug)}/fan-tab-labels`, {
         method: "POST",
@@ -225,8 +227,8 @@ export default function FanTabNameManager({
           {pastRows.length > 0 ? (
             <>
               {" "}
-              <b>이전 표</b> 탭(지금 룰렛표에 없는 옛 금액대 기록)은 룰렛 탭 뒤에 고정이라 드래그로
-              옮길 수 없고, 이름만 바꿀 수 있어요.
+              <b>지난 룰렛</b> 탭(지금 룰렛표에 없는 옛 기록 전부를 한곳에 모은 탭)은 룰렛 탭 뒤에 고정이라
+              드래그로 옮길 수 없고, 이름만 바꿀 수 있어요.
             </>
           ) : null}
         </p>
@@ -236,7 +238,7 @@ export default function FanTabNameManager({
           const row = rowByKey.get(key);
           if (!row) return null;
           if (row.kind === "past") {
-            const defaultName = PAST_TAB_DEFAULT_PREFIX + row.label;
+            const defaultName = pastTabDefaultName(row.label);
             return (
               <li key={key} className={`${styles.tabEditRow} ${styles.tabEditRowLocked}`}>
                 <span className={styles.tabEditGripLocked} aria-hidden title="룰렛 탭 뒤 고정(드래그 불가)">
@@ -327,7 +329,7 @@ export default function FanTabNameManager({
       </div>
       {msg ? <p className={msg.ok ? styles.fieldOk : styles.fieldErr}>{msg.text}</p> : null}
       <p className={styles.fieldHint}>
-        비워두면 자동 이름(금액 나열)이 보여요. 정가·표에 없음·이전 표 탭은 해당 기록이 있을 때만 팬 화면에 떠요.
+        비워두면 자동 이름(금액 나열)이 보여요. 정가·표에 없음·지난 룰렛 탭은 해당 기록이 있을 때만 팬 화면에 떠요.
         룰렛 상품 구성이 절반 이상 바뀌면 이름·순서가 자동으로 풀립니다(다시 정하면 돼요).
       </p>
     </div>

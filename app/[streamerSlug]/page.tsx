@@ -105,6 +105,7 @@ import {
   OTHER_TAB_KEY,
   insertPastAfterRoulettes,
   isPastTabKey,
+  mergePastTabKey,
   oldGroupKey,
   pastLabelOfKey,
   pastTabKey,
@@ -1113,8 +1114,11 @@ function partitionHoldingsByRoulette(
       // ② 없으면 상품명이 최신 표에 있을 때 그 룰렛 탭, 보관 룰렛이면 숨김(null) — 자동수집·힌트 없는 수동 = 이전과 동일
       // ③ 둘 다 없으면 되짚기(2026-09-20): 같은 금액대 탭 / "이전 표 · L" / 기타.
       // 힌트는 수동기록(manual:*)에만 저장되므로 자동수집 기록은 이 변경으로 한 건도 움직이지 않는다.
-      const rid = isFixed ? FIXED : resolveHoldingTabRid(it, info, index.pastCtx);
-      if (rid === null) continue; // 보관 룰렛 상품(힌트 없음)은 팬 화면에서 숨김 — 기존 동작.
+      const resolvedRid = isFixed ? FIXED : resolveHoldingTabRid(it, info, index.pastCtx);
+      if (resolvedRid === null) continue; // 보관 룰렛 상품(힌트 없음)은 팬 화면에서 숨김 — 기존 동작.
+      // 2026-10-28 땜질: "이전 표 · L" 로 갈 조각은 전부 합친 탭("지난 룰렛", past:*) 하나로. 라벨별 되짚기 결과는
+      // 그대로 두고 탭 키만 합친다(깡총총 16탭→5탭). 룰렛 탭·정가·기타·직접 입력 탭은 한 조각도 안 움직인다.
+      const rid = mergePastTabKey(resolvedRid);
       let owners = byRid.get(rid);
       if (!owners) {
         owners = new Map();
