@@ -332,11 +332,14 @@
       "bottom bottom bottom";
   }
 
-  /* 양옆 레일을 헤드(맨 위)부터: "시트 위" 스트립이 가운데 컬럼만 차지하고 레일이 두 행에 걸친다 */
+  /* 양옆 레일을 헤드(맨 위)부터: "시트 위" 스트립이 가운데 컬럼만 차지하고 레일이 두 행에 걸친다.
+     레일이 스트립+시트보다 길 때 남는 높이는 시트 행(1fr)만 받는다 — 두 행이 auto 면 나눠 늘어나
+     스트립과 시트 사이에 빈칸이 생긴다. */
   .showcaseLayout[data-top][data-rails-head] {
     grid-template-areas:
       "left top right"
       "left main right";
+    grid-template-rows: auto 1fr;
   }
 
   .showcaseLayout[data-top][data-bottom][data-rails-head] {
@@ -344,6 +347,7 @@
       "left top right"
       "left main right"
       "bottom bottom bottom";
+    grid-template-rows: auto 1fr auto;
   }
 
   .slotTop {
