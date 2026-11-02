@@ -15,6 +15,7 @@ import DeleteStreamerButton from "./DeleteStreamerButton";
 import ResetDataButton from "./ResetDataButton";
 import { setExtensionConfigAction, setExtensionConfigForAllAction } from "./actions";
 import type { AdminStreamerSummary } from "@/lib/adminDashboard";
+import type { VisitorStreamerSummary } from "@/lib/adminVisitorData";
 import {
   EXTENSION_CONFIG_DEFAULT,
   extensionConfigSummary,
@@ -160,9 +161,11 @@ type SortKey = "attention" | "recent" | "name";
 export default function StreamerList({
   streamers,
   isMock,
+  readOnly = false,
 }: {
-  streamers: AdminStreamerSummary[];
+  streamers: (AdminStreamerSummary | VisitorStreamerSummary)[];
   isMock: boolean;
+  readOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("attention");
@@ -186,7 +189,7 @@ export default function StreamerList({
   }, [streamers, query, sort]);
 
   const suffix = isMock ? "?mock=1" : "";
-  const catchupOnCount = streamers.filter((s) => s.extensionConfig.catchupEnabled).length;
+  const catchupOnCount = streamers.filter((s) => "extensionConfig" in s && s.extensionConfig.catchupEnabled).length;
 
   return (
     <div className={styles.listWrap}>
@@ -194,6 +197,7 @@ export default function StreamerList({
         <input
           className={styles.search}
           type="search"
+          aria-label="스트리머 검색"
           placeholder="스트리머 검색 (이름 / 슬러그)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -210,7 +214,7 @@ export default function StreamerList({
           {shown.length} / {streamers.length}명
         </span>
       </div>
-      <CatchupAllControls onCount={catchupOnCount} total={streamers.length} disabled={isMock} />
+      {readOnly ? <p className={styles.headNote}>목록의 기록·검토 수는 수집 당시 누적 요약입니다. 현재 저장된 업보 기록 수는 각 검증실에서 확인할 수 있어요. 운영 설정과 데이터 변경 기능은 잠겨 있어요.</p> : <CatchupAllControls onCount={catchupOnCount} total={streamers.length} disabled={isMock} />}
 
       {shown.length === 0 ? (
         <p className={styles.empty}>
@@ -220,25 +224,27 @@ export default function StreamerList({
         <>
           <div className={styles.colHead} aria-hidden>
             <span className={styles.chName}>스트리머</span>
-            <span className={styles.chRecords}>기록</span>
-            <span className={styles.chReview}>검토</span>
+            <span className={styles.chRecords}>{readOnly ? "수집 기록" : "기록"}</span>
+            <span className={styles.chReview}>{readOnly ? "수집 검토" : "검토"}</span>
             <span className={styles.chSync}>최근 동기화</span>
-            <span className={styles.chActions}>관리</span>
+            <span className={styles.chActions}>{readOnly ? "조회" : "관리"}</span>
           </div>
           <ul className={styles.list}>
             {shown.map((s) => {
               const f = freshness(s.lastAppliedAt);
+              const extension = !readOnly && "extension" in s ? s.extension : undefined;
+              const config = !readOnly && "extensionConfig" in s ? s.extensionConfig : undefined;
               return (
                 <li key={s.slug}>
                   <div className={styles.row}>
                     <div className={styles.rowMain}>
-                      {s.extension ? (
+                      {extension ? (
                         <span
                           className={styles.syncDot}
-                          data-light={s.extension.light.color}
+                          data-light={extension.light.color}
                           role="img"
-                          aria-label={extensionTitle(s.extension)}
-                          title={extensionTitle(s.extension)}
+                          aria-label={extensionTitle(extension)}
+                          title={extensionTitle(extension)}
                           suppressHydrationWarning
                         />
                       ) : (
@@ -249,30 +255,31 @@ export default function StreamerList({
                           {s.displayName}
                         </Link>
                         <span className={styles.slug}>/{s.slug}</span>
-                        {s.extension ? (
+                        {extension ? (
                           <span className={styles.extLine}>
-                            확프{s.extension.clientVersion ? ` v${s.extension.clientVersion}` : ""} · {s.extension.screenSummary}
+                            확프{extension.clientVersion ? ` v${extension.clientVersion}` : ""} · {extension.screenSummary}
                           </span>
                         ) : null}
                         {/* 초록이 아니면 사유를 글자로도 — 툴팁은 터치 화면에서 안 보인다 */}
-                        {s.extension && s.extension.light.reasons.length > 0 ? (
-                          <span className={styles.extReasons} data-light={s.extension.light.color}>
-                            {s.extension.light.reasons.join(" · ")}
+                        {extension && extension.light.reasons.length > 0 ? (
+                          <span className={styles.extReasons} data-light={extension.light.color}>
+                            {extension.light.reasons.join(" · ")}
                           </span>
                         ) : null}
-                        {s.extension && s.extension.notes.length > 0 ? (
-                          <span className={styles.extNotes}>{s.extension.notes.join(" · ")}</span>
+                        {extension && extension.notes.length > 0 ? (
+                          <span className={styles.extNotes}>{extension.notes.join(" · ")}</span>
                         ) : null}
-                        {showConfigLine(s.extensionConfig) ? (
+                        {config && showConfigLine(config) ? (
                           <span className={styles.extConfig}>
-                            되읽기 {s.extensionConfig.catchupEnabled ? "켜짐" : "꺼짐"} ·{" "}
-                            {extensionConfigSummary(s.extensionConfig)}
+                            되읽기 {config.catchupEnabled ? "켜짐" : "꺼짐"} ·{" "}
+                            {extensionConfigSummary(config)}
                           </span>
                         ) : null}
                       </div>
                     </div>
-                    <span className={styles.colRecords}>{s.recordSum.toLocaleString()}</span>
+                    <span className={styles.colRecords}>{readOnly ? <span className={styles.mobileLabel}>기록</span> : null}{s.recordSum.toLocaleString()}</span>
                     <span className={styles.colReview}>
+                      {readOnly ? <span className={styles.mobileLabel}>검토</span> : null}
                       {s.needsReviewSum > 0 ? (
                         <span className={styles.needs}>{s.needsReviewSum}</span>
                       ) : (
@@ -281,16 +288,16 @@ export default function StreamerList({
                     </span>
                     <span className={styles.colSync}>{fmtKst(s.lastAppliedAt)}</span>
                     <div className={styles.rowActions}>
-                      <CatchupToggle
+                      {config ? <CatchupToggle
                         slug={s.slug}
-                        enabled={s.extensionConfig.catchupEnabled}
-                        summary={extensionConfigSummary(s.extensionConfig)}
+                        enabled={config.catchupEnabled}
+                        summary={extensionConfigSummary(config)}
                         disabled={isMock}
-                      />
+                      /> : null}
                       <Link href={`/admin/${s.slug}${suffix}`} className={styles.verifyLink}>
                         검증실
                       </Link>
-                      {isMock ? null : (
+                      {isMock || readOnly ? null : (
                         <>
                           <RenameStreamerButton slug={s.slug} current={s.displayName} />
                           <PinResetButton slug={s.slug} />

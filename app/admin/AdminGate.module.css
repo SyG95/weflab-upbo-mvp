@@ -42,6 +42,25 @@
   text-align: left;
 }
 
+.visitorNote {
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--paper-line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+  text-align: left;
+}
+
+.visitorNote strong {
+  color: var(--cover);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+}
+
 .input {
   padding: 11px 14px;
   border: 1px solid var(--paper-line);

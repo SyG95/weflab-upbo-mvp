@@ -28,6 +28,7 @@ import {
   type ResetScope,
 } from "@/lib/upboSupabase";
 import type { ExtensionConfig } from "@/lib/extensionStatus";
+import { adminVisitorAccessState, visitorPasswordMatches } from "@/lib/adminVisitorAccess";
 import {
   beginMasterAttempt,
   lockedMessage,
@@ -47,6 +48,8 @@ export async function unlockAdmin(_prev: UnlockState, formData: FormData): Promi
   const token = process.env.UPBO_ADMIN_TOKEN;
   const password = String(formData.get("password") ?? "");
   const returnTo = safeReturn(String(formData.get("returnTo") ?? "/admin"));
+  // 공개 방문자 PIN 은 env 의 마스터 토큰과 같아도 운영 권한으로 승격하지 않는다.
+  if (visitorPasswordMatches(password)) return { error: "방문자 비밀번호로는 관리자 권한을 얻을 수 없습니다." };
   if (!token) return { error: "서버에 관리자 토큰(UPBO_ADMIN_TOKEN)이 설정돼 있지 않습니다." };
   if (!password) return { error: "비밀번호를 입력해 주세요." };
   // 시도 제한: 콘솔은 마스터키 셈(요청한 곳별 15분 10회 + 전체 15분 100회, lib/unlockThrottle.ts).
@@ -87,7 +90,8 @@ const SLUG_RE = /^[a-z0-9][a-z0-9_-]{1,62}$/;
 
 async function assertConsoleAdmin(): Promise<void> {
   const state = await adminAccessState();
-  if (state === "authed" || state === "open-unconfigured") return;
+  if (state === "authed") return;
+  if (state === "open-unconfigured" && !(await adminVisitorAccessState())) return;
   throw new Error("관리자 인증이 필요합니다.");
 }
 

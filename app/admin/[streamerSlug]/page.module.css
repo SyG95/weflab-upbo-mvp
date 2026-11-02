@@ -164,6 +164,26 @@
   border-color: var(--stamp);
 }
 
+.tabLocked {
+  color: var(--muted);
+  background: var(--paper);
+  cursor: not-allowed;
+}
+
+.tabLocked:hover {
+  border-color: var(--paper-line);
+}
+
+.shell,
+.panel {
+  min-width: 0;
+}
+
+.titleBox {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .tabActive {
   background: var(--cover);
   border-color: var(--cover);

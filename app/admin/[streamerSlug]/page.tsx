@@ -17,11 +17,14 @@ import {
   type LuckRow,
 } from "@/lib/accuracyStats";
 import { adminAccessState } from "@/lib/adminAuth";
-import { lockAdmin } from "../actions";
+import { adminVisitorAccessState } from "@/lib/adminVisitorAccess";
+import { lockAdminOrVisitor } from "../visitorActions";
 import AdminGate from "../AdminGate";
+import VisitorDashboard from "./VisitorDashboard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const metadata = { robots: { index: false, follow: false } };
 
 type TabKey = "collection" | "catalog" | "raw" | "decisions" | "review" | "reflection" | "accuracy";
 
@@ -74,7 +77,10 @@ export default async function AdminDashboardPage({ params, searchParams }: PageP
   const activeTab: TabKey = TABS.find((t) => t.key === sp.tab)?.key ?? "collection";
 
   // 접근 잠금: 잠겨 있거나(배포+토큰미설정 포함) 인증 안 됐으면 데이터를 읽지 않고 게이트만 보여준다.
-  const access = await adminAccessState();
+  const [access, visitorSession] = await Promise.all([adminAccessState(), adminVisitorAccessState()]);
+  if (access !== "authed" && visitorSession) {
+    return <VisitorDashboard slug={streamerSlug} tab={sp.tab} />;
+  }
   const returnTo = tabHref(streamerSlug, activeTab, isMock);
   if (access === "locked" || access === "blocked-unconfigured") {
     return (
@@ -113,7 +119,7 @@ export default async function AdminDashboardPage({ params, searchParams }: PageP
                 팬/업보시트 화면 →
               </Link>
               {access === "authed" ? (
-                <form action={lockAdmin}>
+                <form action={lockAdminOrVisitor}>
                   <input type="hidden" name="returnTo" value={returnTo} />
                   <button className={styles.lockBtn} type="submit">
                     🔓 잠금
