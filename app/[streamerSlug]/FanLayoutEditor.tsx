@@ -4,7 +4,7 @@
 // 팬 화면 구조를 그대로 축소한 미니어처에서 포스터/확률표/공지 블록을 원하는 자리로 옮긴다.
 //  - 블록 클릭(선택) → 자리 클릭(이동), 또는 블록을 자리로 드래그(정해진 슬롯 안으로만).
 //  - 같은 자리 안 순서는 ↑↓ 버튼. 업보시트는 중앙 고정, 배너는 맨 위 고정(못 옮김).
-// 저장 = 스트리머별 오버레이(fan_layout_updated). 기본값 = 기존 배치라 안 만지면 무변화.
+// 저장 = 스트리머별 오버레이(fan_layout_updated). 안 만지면 기본 배치(양옆 맨 위부터 포함).
 
 import { useState, type CSSProperties, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
@@ -299,14 +299,14 @@ export default function FanLayoutEditor({
       >
         <input
           type="checkbox"
-          checked={layout.railsAtHead === true}
+          checked={layout.railsBelowTop === true}
           onChange={(e) =>
-            setLayout((prev) => ({ ...cloneLayout(prev), railsAtHead: e.target.checked }))
+            setLayout((prev) => ({ ...cloneLayout(prev), railsBelowTop: e.target.checked }))
           }
         />
-        <b>양옆 슬롯을 헤드(맨 위)부터 시작</b>
+        <b>양옆 슬롯을 업보시트 높이에서 시작</b>
         <span className={styles.hint} style={{ margin: 0 }}>
-          &quot;시트 위&quot;에 블록이 있을 때: 끄면 양옆이 업보시트 높이에 맞춰 시작(기본), 켜면 맨 위부터 나란히.
+          &quot;시트 위&quot;에 블록이 있을 때: 기본은 양옆이 맨 위부터 나란히, 켜면 양옆이 업보시트 높이에 맞춰 내려가요.
         </span>
       </label>
 

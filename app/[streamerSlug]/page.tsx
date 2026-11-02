@@ -16,6 +16,8 @@ import {
   DEFAULT_FAN_LAYOUT,
   normalizeFanLayout,
   fanLayoutBlocksInSlot,
+  mobileLonePosters,
+  type MobileLone,
   filterEntriesByCatalogUsage,
   matchFanTabLabel,
   matchFanTabLabelWhole,
@@ -481,14 +483,22 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const leftBlocks = slotBlocks("left");
   const rightBlocks = slotBlocks("right");
   const bottomBlocks = slotBlocks("bottom");
+  // 모바일 2열에서 혼자 남는 포스터(슬롯별) — 가운데로 보내거나 크게 보인다.
+  const loneBySlot = {
+    top: mobileLonePosters(topBlocks),
+    left: mobileLonePosters(leftBlocks),
+    right: mobileLonePosters(rightBlocks),
+    bottom: mobileLonePosters(bottomBlocks),
+  };
 
   // 블록 1개 렌더. horizontal=가로 슬롯(시트 위/아래) — 포스터는 가로 나열로 변형.
-  const renderFanBlock = (block: FanLayoutBlock, horizontal: boolean) =>
+  const renderFanBlock = (block: FanLayoutBlock, horizontal: boolean, mobileLone?: MobileLone) =>
     block.startsWith("poster") ? (
       <ShowcasePosterRail
         key={block}
         gallery={posterItems.map(({url,i})=>({url:url as string,i,link:showcase?.posterLinks?.[i]??null}))}
         horizontal={horizontal}
+        mobileLone={mobileLone}
         posters={posterItems.filter(p=>p.i===Number(block.slice(-1))).map(({ url, i }) => ({
           url: url as string,
           i,
@@ -592,13 +602,13 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             className={styles.showcaseLayout}
             data-top={topBlocks.length > 0 ? "1" : undefined}
             data-bottom={bottomBlocks.length > 0 ? "1" : undefined}
-            data-rails-head={fanLayout.railsAtHead ? "1" : undefined}
+            data-rails-head={fanLayout.railsBelowTop ? undefined : "1"}
           >
             {topBlocks.length > 0 ? (
-              <div className={styles.slotTop}>{topBlocks.map((b) => renderFanBlock(b, true))}</div>
+              <div className={styles.slotTop}>{topBlocks.map((b) => renderFanBlock(b, true, loneBySlot.top[b]))}</div>
             ) : null}
             {leftBlocks.length > 0 ? (
-              <aside className={styles.slotLeft}>{leftBlocks.map((b) => renderFanBlock(b, false))}</aside>
+              <aside className={styles.slotLeft}>{leftBlocks.map((b) => renderFanBlock(b, false, loneBySlot.left[b]))}</aside>
             ) : null}
             <div className={styles.showcaseMain}>
               <FanView
@@ -621,10 +631,10 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
               />
             </div>
             {rightBlocks.length > 0 ? (
-              <aside className={styles.slotRight}>{rightBlocks.map((b) => renderFanBlock(b, false))}</aside>
+              <aside className={styles.slotRight}>{rightBlocks.map((b) => renderFanBlock(b, false, loneBySlot.right[b]))}</aside>
             ) : null}
             {bottomBlocks.length > 0 ? (
-              <div className={styles.slotBottom}>{bottomBlocks.map((b) => renderFanBlock(b, true))}</div>
+              <div className={styles.slotBottom}>{bottomBlocks.map((b) => renderFanBlock(b, true, loneBySlot.bottom[b]))}</div>
             ) : null}
           </div>
         ) : (

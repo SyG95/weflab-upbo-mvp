@@ -6,6 +6,7 @@
 // 포스터 이미지는 page.tsx 가 이미 빈 슬롯을 걸러 넘겨준다(원본 슬롯 번호 i 유지).
 
 import { useCallback, useEffect, useState } from "react";
+import type { MobileLone } from "@/lib/api";
 import styles from "./page.module.css";
 
 type Poster = { url: string; i: number; link?: string | null };
@@ -18,11 +19,14 @@ export default function ShowcasePosterRail({
   posters,
   horizontal = false,
   gallery,
+  mobileLone,
 }: {
   posters: Poster[];
   gallery?: Poster[];
   // 가로 슬롯(시트 위/아래)에 배치된 경우 — 포스터를 가로로 나란히 배열한다.
   horizontal?: boolean;
+  // 모바일 2열에서 한 줄에 혼자 남는 경우(solo=슬롯의 단독 포스터, orphan=홀수 묶음의 마지막).
+  mobileLone?: MobileLone;
 }) {
   // 열려있는 포스터의 (필터된 배열 기준) 순번. null 이면 모달 닫힘.
   // 모달은 클릭 이후에만 열리므로(=하이드레이션 후) 별도 mounted 가드 없이 createPortal 안전.
@@ -59,6 +63,7 @@ export default function ShowcasePosterRail({
     <aside
       className={horizontal ? `${styles.showcaseSide} ${styles.showcaseSideH}` : styles.showcaseSide}
       aria-label="포스터"
+      data-mobile-lone={mobileLone}
     >
       {posters.map((p, order) => (
         <figure key={p.i} className={styles.showcasePoster}>

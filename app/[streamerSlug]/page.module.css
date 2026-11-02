@@ -4090,6 +4090,12 @@
  .showcasePoster img,.slotLeft .showcasePoster img,.slotRight .showcasePoster img { height:150px; }
  .slotTop > .showcaseSide:only-child,.slotBottom > .showcaseSide:only-child { grid-column:1/-1; }
  .showcasePosterOpen {font-size:11px;padding:8px 3px;}
+ /* 2열에서 혼자 남는 포스터: 반 칸에 왼쪽 붙지 않게 한 줄 가운데로. 단독(solo)은 크게(원본 비율, 최대 300px 높이),
+    홀수 묶음 끝(orphan)은 옆 칸과 같은 크기(8px = 위 gap). */
+ .showcaseSide[data-mobile-lone] { grid-column:1/-1; justify-self:center; }
+ .showcaseSide[data-mobile-lone="orphan"] { width:calc((100% - 8px) / 2); }
+ .showcaseSide[data-mobile-lone="solo"] { width:fit-content; max-width:100%; }
+ .showcaseSide[data-mobile-lone="solo"] .showcasePoster img { width:auto; height:auto; max-width:100%; max-height:300px; }
 }
 .slotTop > .showcaseSide:only-child,.slotBottom > .showcaseSide:only-child {width:fit-content;max-width:100%;justify-self:center;}
 .slotTop > .showcaseSide:only-child img,.slotBottom > .showcaseSide:only-child img {width:auto;max-width:100%;}

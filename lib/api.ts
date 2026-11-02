@@ -441,11 +441,13 @@ export const POSTER_BLOCKS = ['poster0','poster1','poster2','poster3','poster4']
 export type FanLayoutBlock = typeof POSTER_BLOCKS[number] | "reveal" | "notice";
 export type FanLayoutSlot = "left" | "right" | "top" | "bottom";
 export type FanLayoutPos = { slot: FanLayoutSlot; order: number };
-export type FanLayout = Record<FanLayoutBlock,FanLayoutPos> & {railsAtHead?:boolean};
+// railsBelowTop: "시트 위"에 블록이 있을 때 양옆을 업보시트 높이에서 시작(예전 방식). 기본=맨 위부터 나란히.
+// 옛 railsAtHead(켜야 맨 위부터)는 2026-11-02 부터 읽지 않는다 — 맨 위부터가 기본이 됐다.
+export type FanLayout = Record<FanLayoutBlock,FanLayoutPos> & {railsBelowTop?:boolean};
 export const FAN_LAYOUT_BLOCKS: FanLayoutBlock[] = [...POSTER_BLOCKS,'reveal','notice'];
 export const DEFAULT_FAN_LAYOUT: FanLayout = {
  poster0:{slot:'left',order:0},poster1:{slot:'left',order:1},poster2:{slot:'left',order:2},poster3:{slot:'left',order:3},poster4:{slot:'left',order:4},
- reveal:{slot:'right',order:0},notice:{slot:'right',order:10},railsAtHead:false
+ reveal:{slot:'right',order:0},notice:{slot:'right',order:10},railsBelowTop:false
 };
 const FAN_LAYOUT_SLOTS: FanLayoutSlot[] = ['left','right','top','bottom'];
 export function normalizeFanLayout(raw:unknown):FanLayout {
@@ -459,12 +461,23 @@ export function normalizeFanLayout(raw:unknown):FanLayout {
   if(FAN_LAYOUT_SLOTS.includes(val.slot as FanLayoutSlot))out[block].slot=val.slot as FanLayoutSlot;
   if(Number.isFinite(Number(val.order)))out[block].order=Math.max(0,Math.min(99,Math.floor(Number(val.order))*(legacy?10:1)+(legacy&&block.startsWith('poster')?Number(block.slice(-1)):0)));
  }
- out.railsAtHead=source.railsAtHead===true;
+ out.railsBelowTop=source.railsBelowTop===true;
  return out;
 }
 export function fanLayoutBlocksInSlot(layout:FanLayout,slot:FanLayoutSlot):FanLayoutBlock[]{
  const clean=normalizeFanLayout(layout);
  return FAN_LAYOUT_BLOCKS.filter(b=>clean[b].slot===slot).sort((a,b)=>clean[a].order-clean[b].order);
+}
+// 모바일 2열에서 한 줄에 홀로 남는 포스터. 연속된 포스터 묶음이 홀수면 마지막 한 장이 혼자 남는다
+// (공지·확률표는 한 줄 전체라 묶음을 끊는다). 묶음이 1장이면 'solo'(크게), 3장 이상이면 'orphan'(옆 칸과 같은 크기).
+export type MobileLone = 'solo'|'orphan';
+export function mobileLonePosters(blocks:FanLayoutBlock[]):Partial<Record<FanLayoutBlock,MobileLone>>{
+ const out:Partial<Record<FanLayoutBlock,MobileLone>>={};
+ let run:FanLayoutBlock[]=[];
+ const flush=()=>{if(run.length%2===1)out[run[run.length-1]]=run.length===1?'solo':'orphan';run=[];};
+ for(const b of blocks){if(b.startsWith('poster'))run.push(b);else flush();}
+ flush();
+ return out;
 }
 
 // 상품명 집합 두 개의 자카드 유사도(0~1). 룰렛 "같은 것" 판정에 쓰는 겹침 비율.
