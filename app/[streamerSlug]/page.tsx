@@ -101,6 +101,7 @@ import AdminTabEditor from "./AdminTabEditor";
 import SortableSections from "./SortableSections";
 import { AdminCollapseProvider, CollapsibleCard } from "./AdminCollapse";
 import ShowcasePosterRail from "./ShowcasePosterRail";
+import NoticeLead from "./NoticeLead";
 import { sheetAdminAccessState } from "../../lib/sheetAdminAuth";
 import { shouldShowRouletteTabs, splitProbabilityFamilies } from "../../lib/fanRouletteView";
 import {
@@ -483,6 +484,8 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
   const leftBlocks = slotBlocks("left");
   const rightBlocks = slotBlocks("right");
   const bottomBlocks = slotBlocks("bottom");
+  // 공지가 양옆 칸이면 한 줄 배치(1499px 이하)에선 시트 위에 따로 올린다(NoticeLead). 원래 자리는 그 폭에서 숨김.
+  const noticeInRail = leftBlocks.includes("notice") || rightBlocks.includes("notice");
   // 모바일 2열에서 혼자 남는 포스터(슬롯별) — 가운데로 보내거나 크게 보인다.
   const loneBySlot = {
     top: mobileLonePosters(topBlocks),
@@ -603,6 +606,7 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
             data-top={topBlocks.length > 0 ? "1" : undefined}
             data-bottom={bottomBlocks.length > 0 ? "1" : undefined}
             data-rails-head={fanLayout.railsBelowTop ? undefined : "1"}
+            data-notice-lead={noticeInRail ? "1" : undefined}
           >
             {topBlocks.length > 0 ? (
               <div className={styles.slotTop}>{topBlocks.map((b) => renderFanBlock(b, true, loneBySlot.top[b]))}</div>
@@ -611,6 +615,12 @@ export default async function StreamerUpboPage({ params, searchParams }: PagePro
               <aside className={styles.slotLeft}>{leftBlocks.map((b) => renderFanBlock(b, false, loneBySlot.left[b]))}</aside>
             ) : null}
             <div className={styles.showcaseMain}>
+              {noticeInRail ? (
+                <NoticeLead
+                  text={noticeText}
+                  fontStyle={noticeFont ? { fontFamily: noticeFontCss(noticeFont) } : undefined}
+                />
+              ) : null}
               <FanView
                 state={result.state}
                 slug={streamerSlug}

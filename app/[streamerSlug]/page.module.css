@@ -281,6 +281,8 @@
 }
 
 .showcaseNotice {
+  --notice-font-size: 14px;
+  --notice-line-height: 1.6;
   padding: 14px 16px;
   border-radius: 14px;
   background: var(--surface);
@@ -296,10 +298,42 @@
 .showcaseNotice p {
   margin: 0;
   color: var(--ink);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: var(--notice-font-size);
+  line-height: var(--notice-line-height);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 시트 위 공지(NoticeLead): 한 줄 배치(1499px 이하)에서만 보인다(아래 media). 6줄 넘으면 접고 펼치기. */
+.noticeLead {
+  display: none;
+}
+
+.noticeLeadBody {
+  max-height: calc(var(--notice-font-size) * var(--notice-line-height) * 6);
+  overflow: hidden;
+}
+
+.noticeLeadBody[data-open] {
+  max-height: none;
+}
+
+.noticeLeadBody[data-clamped] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+.noticeLeadToggle {
+  display: block;
+  min-height: 36px;
+  margin: 4px 0 -6px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--stamp);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 /* 충분히 넓은 데스크톱: 항상 3컬럼(레일 자리 상시 예약) → 시트가 어떤 조합에서도 정중앙 고정.
@@ -4084,6 +4118,9 @@
  .slotTop { grid-area:top; }.showcaseMain {grid-area:main;}.slotLeft {grid-area:left;}.slotRight {grid-area:right;}.slotBottom {grid-area:bottom;}
  .slotLeft,.slotRight { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); }
  .slotLeft > :not(.showcaseSide),.slotRight > :not(.showcaseSide) { grid-column:1/-1; }
+ /* 양옆 칸 공지는 한 줄 배치에서 시트 끝 뒤로 밀리므로 시트 위(NoticeLead)로 옮겨 보이고 원래 자리는 숨긴다 */
+ .noticeLead { display:block; margin-bottom:var(--showcase-gap); }
+ .showcaseLayout[data-notice-lead] .slotLeft > .showcaseNotice,.showcaseLayout[data-notice-lead] .slotRight > .showcaseNotice { display:none; }
 }
 @media(max-width:600px) {
  .slotTop,.slotBottom,.slotLeft,.slotRight { grid-template-columns:repeat(2,minmax(0,1fr));gap:8px; }
