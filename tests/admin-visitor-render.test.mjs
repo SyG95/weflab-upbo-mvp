@@ -83,6 +83,7 @@ function harness({ access = "locked", visitor = false } = {}) {
   const operatorData = {
     getAdminIndex: async () => { calls.push("operator-index"); return rawIndex(); },
     getAdminDashboardData: async () => { calls.push("operator-dashboard"); return rawDashboard(); },
+    getAdminFeatureFlags: async () => { calls.push("operator-flags"); return null; },
   };
   const mockData = {
     getMockAdminIndex: () => { calls.push("mock-index"); return rawIndex().streamers; },
@@ -106,6 +107,7 @@ function harness({ access = "locked", visitor = false } = {}) {
     "../AdminGate": { __esModule: true, default: AdminGateBoundary },
     "./VisitorDashboard": { __esModule: true, default: visitorPage },
     "./FilterableTable": { __esModule: true, default() { return null; } },
+    "./FeatureFlagToggle": { __esModule: true, default() { return null; } },
     "@/lib/accuracyStats": { computeAccuracyStats() { throw new Error("Visitor must not compute private accuracy data"); } },
   }).default;
   return { calls, indexPage, detailPage, visitorPage, StreamerListBoundary, AddStreamerBoundary, AdminGateBoundary };
@@ -200,6 +202,6 @@ test("operator authentication retains precedence over visitor session and the or
     const detail = await h.detailPage({ params: Promise.resolve({ streamerSlug: "demo" }), searchParams: Promise.resolve(query) });
     assert.notEqual(detail.type, h.visitorPage);
     assert.ok(elements(detail).some((el) => el.props.data?.fanId === CANARY));
-    assert.deepEqual(h.calls, query.mock ? ["mock-index", "mock-dashboard"] : ["operator-index", "operator-dashboard"]);
+    assert.deepEqual(h.calls, query.mock ? ["mock-index", "mock-dashboard"] : ["operator-index", "operator-dashboard", "operator-flags"]);
   }
 });

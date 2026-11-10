@@ -3,6 +3,7 @@ import styles from "./page.module.css";
 import FilterableTable, { type Column, type Facet, type SortOption } from "./FilterableTable";
 import {
   getAdminDashboardData,
+  getAdminFeatureFlags,
   type AdminDashboardData,
   type AdminDashboardResult,
   type BatchView,
@@ -18,7 +19,6 @@ import {
 } from "@/lib/accuracyStats";
 import { adminAccessState } from "@/lib/adminAuth";
 import { adminVisitorAccessState } from "@/lib/adminVisitorAccess";
-import { featureFlagsForStreamer, getStreamerRowBySlug } from "@/lib/upboSupabase";
 import type { UpboFeatureFlags } from "@/lib/featureFlags";
 import { lockAdminOrVisitor } from "../visitorActions";
 import AdminGate from "../AdminGate";
@@ -103,9 +103,7 @@ export default async function AdminDashboardPage({ params, searchParams }: PageP
   const featureFlags: UpboFeatureFlags | null =
     isMock || !result.ok
       ? null
-      : await getStreamerRowBySlug(streamerSlug)
-          .then((streamer) => featureFlagsForStreamer(streamer.id))
-          .catch(() => null);
+      : await getAdminFeatureFlags(streamerSlug);
 
   return (
     <main className={styles.page}>

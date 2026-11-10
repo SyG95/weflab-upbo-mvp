@@ -25,8 +25,10 @@ import {
   cleanText,
   findCatalogMatch,
   isMissionSettlementType,
+  normalizeName,
   normalizeResultCapture,
   reconcileResults,
+  resultOrderKey,
   type NormalizedCatalogItem,
   type NormalizedResult,
   type ReconcileDecision,
@@ -36,12 +38,15 @@ import {
 import { aliasTargetFor, applyItemAliases, applyItemAliasesIfUnmatched, type ItemAliasMap } from "./itemAlias";
 import { filterEntriesByCatalogUsage, type Catalog, type UpboEntry } from "./api";
 import {
+  confirmedMultiplierNames,
   currentJudgeInputs,
   hasMultiplierCells,
+  laterTurnedOff,
   looksLikeMultiplierName,
   parseDonateTimeMsStrict,
   pickJudgeInputsAt,
   resultMatchesVersion,
+  thresholdOverridesAt,
   thresholdPercentCandidates,
   versionInputsAt,
   type JudgeHistory,
@@ -49,6 +54,7 @@ import {
   type UsageOverrides,
 } from "./judgeInputsAt";
 import { findManualOverlaps, type ManualOverlap, type ManualOverlapEntry } from "./manualOverlap";
+import { kindKeyOfResult, thresholdForAmount, type MissingKindPolicy } from "./missingCandidate";
 import {
   classifyDonationTimeRow,
   excludeReasonText,
@@ -207,7 +213,7 @@ export function collectRejudgeCandidates({
 
 export type DonationTimeRow = {
   sourceKey: string;
-  kind: "new" | "suspected";
+  kind: "new" | "suspected" | "outside"; // outside = 🟠 그때 표에 칸이 없고 확률이 기준 이하(또는 확률 없음)
   cls: DonationTimeClass;
   reasonText: string;
   reasons: string[];
@@ -233,6 +239,7 @@ export type DonationTimeRow = {
   nowDecision: ReconcileDecision["decision"] | "no_catalog";
   manualOverlap: ManualOverlap | null;
   ambiguity: DonationTimeFacts["tableAmbiguity"];
+  kindKey?: string; // 🟠 줄의 종류 열쇠(화면이 종류별로 줄을 펼칠 때 쓴다). 화면이 판정 모듈을 끌어오지 않게 서버가 실어 준다.
 };
 
 export type DonationTimeSummary = {
@@ -251,7 +258,23 @@ export type DonationTimeSummary = {
   excluded: Record<DonationTimeExcludeKind, number>;
   review: { noMatch: number; aliasTargetMissing: number; noCatalog: number };
   timeUnknown: number;
+  outside: { rows: number; kinds: number; manualOverlap: number }; // 🟠 c 의 부분집합(N 합계는 그대로)
 };
+
+// 🟠 표 밖 종류(금액 + 이름). 화면은 종류를 한 줄로 보여 주고 펼치면 시청자·날짜별 원본 줄이 나온다.
+export type OutsideKind = {
+  key: string;
+  amount: number | null;
+  itemName: string;
+  count: number;
+  firstTimeText: string;
+  lastTimeText: string;
+  probabilityMin: number | null;
+  probabilityMax: number | null;
+  inOtherTable: boolean; // 저장된 다른 표에 같은 칸(금액·이름·확률)이 있음
+  excludable: boolean; // 어떤 표에도 같은 이름이 없을 때만 종류째 제외할 수 있다(표와 확률만 다른 진짜 후보가 묻히지 않게)
+};
+export type ExcludedKind = { key: string; amount: number | null; itemName: string; count: number };
 
 type Occurrence = { result: NormalizedResult; savedAt: string | null; signature: string };
 
@@ -301,6 +324,7 @@ export function collectDonationTimeCandidates({
   aliases = {},
   fanCatalogs,
   fanUsageByVersion,
+  outsidePolicies = new Map(),
 }: {
   batches: RejudgeSourceBatch[];
   history: JudgeHistory;
@@ -311,7 +335,16 @@ export function collectDonationTimeCandidates({
   // 팬 화면 필터(filterEntriesByCatalogUsage)에 그대로 넣을 표·사용 설정 맵(getStreamerState 와 같은 규칙).
   fanCatalogs: Catalog[];
   fanUsageByVersion: Record<number, UsageOverrides>;
-}): { summary: DonationTimeSummary; rows: DonationTimeRow[]; aliasUnmatched: NormalizedResult[]; nowItems: NormalizedCatalogItem[] } {
+  // "이 종류 앞으로 제외" 정책(foldMissingCandidatePolicies). 비어 있으면 표 밖 줄을 전부 보여 준다.
+  outsidePolicies?: ReadonlyMap<string, MissingKindPolicy>;
+}): {
+  summary: DonationTimeSummary;
+  rows: DonationTimeRow[];
+  aliasUnmatched: NormalizedResult[];
+  nowItems: NormalizedCatalogItem[];
+  outsideKinds: OutsideKind[];
+  excludedKinds: ExcludedKind[];
+} {
   const summary: DonationTimeSummary = {
     batchCount: 0,
     scannedResults: 0,
@@ -325,9 +358,10 @@ export function collectDonationTimeCandidates({
     suspectedOver: 0,
     hiddenOnFan: 0,
     alsoNowRecord: 0,
-    excluded: { over_threshold: 0, disabled_then: 0, modifier: 0, mission: 0 },
+    excluded: { over_threshold: 0, disabled_then: 0, modifier: 0, mission: 0, policy: 0 },
     review: { noMatch: 0, aliasTargetMissing: 0, noCatalog: 0 },
     timeUnknown: 0,
+    outside: { rows: 0, kinds: 0, manualOverlap: 0 },
   };
 
   // 1) 결과 키 단위로 모은다(묶음마다 모양이 다르면 다른 모양을 전부 남기고 "키 흔들림"으로 표시).
@@ -363,6 +397,38 @@ export function collectDonationTimeCandidates({
   const thresholdFloor = Number.isFinite(floorRaw) ? floorRaw : Number.NEGATIVE_INFINITY;
   const rows: DonationTimeRow[] = [];
   const aliasUnmatched: NormalizedResult[] = [];
+  const outsideByKind = new Map<string, OutsideKind>();
+  const excludedByKind = new Map<string, ExcludedKind>();
+  const confirmedNames = confirmedMultiplierNames(history);
+
+  const namesInAnyTable = new Set(history.catalogs.flatMap((c) => c.items.map((item) => item.normalizedName)));
+
+  // G7 재생 재료: 결과 키당 1건(첫 모양)을 판정 엔진과 같은 순서로 시청자별로 늘어놓는다. 계정 없는 줄은 엔진도 두배권을 안 쓴다.
+  const timelineByViewer = new Map<string, NormalizedResult[]>();
+  const indexInTimeline = new Map<string, number>();
+  // 같은 키가 묶음마다 다르게 잡힌 결과의 모든 모양 — 첫 모양만 보면 두배권이었던 모양을 놓친다.
+  const wobbleByViewer = new Map<string, NormalizedResult[]>();
+  for (const [key, variants] of variantsByKey) {
+    const viewer = cleanText(variants[0].result.fanId);
+    if (!viewer) continue;
+    const list = timelineByViewer.get(viewer);
+    if (list) list.push(variants[0].result);
+    else timelineByViewer.set(viewer, [variants[0].result]);
+    if (unstable.has(key)) {
+      // 모양마다 그 모양의 계정 아래에 넣는다(계정까지 흔들린 줄도 해당 시청자의 앞 결과로 잡히게).
+      for (const variant of variants) {
+        const owner = cleanText(variant.result.fanId);
+        if (!owner) continue;
+        const wobble = wobbleByViewer.get(owner) ?? [];
+        wobble.push(variant.result);
+        wobbleByViewer.set(owner, wobble);
+      }
+    }
+  }
+  for (const list of timelineByViewer.values()) {
+    list.sort((a, b) => resultOrderKey(a).localeCompare(resultOrderKey(b)));
+    list.forEach((r, i) => indexInTimeline.set(r.sourceKey, i));
+  }
 
   // 후원 시각을 못 읽으면 원본 저장 시각(없으면 지금)으로 근사한다 — G9 로 🟡 가 된다.
   const timeOf = (occ: Occurrence) => {
@@ -376,6 +442,72 @@ export function collectDonationTimeCandidates({
     const versionItems = history.catalogs.find((c) => c.version === inputs.version)?.items ?? [];
     const judged = applyItemAliasesIfUnmatched(occ.result, versionItems, nowItems, aliases).result;
     return judgeOne(inputs.items, judged, inputs.thresholdPercent.value, inputs.specialRules).decision === "record";
+  };
+
+  const nameOf = (r: NormalizedResult) => cleanText(r.normalizedName) || normalizeName(r.itemName);
+  const isMultiplierResult = (r: NormalizedResult): boolean => {
+    if (looksLikeMultiplierName(r.itemName) || confirmedNames.has(nameOf(r))) return true;
+    const known = parseDonateTimeMsStrict(r.donateTimeText);
+    if (known === null) return false;
+    const inputs = pickJudgeInputsAt(known, history, engine, r);
+    if (!inputs) return false;
+    // 이름 연결로 두배권 칸이 되는 줄도 두배권이다(앞 줄은 ⚪ 두배권 칸인데 뒤 줄이 🟢 가 되는 모순 방지).
+    const versionItems = history.catalogs.find((c) => c.version === inputs.version)?.items ?? [];
+    const aliased = applyItemAliasesIfUnmatched(r, versionItems, nowItems, aliases).result;
+    if (looksLikeMultiplierName(aliased.itemName) || confirmedNames.has(nameOf(aliased))) return true;
+    return judgeOne(inputs.items, aliased, inputs.thresholdPercent.value, inputs.specialRules).modifierRule !== null;
+  };
+
+  // 시각을 못 읽거나, 같은 시각에 그 시청자의 다른 후원이 있으면 앞뒤 순서를 확정할 수 없다.
+  const orderUnknown = (list: NormalizedResult[], r: NormalizedResult): boolean => {
+    const ms = parseDonateTimeMsStrict(r.donateTimeText);
+    // 고유번호가 없는 줄은 같은 후원인지 알 수 없으니 다른 후원으로 본다(결과 키가 같은 자기 자신만 뺀다).
+    return (
+      ms === null ||
+      list.some(
+        (o) =>
+          o.sourceKey !== r.sourceKey &&
+          (!o.sourceUid || !r.sourceUid || o.sourceUid !== r.sourceUid) &&
+          parseDonateTimeMsStrict(o.donateTimeText) === ms,
+      )
+    );
+  };
+
+  // G7(미리 선택 범위만): 이 줄의 앞 결과를 재생해 2배 여부를 확정할 수 있나. 확정 못 하면 🟡.
+  // 🟢 라도 수집에서 통째로 빠진 앞 줄까지 보증하지는 않는다 — 자동 기록(관문 4)은 읽은 지점 안쪽 줄만 허용한다.
+  const multiplierRiskOf = (r: NormalizedResult): { risk: boolean; reason: string | null } => {
+    const noRisk = { risk: false, reason: null };
+    if (looksLikeMultiplierName(r.itemName)) return { risk: true, reason: null };
+    const viewer = cleanText(r.fanId);
+    if (!viewer) return multiplierStreamer ? { risk: true, reason: "계정 ID가 없어 시청자의 앞 결과를 확인할 수 없어요" } : noRisk;
+    const list = timelineByViewer.get(viewer) ?? [];
+    const position = indexInTimeline.get(r.sourceKey) ?? -1;
+    // 저장본마다 계정이 달라 이 시청자의 목록에 없는 줄이다(순번이 다른 시청자의 것이라 앞 결과를 고를 수 없다).
+    if (list[position]?.sourceKey !== r.sourceKey) {
+      return { risk: true, reason: "이 결과가 저장본마다 달라 앞 결과를 확정할 수 없어요" };
+    }
+    if (multiplierStreamer) {
+      if (orderUnknown(list, r)) {
+        return { risk: true, reason: "같은 시각에 이 시청자의 다른 후원이 있거나 시각을 읽지 못해 순서를 확정할 수 없어요" };
+      }
+      const targetMs = parseDonateTimeMsStrict(r.donateTimeText) as number;
+      const wobbled = (wobbleByViewer.get(viewer) ?? []).filter((o) => o.sourceKey !== r.sourceKey);
+      const earlierMultiplier = wobbled.some((o) => {
+        const ms = parseDonateTimeMsStrict(o.donateTimeText);
+        return (ms === null || ms <= targetMs) && isMultiplierResult(o);
+      });
+      if (earlierMultiplier) return { risk: true, reason: "앞 결과 중 저장본에 따라 두배권으로 잡힌 줄이 있어 2배일 수 있어요" };
+    }
+    let at = position - 1;
+    while (at >= 0 && isMissionSettlementType(list[at].donationType)) at -= 1; // 미션 정산은 대기 두배권을 소모하지 않는다.
+    if (at < 0) return multiplierStreamer ? { risk: true, reason: "이 시청자의 앞 결과를 찾지 못해 2배 여부를 확정할 수 없어요" } : noRisk;
+    const previous = list[at];
+    if (isMultiplierResult(previous)) return { risk: true, reason: "바로 앞 결과가 두배권이라 2배일 수 있어요" };
+    if (multiplierStreamer) {
+      if (unstable.has(previous.sourceKey)) return { risk: true, reason: "바로 앞 결과가 저장본마다 달라 2배 여부를 확정할 수 없어요" };
+      if (orderUnknown(list, previous)) return { risk: true, reason: "바로 앞 결과와 같은 시각의 다른 후원이 있어 순서를 확정할 수 없어요" };
+    }
+    return noRisk;
   };
 
   for (const [sourceKey, variants] of variantsByKey) {
@@ -468,11 +600,86 @@ export function collectDonationTimeCandidates({
         summary.b += 1;
         summary.excluded[excludeKind] += 1;
       } else {
+        const outsideThreshold = thresholdForAmount(
+          thresholdOverridesAt(tMs, history.overrides).overrides,
+          result.donationAmount,
+          inputs.thresholdPercent.value,
+        );
+        const lowEnough =
+          result.probability === null || result.probability === undefined || Number(result.probability) <= outsideThreshold;
+        const kindKey = kindKeyOfResult(result);
+        const nameKnownInTable = namesInAnyTable.has(nameOf(result));
+        if (lowEnough && !nameKnownInTable && outsidePolicies.get(kindKey) === "exclude") {
+          summary.b += 1;
+          summary.excluded.policy += 1;
+          const kind = excludedByKind.get(kindKey);
+          if (kind) kind.count += 1;
+          else excludedByKind.set(kindKey, { key: kindKey, amount: result.donationAmount, itemName: result.itemName, count: 1 });
+          continue;
+        }
         summary.c += 1;
         if (alias.aliasTargetMissing) summary.review.aliasTargetMissing += 1;
         else summary.review.noMatch += 1;
         // 이름 연결 화면 재료: 그때 표로도 못 찾은 것만(그때 표로 풀리는 건 연결이 필요 없다).
         aliasUnmatched.push(result);
+        if (lowEnough) {
+          const inOtherTable = history.catalogs.some((c) => resultMatchesVersion(judged, c.version, history));
+          let kind = outsideByKind.get(kindKey);
+          if (!kind) {
+            kind = {
+              key: kindKey,
+              amount: result.donationAmount,
+              itemName: result.itemName,
+              count: 0,
+              firstTimeText: result.donateTimeText,
+              lastTimeText: result.donateTimeText,
+              probabilityMin: null,
+              probabilityMax: null,
+              inOtherTable: false,
+              excludable: !nameKnownInTable,
+            };
+            outsideByKind.set(kindKey, kind);
+          }
+          kind.count += 1;
+          kind.inOtherTable ||= inOtherTable;
+          if (result.donateTimeText < kind.firstTimeText) kind.firstTimeText = result.donateTimeText;
+          if (result.donateTimeText > kind.lastTimeText) kind.lastTimeText = result.donateTimeText;
+          if (result.probability !== null && result.probability !== undefined) {
+            const value = Number(result.probability);
+            kind.probabilityMin = kind.probabilityMin === null ? value : Math.min(kind.probabilityMin, value);
+            kind.probabilityMax = kind.probabilityMax === null ? value : Math.max(kind.probabilityMax, value);
+          }
+          const manualOverlap = findManualOverlaps(
+            {
+              fanId: result.fanId,
+              fanNickname: result.fanNickname,
+              itemName: result.itemName,
+              donateTimeText: result.donateTimeText,
+              itemNames: [judged.itemName],
+            },
+            manualEntries,
+          );
+          if (manualOverlap) summary.outside.manualOverlap += 1;
+          summary.outside.rows += 1;
+          const reasonText =
+            result.probability === null || result.probability === undefined
+              ? "원본에서 확률을 읽지 못했어요"
+              : inOtherTable
+                ? "그때 표엔 없고 다른 표에만 있어요"
+                : "어떤 룰렛표에도 없어요";
+          rows.push({
+            ...base,
+            judged: { ...base.judged, threshold: outsideThreshold },
+            kind: "outside",
+            kindKey,
+            cls: "orange",
+            reasonText,
+            reasons: [],
+            tags: manualOverlap ? [`수동기록과 같은 건일 수 있어요: ${manualOverlap.summary}`] : [],
+            manualOverlap,
+            ambiguity: inputs.ambiguity,
+          });
+        }
       }
       continue;
     }
@@ -503,6 +710,7 @@ export function collectDonationTimeCandidates({
       },
       manualEntries,
     );
+    const multiplier = multiplierRiskOf(result);
     const fanView = filterEntriesByCatalogUsage(
       [
         {
@@ -529,7 +737,10 @@ export function collectDonationTimeCandidates({
         matched.thresholdOverridePercent !== undefined && matched.thresholdOverridePercent !== null
           ? true
           : inputs.thresholdPercent.exact || matched.probability <= thresholdFloor,
-      multiplierRisk: multiplierStreamer || looksLikeMultiplierName(result.itemName),
+      multiplierRisk: multiplier.risk,
+      multiplierReason: multiplier.reason,
+      usageNotOwn: inputs.usage.source !== "own",
+      laterTurnedOff: laterTurnedOff(tMs, inputs.version, matched, history, engine),
       // 정가 설정은 바뀐다(정가 → 룰렛 전환 등) — 그때든 지금이든 정가로 등록된 적 있는 갯수면 🟡.
       fixedPriceCandidate: result.donationAmount !== null && history.fixedAmountsEver.has(result.donationAmount),
       timeKnown: known !== null,
@@ -549,13 +760,23 @@ export function collectDonationTimeCandidates({
     rows.push({ ...base, kind: "new", ...classified, manualOverlap, ambiguity });
   }
 
-  // 🟢 → 🟡 → 오기록 의심, 같은 분류 안에서는 후원 시각 순(못 읽은 시각은 뒤).
-  const order = (r: DonationTimeRow) => (r.kind === "suspected" ? 2 : r.cls === "green" ? 0 : 1);
+  // 🟢 → 🟡 → 🟠 → 오기록 의심, 같은 분류 안에서는 후원 시각 순(못 읽은 시각은 뒤).
+  const order = (r: DonationTimeRow) => (r.kind === "suspected" ? 3 : r.kind === "outside" ? 2 : r.cls === "green" ? 0 : 1);
   rows.sort(
     (x, y) =>
       order(x) - order(y) ||
       (x.timeMs ?? Number.MAX_SAFE_INTEGER) - (y.timeMs ?? Number.MAX_SAFE_INTEGER) ||
       x.sourceKey.localeCompare(y.sourceKey),
   );
-  return { summary, rows, aliasUnmatched, nowItems };
+  summary.outside.kinds = outsideByKind.size;
+  const byCountThenName = <T extends { count: number; itemName: string }>(a: T, b: T) =>
+    b.count - a.count || a.itemName.localeCompare(b.itemName);
+  return {
+    summary,
+    rows,
+    aliasUnmatched,
+    nowItems,
+    outsideKinds: [...outsideByKind.values()].sort(byCountThenName),
+    excludedKinds: [...excludedByKind.values()].sort(byCountThenName),
+  };
 }

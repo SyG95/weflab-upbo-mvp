@@ -59,7 +59,7 @@ function fixtureDashboard() {
 
 test('index copies only public summary fields; new nested/private fields never escape', async () => {
   const sourceRow = { ...privateFields, slug: 'demo', displayName: '공개 시트', recordSum: 8, needsReviewSum: 2,
-    lastAppliedAt: '2026-11-02T12:30:00+09:00', extension: { notes: [CANARY], currentUrl: CANARY } };
+    lastAppliedAt: '2026-11-02T12:30:00+09:00', extension: { notes: [CANARY], currentUrl: CANARY }, collectedVersionLine: CANARY };
   const before = JSON.stringify(sourceRow);
   const api = loadVisitorData({ getAdminIndex: async () => ({ ok: true, streamers: [sourceRow] }) });
   const result = await api.getVisitorIndex();

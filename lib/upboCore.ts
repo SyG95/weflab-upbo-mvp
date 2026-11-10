@@ -218,7 +218,7 @@ function viewerKey(result: NormalizedResult): string {
   return cleanText(result.fanId);
 }
 
-function resultOrderKey(result: NormalizedResult): string {
+export function resultOrderKey(result: NormalizedResult): string {
   return [
     cleanText(result.donateTimeText),
     String(Number.isFinite(Number(result.rowIndex)) ? Number(result.rowIndex) : 0).padStart(6, "0"),

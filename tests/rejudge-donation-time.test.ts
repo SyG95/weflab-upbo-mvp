@@ -68,9 +68,10 @@ test("합성 정답 사례: 결과마다 분류가 정답과 같다(🟢 오답 
       assert.ok(row && row.kind === "new", `${label}: 새로 기록될 것이어야`);
       assert.equal(row.cls, r.expect.cls, `${label}: ${row.reasons.join(" / ")}`);
       if (r.expect.reasonIncludes) assert.ok(row.reasonText.includes(r.expect.reasonIncludes), `${label}: ${row.reasonText}`);
+      if (r.expect.reasonAlso) assert.ok(row.reasons.join(" / ").includes(r.expect.reasonAlso), `${label}: ${row.reasons.join(" / ")}`);
       assert.equal(row.tags.length > 0, r.expect.hiddenOnFan === true, `${label}: 팬 화면 숨김 꼬리표`);
-    } else if (r.expect.kind === "suspected") {
-      assert.equal(row?.kind, "suspected", label);
+    } else if (r.expect.kind === "suspected" || r.expect.kind === "outside") {
+      assert.equal(row?.kind, r.expect.kind, label);
     } else {
       assert.equal(row, undefined, `${label}: 행으로 오면 안 된다(${row?.reasonText})`);
     }

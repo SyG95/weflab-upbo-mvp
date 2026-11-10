@@ -12,6 +12,7 @@ import type {
 } from "@/lib/adminDashboard";
 import {
   EXTENSION_CONFIG_DEFAULT,
+  collectedVersionLine,
   extensionInfoNotes,
   extensionScreenSummary,
   normalizeHeartbeat,
@@ -57,6 +58,8 @@ function mockExtension(
 
 export function getMockAdminIndex(): AdminStreamerSummary[] {
   const catchupOn: ExtensionConfig = { ...EXTENSION_CONFIG_DEFAULT, catchupEnabled: true };
+  const staleHeartbeat = mockExtension(47, { page: { loginOk: false } }, { ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0 });
+  const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
   return [
     {
       slug: "poromi",
@@ -96,7 +99,9 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       needsReviewSum: 0,
       // 오래 열린 탭 되읽기만 원격으로 끈 예(staleTabHours=0) — 목록에 설정 줄이 보인다.
       extensionConfig: { ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0 },
-      extension: mockExtension(47, { page: { loginOk: false } }, { ...EXTENSION_CONFIG_DEFAULT, staleTabHours: 0 }),
+      extension: staleHeartbeat,
+      // 하트비트는 47분 전에 멈췄는데 수집은 더 최근까지 들어온 예.
+      collectedVersionLine: collectedVersionLine({ clientVersion: "0.4.0", savedAt: hoursAgo(0.1) }, staleHeartbeat?.updatedAt),
     },
     {
       slug: "byulbit",
@@ -107,8 +112,9 @@ export function getMockAdminIndex(): AdminStreamerSummary[] {
       lastAppliedAt: "2026-06-26T21:30:00.000Z",
       recordSum: 9,
       needsReviewSum: 0,
-      // 하트비트 없음(옛 확프 0.3.x) → 목록은 옛 "최근 동기화" 신선도 점.
+      // 하트비트 없음(옛 확프 0.3.x, 또는 메뉴로 들어온 0.4.0) → 목록은 옛 "최근 동기화" 신선도 점 + 수집 기록 버전.
       extensionConfig: EXTENSION_CONFIG_DEFAULT,
+      collectedVersionLine: collectedVersionLine({ clientVersion: "0.4.0", savedAt: hoursAgo(2) }),
     },
   ];
 }

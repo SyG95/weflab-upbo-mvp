@@ -149,7 +149,7 @@ function dashboardData(source: AdminDashboardData): VisitorDashboardData {
 export async function getVisitorIndex(): Promise<VisitorIndexResult> {
   try {
     const { getAdminIndex } = await import("./adminDashboard");
-    const result = await getAdminIndex();
+    const result = await getAdminIndex({ collectedVersions: false });
     if (!result.ok) return { ok: false, message: UNAVAILABLE_MESSAGE };
     return {
       ok: true,

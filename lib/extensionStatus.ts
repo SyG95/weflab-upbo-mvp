@@ -315,6 +315,52 @@ export function extensionScreenSummary(payload: HeartbeatPayload): string {
   return parts.join(" · ");
 }
 
+// ---------- 수집 기록 기준 확프 버전(목록 보강, 2026-11-08) ----------
+// 0.4.0 하트비트는 후원관리 주소로 페이지를 새로 열었을 때만 시작된다. 위플랩 메뉴로 들어오면(새로고침 없는 화면 전환)
+// 수집은 돌아도 하트비트가 안 와서 목록에 버전이 안 보였다. 수집 원본에 실려 온 버전으로 그 빈자리를 메운다.
+// 신호등 색은 여기서 건드리지 않는다(생사 판단은 하트비트 몫).
+export type CollectedExtensionVersion = { clientVersion: string; savedAt: string };
+
+// rows 는 saved_at 최신순 — 스트리머별로 처음 만난 "버전이 있는" 행만 남긴다.
+export function latestCollectedVersions(
+  rows: ReadonlyArray<{ streamer_id?: unknown; saved_at?: unknown; client_version?: unknown }>,
+): Map<string, CollectedExtensionVersion> {
+  const out = new Map<string, CollectedExtensionVersion>();
+  for (const row of rows) {
+    const streamerId = text(row.streamer_id);
+    const clientVersion = text(row.client_version);
+    const savedAt = text(row.saved_at);
+    if (!streamerId || !clientVersion || !savedAt || out.has(streamerId)) continue;
+    out.set(streamerId, { clientVersion, savedAt });
+  }
+  return out;
+}
+
+function kstMonthDayTime(ms: number): string {
+  const iso = new Date(ms + 9 * 3_600_000).toISOString();
+  return `${iso.slice(5, 7)}/${iso.slice(8, 10)} ${iso.slice(11, 16)}`;
+}
+
+// 하트비트는 5분 주기라 정상이어도 저장 시각보다 최대 5분 앞설 수 있다. 주기 2회분까지는 "뒤처짐"으로 보지 않는다.
+export const COLLECTED_VERSION_HEARTBEAT_GRACE_MS = 10 * 60_000;
+
+// 목록용 한 줄. 하트비트가 없으면 버전을 대신 보여 주고, 있는데 수집 저장보다 뒤처졌으면 수집 쪽이 더 최신임을 알린다.
+// 하트비트가 정상 주기 안이면 줄을 만들지 않는다. 시각은 raw_imports 저장 시각이라, 전부 무시된 재스캔처럼
+// 저장되지 않는 수집은 반영되지 않는다(그래서 "마지막 수집"이 아니라 "마지막 수집 저장").
+export function collectedVersionLine(
+  collected: CollectedExtensionVersion | undefined,
+  heartbeatUpdatedAt?: string,
+): string | undefined {
+  if (!collected) return undefined;
+  const savedMs = Date.parse(collected.savedAt);
+  if (!Number.isFinite(savedMs)) return undefined;
+  const when = kstMonthDayTime(savedMs);
+  if (!heartbeatUpdatedAt) return `확프 v${collected.clientVersion} · 마지막 수집 저장 ${when} · 상태 신호 없음`;
+  const heartbeatMs = Date.parse(heartbeatUpdatedAt);
+  if (Number.isFinite(heartbeatMs) && savedMs - heartbeatMs <= COLLECTED_VERSION_HEARTBEAT_GRACE_MS) return undefined;
+  return `수집 기록 v${collected.clientVersion} · 마지막 수집 저장 ${when} · 상태 신호보다 최신`;
+}
+
 // ---------- 본 키 시드(재설치 직후 캐시 채우기) ----------
 // 확프 content.js 와 "같은 열쇠"를 raw_imports.raw.rows 에서 다시 만든다.
 //   결과 열쇠: result.sourceKey || (sourceUid ? `${sourceUid}::${index ?? rouletteIndex ?? 0}` : "")

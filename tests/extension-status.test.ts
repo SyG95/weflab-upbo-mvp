@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import {
   EXTENSION_CONFIG_DEFAULT,
   clampKnownKeysDays,
+  collectedVersionLine,
   extensionConfigSummary,
   extensionInfoNotes,
   extensionScreenSummary,
   formatElapsed,
   knownKeysFromRawRows,
+  latestCollectedVersions,
   mergeExtensionConfig,
   normalizeExtensionConfig,
   normalizeHeartbeat,
@@ -347,4 +349,43 @@ test("본 키 시드 상한: 넘치면 가장 최근 것만 남긴다 / days 는
   assert.equal(clampKnownKeysDays("0"), 1);
   assert.equal(clampKnownKeysDays("3"), 3);
   assert.equal(clampKnownKeysDays("100"), 14);
+});
+
+test("latestCollectedVersions: 최신순 행에서 스트리머별 첫 버전만 남기고 빈 값은 건너뛴다", () => {
+  const map = latestCollectedVersions([
+    { streamer_id: "a", saved_at: "2026-11-08T01:00:00+00:00", client_version: null },
+    { streamer_id: "a", saved_at: "2026-11-07T08:05:29.045347+00:00", client_version: "0.4.0" },
+    { streamer_id: "a", saved_at: "2026-11-05T11:28:00+00:00", client_version: "0.3.0" },
+    { streamer_id: "b", saved_at: "2026-11-07T00:00:00+00:00", client_version: "0.3.0" },
+    { streamer_id: "", saved_at: "2026-11-07T00:00:00+00:00", client_version: "0.3.0" },
+    { streamer_id: "c", saved_at: "", client_version: "0.4.0" },
+    {},
+  ]);
+  assert.deepEqual([...map.keys()], ["a", "b"]);
+  assert.deepEqual(map.get("a"), { clientVersion: "0.4.0", savedAt: "2026-11-07T08:05:29.045347+00:00" });
+});
+
+test("collectedVersionLine: 하트비트 없음/뒤처짐일 때만 KST 시각과 함께 한 줄을 만든다", () => {
+  const collected = { clientVersion: "0.4.0", savedAt: "2026-11-07T08:05:29.045347+00:00" };
+  assert.equal(collectedVersionLine(collected), "확프 v0.4.0 · 마지막 수집 저장 11/07 17:05 · 상태 신호 없음");
+  assert.equal(
+    collectedVersionLine(collected, "2026-11-04T16:49:57+00:00"),
+    "수집 기록 v0.4.0 · 마지막 수집 저장 11/07 17:05 · 상태 신호보다 최신",
+  );
+  assert.equal(collectedVersionLine(collected, "2026-11-07T08:10:00+00:00"), undefined, "하트비트가 더 최신이면 줄 없음");
+  assert.equal(collectedVersionLine(collected, collected.savedAt), undefined, "같은 시각이면 줄 없음");
+  assert.equal(collectedVersionLine(undefined), undefined);
+  assert.equal(collectedVersionLine({ clientVersion: "0.4.0", savedAt: "not-a-date" }), undefined);
+  // KST 날짜 넘김: UTC 15시 이후는 다음 날로 보인다.
+  assert.equal(
+    collectedVersionLine({ clientVersion: "0.3.0", savedAt: "2026-10-31T15:30:00+00:00" }),
+    "확프 v0.3.0 · 마지막 수집 저장 11/01 00:30 · 상태 신호 없음",
+  );
+});
+
+test("collectedVersionLine: 하트비트 정상 주기(10분) 안이면 수집이 조금 더 최신이어도 줄을 만들지 않는다", () => {
+  const collected = { clientVersion: "0.4.0", savedAt: "2026-11-07T08:10:00.000Z" };
+  assert.equal(collectedVersionLine(collected, "2026-11-07T08:05:01.000Z"), undefined, "5분 주기 안");
+  assert.equal(collectedVersionLine(collected, "2026-11-07T08:00:00.000Z"), undefined, "정확히 10분은 정상");
+  assert.match(collectedVersionLine(collected, "2026-11-07T07:59:59.000Z") ?? "", /상태 신호보다 최신/, "10분 넘으면 뒤처짐");
 });

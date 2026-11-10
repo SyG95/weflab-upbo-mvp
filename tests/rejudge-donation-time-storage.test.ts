@@ -168,16 +168,23 @@ test.after(() => {
 type StreamerArg = Parameters<typeof import("../lib/upboSupabase").previewDonationTimeRejudgeForStreamer>[0];
 const STREAMER = SYNTH_STREAMER as unknown as StreamerArg;
 
-test("합성 정답 사례가 DB 읽기 경로로도 같은 요약을 낸다(쓰기 0)", async () => {
+test("합성 정답 사례가 DB 읽기 경로로도 같은 요약을 낸다(첫 쪽의 미처리 수 기록 1줄 말고 쓰기 0)", async () => {
   reset(SYNTH_TABLES);
   const out = await lib.previewDonationTimeRejudgeForStreamer(STREAMER);
   const picked = Object.fromEntries(Object.keys(SYNTH_EXPECTED_SUMMARY).map((k) => [k, out.summary[k as keyof typeof out.summary]]));
   assert.deepEqual(picked, SYNTH_EXPECTED_SUMMARY);
-  assert.equal(out.totalRows, SYNTH_EXPECTED_SUMMARY.d + SYNTH_EXPECTED_SUMMARY.suspectedOver, "🟢·🟡·오기록 의심만 행으로");
+  assert.equal(out.totalRows, SYNTH_EXPECTED_SUMMARY.d + SYNTH_EXPECTED_SUMMARY.suspectedOver + out.summary.outside.rows, "🟢·🟡·🟠·오기록 의심만 행으로");
   assert.ok(out.rows.every((r) => r.kind === "suspected" || r.cls !== "grey"));
   assert.equal(out.latestVersion, 3);
   assert.ok(Array.isArray(out.aliasCandidates));
-  assert.deepEqual(writes, [], "미리보기는 쓰기 0(entries·modifier_state·쿠폰·audit 무변화)");
+  assert.equal(writes.length, 1, "미리보기의 쓰기는 미처리 수 기록 1줄뿐(entries·modifier_state·쿠폰 무변화)");
+  assert.equal((writes[0].body as Row).action, "missing_preview_snapshot");
+  const snapshot = (writes[0].body as Row).payload as { remaining: number; at: string };
+  assert.equal(snapshot.remaining, SYNTH_EXPECTED_SUMMARY.d + out.summary.outside.rows - out.summary.outside.manualOverlap);
+  assert.ok(Number.isFinite(Date.parse(snapshot.at)), "원본을 읽기 전 시각을 기준점으로 남긴다");
+  writes.length = 0;
+  await lib.previewDonationTimeRejudgeForStreamer(STREAMER, { page: 1 });
+  assert.deepEqual(writes, [], "다음 쪽은 쓰기 0");
 });
 
 test("이력은 페이지 순회로 전량 읽는다 — special_item_rule 1,200줄의 마지막 확정도 반영", async () => {

@@ -514,6 +514,43 @@ export function hasMultiplierCells(history: JudgeHistory): boolean {
   return history.catalogs.some((c) => c.items.some((item) => looksLikeMultiplierWord(item.itemName)));
 }
 
+// G7 좁히기: 확정된 적 있는 두배권 상품 이름(시점 무관). 판정 시점 뒤에 확정된 칸도 "두배권일 수 있다"로 봐야 안전하다.
+export function confirmedMultiplierNames(history: JudgeHistory): Set<string> {
+  const names = new Set<string>();
+  for (const event of history.rules) {
+    if (event.rule.status !== "confirmed") continue;
+    const name = cleanText(event.rule.normalizedName) || normalizeName(event.rule.itemName);
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+// G13b: 후원 뒤의 저장 설정에서 그 칸이 꺼졌는가. 같은 버전은 그 칸 그대로, 뒤 버전은 같은 (금액대, 이름)으로 본다.
+// 버전마다 "t 이후 마지막 저장본"만 본다(껐다가 다시 켠 칸은 안 걸린다). 결과는 기본 해제일 뿐이라 넓게 잡는다.
+export function laterTurnedOff(
+  tMs: number,
+  version: number,
+  item: NormalizedCatalogItem,
+  history: JudgeHistory,
+  engine: UsageEngine,
+): boolean {
+  const lastByVersion = new Map<number, UsageEvent>();
+  for (const event of history.usage) {
+    if (event.atMs < tMs || event.catalogVersion < version) continue;
+    lastByVersion.set(event.catalogVersion, event); // history.usage 는 시각순이라 뒤 값이 마지막 저장본이다.
+  }
+  const nameKey = labelNameKey(item.amountRangeLabel, item.normalizedName);
+  for (const [eventVersion, event] of lastByVersion) {
+    const candidates =
+      eventVersion === version
+        ? rawItemsOf(history, version).filter((c) => c.groupIndex === item.groupIndex && c.sortOrder === item.sortOrder)
+        : rawItemsOf(history, eventVersion).filter((c) => labelNameKey(c.amountRangeLabel, c.normalizedName) === nameKey);
+    if (candidates.length === 0) continue;
+    if (engine.applyCatalogUsage(candidates, event.overrides).some((c) => c.enabled === false)) return true;
+  }
+  return false;
+}
+
 export function lastResetMs(history: JudgeHistory): number | null {
   return history.resets.length ? Math.max(...history.resets.map((r) => r.atMs)) : null;
 }

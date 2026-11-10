@@ -89,12 +89,14 @@ export const SYNTH_AUDITS = [
   audit("threshold_overrides_updated", "2026-09-18T00:00:00", { overrides: { "170": 45 } }),
   audit("signature_counts_updated", "2026-09-18T00:10:00", { counts: [330] }),
   link("2026-09-20T06:10:05", "2026년 09월 20일 05시 48분 20초"),
+  // v2 를 가져온 직후 저장한 사용 설정(간식! 꺼짐) — 관문 1 G13a: 그 표 자체의 저장 설정이 있어야 🟢 가 될 수 있다.
+  audit("catalog_usage_updated", "2026-09-20T06:20:00", { catalogVersion: 2, overrides: { "g2-i1": false } }, "extension"),
   link("2026-10-24T12:41:35", "2026년 10월 24일 12시 38분 05초"),
   audit("threshold_overrides_updated", "2026-10-24T12:50:00", { overrides: { "170": 40 } }),
   audit("item_alias_updated", "2026-10-24T13:00:00", { aliases: { "33::하트뿅::1": { itemName: "하트뿅뿅", probability: 1 } } }),
   link("2026-10-25T09:00:05", "2026년 10월 24일 12시 38분 05초"), // 같은 내용 다시 가져옴(새 구간 아님)
   audit("threshold_percent_updated", "2026-10-25T18:20:00", { before: 10, after: 10, source: "baseline" }, "operator"),
-  // v3 저장본(간식!·볼찌르기 꺼짐) — 10/26 이후라 그 전 후원은 v1 저장본 승계(간식!만 꺼짐)로 판정된다
+  // v3 저장본(간식!·볼찌르기 꺼짐) — 10/26 이후라 그 전 후원은 v2 저장본 승계(간식!만 꺼짐)로 판정된다(G13: 🟡)
   audit("catalog_usage_updated", "2026-10-26T10:00:00", { catalogVersion: 3, overrides: { "g2-i1": false, "g0-i5": false } }, "extension"),
 ];
 
@@ -107,9 +109,10 @@ export const SYNTH_BATCHES = [
 // 기대 분류(정답): kind new=새로 기록될 것, existing=이미 기록, review=검토, excluded=제외.
 export type SynthExpect = {
   label: string;
-  kind: "new" | "existing" | "review" | "excluded" | "suspected";
+  kind: "new" | "existing" | "review" | "excluded" | "suspected" | "outside";
   cls?: "green" | "yellow";
-  reasonIncludes?: string;
+  reasonIncludes?: string; // 화면에 대표로 뜨는 이유(reasonText)
+  reasonAlso?: string; // 대표 이유 말고 함께 있어야 하는 이유
   hiddenOnFan?: boolean;
 };
 
@@ -156,15 +159,15 @@ export const SYNTH_RESULTS: Array<SynthResult & { batch: 1 | 2 | 3 | 4; expect: 
   { batch: 3, uid: "synth0111", time: "2026-10-20 22:00:00", viewer: 7, amount: 33, item: "사진10장", prob: 2, expect: { label: "G11 수동기록 겹침", kind: "new", cls: "yellow", reasonIncludes: "수동기록과 같은 건일 수 있어요" } },
   { batch: 3, uid: "synth0112", time: "2026-10-22 22:30:00", viewer: 8, amount: 330, item: "영상 단컷", prob: 4, expect: { label: "G8 정가 금액", kind: "new", cls: "yellow", reasonIncludes: "정가 금액과 같아요" } },
   { batch: 3, uid: "synth0113", time: "2026-10-23 20:00:00", viewer: 10, amount: 33, item: "하트뿅", prob: 1, expect: { label: "G12 이름 연결", kind: "new", cls: "yellow", reasonIncludes: "이름 연결로 맞춘" } },
-  { batch: 3, uid: "synth0114", time: "2026-10-22 23:00:00", viewer: 11, amount: 33, item: "볼찌르기", prob: 1, expect: { label: "G10 키 흔들림", kind: "new", cls: "yellow", reasonIncludes: "다른 상품으로 잡힌 적" } },
-  { batch: 3, uid: "synth0115", time: "2026-10-23 21:00:00", viewer: 12, amount: 33, item: "수수께끼", prob: 1, expect: { label: "어느 표에도 없음", kind: "review" } },
+  { batch: 3, uid: "synth0114", time: "2026-10-22 23:00:00", viewer: 11, amount: 33, item: "볼찌르기", prob: 1, expect: { label: "G10 키 흔들림", kind: "new", cls: "yellow", reasonIncludes: "나중에 같은 이름 칸을 껐어요", reasonAlso: "다른 상품으로 잡힌 적" } },
+  { batch: 3, uid: "synth0115", time: "2026-10-23 21:00:00", viewer: 12, amount: 33, item: "수수께끼", prob: 1, expect: { label: "어느 표에도 없음(🟠)", kind: "outside" } },
   { batch: 3, uid: "synth0116", time: "2026-10-24 17:55:00", viewer: 13, amount: 33, item: "짧은영상", prob: 2, expect: { label: "실시간 기록분(새 표)", kind: "existing" } },
   { batch: 3, uid: "synth0117", time: "2026-10-22 20:00:00", viewer: 14, amount: 170, item: "간식!", prob: 40, expect: { label: "그때 꺼진 상품인데 기록됨", kind: "suspected" } },
   { batch: 3, uid: "synth0118", time: "2026-10-22 19:00:00", viewer: 15, amount: 170, item: "영상편지", prob: 45, expect: { label: "170 표 그때 예외 45%", kind: "new", cls: "green" } },
   // ── 10/25 23:00 다음 원본: 같은 결과가 또 담기고(1건은 다른 상품으로), 새 결과 1건 ──
   { batch: 4, uid: "synth0101", time: "2026-10-21 19:12:40", viewer: 1, amount: 33, item: "사진10장", prob: 2, expect: { label: "중복(같은 값)", kind: "new", cls: "green" } },
   { batch: 4, uid: "synth0114", time: "2026-10-22 23:00:00", viewer: 11, amount: 33, item: "윙크", prob: 15, expect: { label: "중복(다른 상품)", kind: "new", cls: "yellow" } },
-  { batch: 4, uid: "synth0119", time: "2026-10-25 20:00:00", viewer: 9, amount: 33, item: "볼찌르기", prob: 1, expect: { label: "그때 켜짐·지금 v3 꺼짐", kind: "new", cls: "green", hiddenOnFan: true } },
+  { batch: 4, uid: "synth0119", time: "2026-10-25 20:00:00", viewer: 9, amount: 33, item: "볼찌르기", prob: 1, expect: { label: "그때 켜짐·지금 v3 꺼짐", kind: "new", cls: "yellow", reasonIncludes: "나중에 같은 이름 칸을 껐어요", hiddenOnFan: true } },
 ];
 
 const RAW_SAVED: Record<number, string> = {
@@ -236,7 +239,7 @@ export const SYNTH_ENTRIES = [
 ];
 
 // 합성 데이터의 기대 요약(정답) — SYNTH_RESULTS 의 expect 를 결과 키 단위로 센 값.
-export const SYNTH_EXPECTED_SUMMARY = { N: 22, a: 4, d: 11, c: 1, b: 6, green: 4, yellow: 7, suspectedOver: 1, hiddenOnFan: 1, alsoNowRecord: 3 };
+export const SYNTH_EXPECTED_SUMMARY = { N: 22, a: 4, d: 11, c: 1, b: 6, green: 3, yellow: 8, suspectedOver: 1, hiddenOnFan: 1, alsoNowRecord: 3 };
 
 export const SYNTH_TABLES = {
   streamers: [SYNTH_STREAMER],

@@ -10,7 +10,7 @@
 // 저장은 admin_note JSON 의 tabHint(스키마 0). 팬 화면은 힌트가 있으면 힌트를 먼저 본다(page.tsx resolveHoldingTabRid).
 // 목록에서는 한 건씩 [탭 바꾸기] 또는 체크해서 여러 건을 한 번에 옮긴다(PATCH {ids, tabHint}).
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import { normalizeAccountId, parseDonateTimeMs, type UpboEntry } from "../../lib/api";
@@ -33,6 +33,7 @@ import {
   sortCustomTabNames,
   type ManualTabHint,
 } from "../../lib/manualTabHint";
+import { takeManualPrefill } from "../../lib/manualPrefill";
 
 // 수동기록 폼 "어느 탭에 넣을까요" 룰렛 선택지(page.tsx RouletteIndex.tabChoices). hintLabel = 팬 화면이 탭을 되찾는 금액대 라벨.
 type TabChoice = { rid: string; label: string; hintLabel: string };
@@ -370,6 +371,30 @@ export default function ManualEntryManager({
       setPick((p) => (p.startsWith(PAST_PREFIX) ? "" : p));
     }
   }
+
+  // 다시판정의 🟠 표 밖 줄에서 넘어온 값을 한 번만 채운다(주소창에 시청자 정보를 싣지 않으려고 sessionStorage 를 쓴다).
+  useEffect(() => {
+    const prefill = takeManualPrefill(slug);
+    if (!prefill) return;
+    queueMicrotask(() => {
+      setOwnerId(prefill.fanId);
+      setOwnerName(prefill.fanNickname);
+      setPick(CUSTOM_ITEM);
+      setCustomName(prefill.itemName);
+      setCustomProb(prefill.probability === null ? "" : String(prefill.probability));
+      setCount(1);
+      // 날짜를 모르면 "오늘"로 저장되지 않게 날짜 없음으로 둔다. 날짜가 있으면 그날 표 선택지도 함께 불러온다.
+      if (prefill.date) {
+        setDateMode("pick");
+        changePickedDate(prefill.date);
+      } else {
+        chooseDateMode("unknown");
+      }
+      setMsg({ type: "ok", text: "누락 후보 줄의 값을 채워 왔어요. 내용과 탭을 확인한 뒤 추가를 눌러 주세요." });
+    });
+    // 넘겨받은 값은 화면이 열릴 때 한 번만 채운다(날짜 함수들은 렌더마다 새로 만들어져 넣으면 매번 다시 돈다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
   function chooseDateMode(mode: ManualDateMode) {
     setDateMode(mode);

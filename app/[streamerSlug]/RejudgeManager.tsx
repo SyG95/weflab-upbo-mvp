@@ -10,7 +10,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./page.module.css";
 import ItemAliasLinker, { type AliasCandidate } from "./ItemAliasLinker";
-import type { DonationTimeRow, DonationTimeSummary } from "@/lib/rejudge";
+import { forgetMissingSuspectCache } from "./MissingSuspectNotice";
+import type { DonationTimeRow, DonationTimeSummary, ExcludedKind, OutsideKind } from "@/lib/rejudge";
+import { prefillDateOf, stashManualPrefill } from "@/lib/manualPrefill";
 
 type Candidate = {
   sourceKey: string;
@@ -49,6 +51,8 @@ type AsofPreview = {
   rowsToken: string;
   rawUntil: string | null;
   aliasCandidates?: AliasCandidate[];
+  outsideKinds?: OutsideKind[];
+  excludedKinds?: ExcludedKind[];
 };
 
 type Mode = "now" | "donation_time";
@@ -60,7 +64,7 @@ type CatalogGroupLike = {
 
 const MAX_ROWS_SHOWN = 200;
 
-const CLS_LABEL: Record<string, string> = { green: "🟢 맞음", yellow: "🟡 확인", grey: "⚠️ 의심" };
+const CLS_LABEL: Record<string, string> = { green: "🟢 맞음", yellow: "🟡 확인", grey: "⚠️ 의심", orange: "🟠 표 밖" };
 const NOW_LABEL: Record<string, string> = {
   record: "들어감",
   needs_review: "검토함",
@@ -80,6 +84,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   const [mode, setMode] = useState<Mode>("now");
   // 서버는 한 번에 2,000행까지 보내고, 화면은 그중 앞부분만 그린 뒤 "더 보기"로 늘린다(서버 재요청은 받은 행을 다 본 뒤에만).
   const [asofShown, setAsofShown] = useState(MAX_ROWS_SHOWN);
+  const [openKind, setOpenKind] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -180,17 +185,24 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
         return;
       }
       if (page === 0) {
+        forgetMissingSuspectCache(slug);
         setAsof(next);
         setAsofShown(MAX_ROWS_SHOWN);
         if (noticeAfter) setMsg({ type: "ok", text: noticeAfter });
-        else if (next.summary.d === 0 && next.summary.suspectedOver === 0) {
+        else if (next.summary.d === 0 && next.summary.suspectedOver === 0 && next.summary.outside.rows === 0) {
           setMsg({ type: "ok", text: "새로 기록될 게 없어요. 후원 그때 표 기준으로도 빠진 기록이 없습니다." });
         }
       } else {
         setAsof((prev) => {
           if (!prev) return next;
           const seen = new Set(prev.rows.map((r) => r.sourceKey));
-          return { ...next, rows: [...prev.rows, ...next.rows.filter((r) => !seen.has(r.sourceKey))], aliasCandidates: prev.aliasCandidates };
+          return {
+            ...next,
+            rows: [...prev.rows, ...next.rows.filter((r) => !seen.has(r.sourceKey))],
+            aliasCandidates: prev.aliasCandidates,
+            outsideKinds: prev.outsideKinds,
+            excludedKinds: prev.excludedKinds,
+          };
         });
         setAsofShown((n) => n + MAX_ROWS_SHOWN);
       }
@@ -199,6 +211,47 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
     } finally {
       setBusy("");
     }
+  }
+
+  // 표 밖(🟠) 종류 "앞으로 제외"·취소. 저장 뒤 미리보기를 다시 불러 목록과 숫자를 맞춘다.
+  async function setKindPolicy(kind: { amount: number | null; itemName: string }, decision: "exclude" | "include") {
+    if (decision === "exclude" && !window.confirm(`«${kind.itemName}»(${kind.amount ?? "금액 없음"}개)을 앞으로 목록에서 뺄까요?\n기록은 바뀌지 않고, 나중에 다시 볼 수 있어요.`)) return;
+    setBusy("preview");
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ policy: { amount: kind.amount, itemName: kind.itemName, decision } }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg({ type: "err", text: errorText(res.status, data) });
+        setBusy("");
+        return;
+      }
+    } catch {
+      setMsg({ type: "err", text: "연결에 실패했어요. 잠시 뒤 다시 시도해 주세요." });
+      setBusy("");
+      return;
+    }
+    await callAsof(0, decision === "exclude" ? "이 종류는 앞으로 목록에서 뺐어요." : "이 종류를 다시 보여 줘요.");
+  }
+
+  // 표 밖 줄 → 수동기록 화면으로 값 넘기기. 시청자 정보는 주소창에 싣지 않는다.
+  function openManualEntry(row: DonationTimeRow) {
+    const ok = stashManualPrefill(slug, {
+      fanId: row.fanId,
+      fanNickname: row.fanNickname,
+      itemName: row.itemName,
+      probability: row.probability,
+      date: prefillDateOf(row.donateTimeText),
+    });
+    if (!ok) {
+      setMsg({ type: "err", text: "이 브라우저에서는 값을 넘길 수 없어요. 수동기록 탭에서 직접 입력해 주세요." });
+      return;
+    }
+    router.push(`/${encodeURIComponent(slug)}?admin=1&atab=manual`);
   }
 
   function onApply() {
@@ -225,6 +278,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   const recommendCount = aliasCandidates.filter((c) => c.wouldRecord).length;
   const hasRecommendation = recommendCount > 0;
   const a = asof?.summary;
+  const mainRows = asof ? asof.rows.filter((r) => r.kind !== "outside") : [];
+  const outsideRowsOf = (key: string) => (asof?.rows ?? []).filter((r) => r.kind === "outside" && r.kindKey === key);
 
   const aliasLinker =
     aliasCandidates.length > 0 ? (
@@ -381,6 +436,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
           <p className={styles.fieldHint}>
             제외 {a.b}건: 그때 기준 초과 {a.excluded.over_threshold} · 그때 꺼진 상품 {a.excluded.disabled_then} · 두배권
             칸 {a.excluded.modifier} · 미션 정산 {a.excluded.mission}
+            {a.excluded.policy > 0 ? ` · 제외하기로 정한 종류 ${a.excluded.policy}` : ""}
             {a.alsoNowRecord > 0 ? ` · 새로 기록될 것 중 ${a.alsoNowRecord}건은 "지금 표로"로도 들어가요` : ""}
           </p>
           {a.hiddenOnFan > 0 ? (
@@ -396,13 +452,134 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
             </p>
           ) : null}
           <p className={styles.fieldHint}>
-            🟢 = 그때 표·사용 설정·기준과 전부 정확히 맞음, 🟡 = 하나라도 확실하지 않음(이유 참고). 미리보기만 되고
-            시트에는 넣지 않아요.
+            🟢 = 그때 표·사용 설정·기준과 전부 정확히 맞음, 🟡 = 하나라도 확실하지 않음(이유 참고), 🟠 = 그때 표에 없는
+            저확률 결과. 미리보기만 되고 시트에는 넣지 않아요. 🟢도 수집에서 통째로 빠진 앞 줄까지 보증하지는 않아서, 2배
+            여부는 원본과 달라질 수 있어요.
           </p>
+          {a.c > a.outside.rows ? (
+            <p className={styles.fieldHint}>
+              검토 {a.c}건 중 {a.c - a.outside.rows}건은 기준 확률보다 높거나 그때 룰렛표가 없어서 아래 목록에 넣지 않았어요.
+            </p>
+          ) : null}
 
           {aliasLinker}
 
-          {asof.rows.length > 0 ? (
+          {(asof.outsideKinds?.length ?? 0) > 0 ? (
+            <details className={styles.dmItem} style={{ marginTop: 10, padding: "8px 10px" }} open>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                🟠 표에 없는 저확률 결과 {asof.outsideKinds!.length}종류 · {a.outside.rows}줄
+              </summary>
+              <p className={styles.fieldHint}>
+                그때 룰렛표에 칸이 없어서 자동으로 판단할 수 없는 결과예요. 게임 결과처럼 기록할 게 아니면 종류째 빼 두고,
+                기록할 게 있으면 줄을 펼쳐 수동기록으로 넣어 주세요.
+              </p>
+              <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                {asof.outsideKinds!.map((kind) => {
+                  const expanded = openKind === kind.key;
+                  const kindRows = expanded ? outsideRowsOf(kind.key) : [];
+                  return (
+                    <div key={kind.key} style={{ borderTop: "1px solid rgba(127,127,127,0.25)", paddingTop: 8 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 10px" }}>
+                        <b style={{ overflowWrap: "anywhere" }}>{kind.itemName}</b>
+                        <span className={styles.tagMuted}>{kind.amount ?? "금액 없음"}개</span>
+                        <span className={styles.fieldHint} style={{ margin: 0 }}>
+                          {kind.count}줄 · {kind.firstTimeText.slice(0, 10)}
+                          {kind.lastTimeText.slice(0, 10) !== kind.firstTimeText.slice(0, 10) ? ` ~ ${kind.lastTimeText.slice(0, 10)}` : ""}
+                          {kind.probabilityMin !== null
+                            ? ` · ${kind.probabilityMin}%${kind.probabilityMax !== kind.probabilityMin ? ` ~ ${kind.probabilityMax}%` : ""}`
+                            : " · 확률 없음"}
+                          {kind.inOtherTable ? " · 다른 표에만 있음" : ""}
+                        </span>
+                      </div>
+                      <div className={styles.thresholdRow} style={{ marginTop: 6 }}>
+                        <button type="button" onClick={() => setOpenKind(expanded ? "" : kind.key)} disabled={busy !== ""}>
+                          {expanded ? "줄 접기" : "줄 보기"}
+                        </button>
+                        {kind.excludable ? (
+                          <button type="button" onClick={() => void setKindPolicy(kind, "exclude")} disabled={busy !== ""}>
+                            이 종류 앞으로 제외
+                          </button>
+                        ) : null}
+                      </div>
+                      {kind.excludable ? null : (
+                        <p className={styles.fieldHint}>룰렛표에 같은 이름이 있어 종류째 뺄 수 없어요. 줄을 펼쳐 확인해 주세요.</p>
+                      )}
+                      {expanded ? (
+                        kindRows.length > 0 ? (
+                          <div className={styles.tableWrap} style={{ marginTop: 8 }}>
+                            <table className={styles.table}>
+                              <thead>
+                                <tr>
+                                  <th>후원시간</th>
+                                  <th>닉네임</th>
+                                  <th>계정ID</th>
+                                  <th>확률</th>
+                                  <th>이유</th>
+                                  <th>넣기</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {kindRows.map((r) => (
+                                  <tr key={r.sourceKey}>
+                                    <td style={{ whiteSpace: "nowrap" }}>{r.donateTimeText || "—"}</td>
+                                    <td style={{ whiteSpace: "nowrap" }}>{r.fanNickname || "—"}</td>
+                                    <td style={{ whiteSpace: "nowrap" }}>{r.fanId || "—"}</td>
+                                    <td style={{ whiteSpace: "nowrap" }}>{r.probability === null ? "—" : `${r.probability}%`}</td>
+                                    <td style={{ minWidth: 150 }}>
+                                      {r.reasonText}
+                                      {r.tags.map((t) => (
+                                        <span key={t} className={`${styles.tagMuted} ${styles.tagWrap}`} style={{ display: "block", marginTop: 4 }}>
+                                          {t}
+                                        </span>
+                                      ))}
+                                    </td>
+                                    <td>
+                                      <div className={styles.thresholdRow} style={{ margin: 0, flexWrap: "nowrap" }}>
+                                        <button type="button" style={{ whiteSpace: "nowrap" }} onClick={() => openManualEntry(r)} disabled={busy !== ""}>
+                                          수동기록으로 넣기
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p className={styles.fieldHint}>줄이 아직 안 불러와졌어요. 아래 &ldquo;더 보기&rdquo;를 눌러 주세요.</p>
+                        )
+                      ) : null}
+                      {expanded && kindRows.length > 0 && kindRows.length < kind.count ? (
+                        <p className={styles.fieldHint}>
+                          {kind.count}줄 중 {kindRows.length}줄만 불러왔어요. 나머지는 아래 &ldquo;더 보기&rdquo;를 눌러 주세요.
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
+
+          {(asof.excludedKinds?.length ?? 0) > 0 ? (
+            <details className={styles.dmItem} style={{ marginTop: 10, padding: "8px 10px" }}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>제외하기로 정한 종류 {asof.excludedKinds!.length}개</summary>
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {asof.excludedKinds!.map((kind) => (
+                  <div key={kind.key} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 10px" }}>
+                    <span style={{ overflowWrap: "anywhere" }}>
+                      {kind.itemName} · {kind.amount ?? "금액 없음"}개 · {kind.count}줄
+                    </span>
+                    <button type="button" onClick={() => void setKindPolicy(kind, "include")} disabled={busy !== ""}>
+                      다시 보기
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
+
+          {mainRows.length > 0 ? (
             <div className={styles.tableWrap} style={{ marginTop: 10 }}>
               <table className={styles.table}>
                 <thead>
@@ -420,7 +597,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
                   </tr>
                 </thead>
                 <tbody>
-                  {asof.rows.slice(0, asofShown).map((r) => (
+                  {mainRows.slice(0, asofShown).map((r) => (
                     <tr key={r.sourceKey}>
                       <td style={{ whiteSpace: "nowrap" }}>{CLS_LABEL[r.kind === "suspected" ? "grey" : r.cls]}</td>
                       <td style={{ minWidth: 180 }}>
@@ -450,14 +627,14 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
               </table>
             </div>
           ) : null}
-          {asofShown < asof.rows.length || asof.page + 1 < asof.pageCount ? (
+          {asofShown < mainRows.length || asof.page + 1 < asof.pageCount ? (
             <div className={styles.thresholdRow} style={{ marginTop: 10 }}>
               <button
                 type="button"
-                onClick={() => (asofShown < asof.rows.length ? setAsofShown((n) => n + MAX_ROWS_SHOWN) : void callAsof(asof.page + 1))}
+                onClick={() => (asofShown < mainRows.length ? setAsofShown((n) => n + MAX_ROWS_SHOWN) : void callAsof(asof.page + 1))}
                 disabled={busy !== ""}
               >
-                {busy === "more" ? "불러오는 중…" : `더 보기 (${Math.min(asofShown, asof.rows.length)}/${asof.totalRows})`}
+                {busy === "more" ? "불러오는 중…" : `더 보기 (${Math.min(asofShown, mainRows.length)}/${asof.totalRows - a.outside.rows})`}
               </button>
             </div>
           ) : null}

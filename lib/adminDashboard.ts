@@ -9,9 +9,11 @@
 // - 쓰기/재판정/규칙 확정은 하지 않는다(읽기 전용).
 
 import {
+  featureFlagsForStreamer,
   getAdminDashboardSource,
   getAdminStreamerIndex,
   getOperatorState,
+  getStreamerRowBySlug,
   isSupabaseConfigured,
   type AdminDashboardRawResult,
   type AdminStreamerIndexRow,
@@ -28,6 +30,7 @@ import {
   type ReconcileDecision,
   type ResultCapture,
 } from "@/lib/upboCore";
+import type { UpboFeatureFlags } from "@/lib/featureFlags";
 import type { DeliveryProgressItem } from "@/lib/api";
 
 export type DecisionKind = "record" | "ignore" | "duplicate" | "needs_review";
@@ -187,10 +190,17 @@ export type AdminIndexResult =
   | { ok: false; reason: "needs_env" | "error"; message?: string };
 
 // 운영자 목록 화면(/admin)용. 검토 필요 많은 순 → 최근 수집 순으로 정렬.
-export async function getAdminIndex(): Promise<AdminIndexResult> {
+// 시범 기능 스위치(운영자 검증실 전용). 읽기 실패(없는 슬러그 등)면 null — 스위치만 숨기고 검증실 본문은 그대로 띄운다.
+export async function getAdminFeatureFlags(slug: string): Promise<UpboFeatureFlags | null> {
+  return getStreamerRowBySlug(slug)
+    .then((streamer) => featureFlagsForStreamer(streamer.id))
+    .catch(() => null);
+}
+
+export async function getAdminIndex(options?: { collectedVersions?: boolean }): Promise<AdminIndexResult> {
   if (!isSupabaseConfigured()) return { ok: false, reason: "needs_env" };
   try {
-    const streamers = await getAdminStreamerIndex();
+    const streamers = await getAdminStreamerIndex(options);
     streamers.sort(
       (a, b) =>
         b.needsReviewSum - a.needsReviewSum ||

@@ -2,8 +2,10 @@ import {
   applyRejudgeForStreamer,
   featureFlagsForStreamer,
   getStreamerRowBySlug,
+  missingSuspectHeadline,
   previewDonationTimeRejudgeForStreamer,
   previewRejudgeForStreamer,
+  setMissingCandidatePolicy,
 } from "@/lib/upboSupabase";
 import { jsonError, jsonOk, readJson } from "@/lib/upboRoute";
 import { requireSheetAdmin } from "@/lib/sheetAdminAuth";
@@ -21,13 +23,16 @@ function httpError(message: string, status: number): Error {
 }
 
 // 이 스트리머가 쓸 수 있는 판정 기준(화면이 "판정 기준" 선택을 보일지 정한다). 시범 스위치는 sy 가 /admin 에서 켠다.
-export async function GET(_request: Request, context: RouteContext) {
+// ?suspect=1 이면 관리자 머리 표시용 의심 수도 함께 준다(시범 스위치 켠 스트리머만, 원본은 읽지 않음).
+export async function GET(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
     await requireSheetAdmin(streamerSlug);
     const streamer = await getStreamerRowBySlug(streamerSlug);
     const flags = await featureFlagsForStreamer(streamer.id);
-    return jsonOk({ modes: { now: true, donationTime: flags.asofRejudge } });
+    const wantsSuspect = new URL(request.url).searchParams.get("suspect") === "1";
+    const suspect = wantsSuspect && flags.asofRejudge ? await missingSuspectHeadline(streamer) : null;
+    return jsonOk({ modes: { now: true, donationTime: flags.asofRejudge }, suspect });
   } catch (error) {
     return jsonError(error);
   }
@@ -37,7 +42,7 @@ export async function GET(_request: Request, context: RouteContext) {
 // - 기본은 미리보기(dryRun). 실제 저장은 apply:true + confirm=<슬러그> 둘 다 있어야 한다
 //   (데이터 초기화와 같은 확인 게이트).
 // - 기존 기록은 절대 수정·삭제하지 않는다. 새로 넣는 것만 한다.
-// - mode: "now"(기본, 현행) | "donation_time"(후원 그때 표로 근사 — 1단계 묶음 3, 미리보기만·쓰기 0, 시범 스위치 필요).
+// - mode: "now"(기본, 현행) | "donation_time"(후원 그때 표로 근사 — 미리보기만, 시범 스위치 필요. 기록 쓰기 0, 첫 쪽에 미처리 수 audit 1줄만 남긴다).
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { streamerSlug } = await context.params;
@@ -51,7 +56,15 @@ export async function POST(request: Request, context: RouteContext) {
       mode?: unknown;
       page?: unknown;
       rawUntil?: unknown;
+      policy?: { amount?: unknown; itemName?: unknown; decision?: unknown };
     }>(request);
+    // 표 밖(🟠) 종류 "앞으로 제외"·취소. 기록은 만들지 않고 audit 한 줄만 남긴다. 미리보기와 같은 시범 스위치 뒤에 둔다.
+    if (body.policy !== undefined) {
+      const flags = await featureFlagsForStreamer(streamer.id);
+      if (!flags.asofRejudge) throw httpError("donation_time mode is not enabled for this streamer", 403);
+      if (!body.policy || typeof body.policy !== "object") throw httpError("policy must be an object", 400);
+      return jsonOk({ ok: true, ...(await setMissingCandidatePolicy(streamer, body.policy as { amount: unknown; itemName: unknown; decision: unknown })) });
+    }
     const mode = body.mode === undefined || body.mode === "now" ? "now" : body.mode === "donation_time" ? "donation_time" : null;
     if (!mode) throw httpError('mode must be "now" or "donation_time"', 400);
     const wantsApply = body.apply === true;

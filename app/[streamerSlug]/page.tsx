@@ -10,6 +10,7 @@ import DeliveryManager from "./DeliveryManager";
 import ItemEventManager from "./ItemEventManager";
 import ItemHistoryLog from "./ItemHistoryLog";
 import RejudgeManager from "./RejudgeManager";
+import MissingSuspectNotice from "./MissingSuspectNotice";
 import SpecialRuleManager from "./SpecialRuleManager";
 import {
   computeHoldings,
@@ -2155,6 +2156,7 @@ function AdminPanel({
         <p className={styles.fieldHint}>마지막 반영 {fmtKst(latest?.appliedAt)}</p>
         {/* 기간 한정 공지(닫기 가능, 기한·닫음은 브라우저에서 판정) — lib/adminNotice.ts */}
         <AdminNoticeBar notice={THEME_UPDATE_NOTICE} />
+        <MissingSuspectNotice slug={state.slug} />
         {/* 기간 한정 정가 수시 알림(sy 확정 2026-08-09 — 관리자 머리 위치, D-7 이하만 강조). */}
         {(() => {
           const details = state.signatureDetails ?? [];

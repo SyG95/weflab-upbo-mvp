@@ -1,11 +1,11 @@
 // ---------- 후원 시점 근사 판정 결과 분류(1단계 묶음 3) — 순수 로직 ----------
 //
-// 🟢 = 아래 G1~G12 가 전부 참일 때만(PHASE1-DESIGN.md §5-3, 헤르메스 "착수 전 고칠 것 1"). 하나라도 거짓이거나
+// 🟢 = 아래 G1~G13 이 전부 참일 때만(PHASE1-DESIGN.md §5-3, 헤르메스 "착수 전 고칠 것 1"). 하나라도 거짓이거나
 //      불명확하면 🟡 + 이유 한 줄. 🟢 도 1단계에서는 "기본 선택"일 뿐이고 넣기는 사람이 누른다(D1).
 // ⚪ = 제외(그때 기준 초과·그때 꺼진 칸·두배권 칸·미션 정산). 판정 엔진(reconcileResults)의 결정은 바꾸지 않는다.
 // 기준% 근사·두배권 꼬리표는 판정이 뒤집힐 수 있을 때만 단다(G6·G7 규칙, 조사 1 함정 5 — 꼬리표 남발 방지).
 
-export type DonationTimeExcludeKind = "over_threshold" | "disabled_then" | "modifier" | "mission";
+export type DonationTimeExcludeKind = "over_threshold" | "disabled_then" | "modifier" | "mission" | "policy";
 
 export type DonationTimeFacts = {
   decision: "record" | "ignore" | "needs_review";
@@ -16,7 +16,10 @@ export type DonationTimeFacts = {
   tableAmbiguity: "window" | "next_version" | "next_conflict" | "before_first" | null; // G4
   usageApproximate: boolean; // G5
   thresholdSafe: boolean; // G6
-  multiplierRisk: boolean; // G7 두배권 칸·확정 규칙이 있는 스트리머이거나 이름이 두배권 같음
+  multiplierRisk: boolean; // G7 이 시청자의 바로 앞 결과가 두배권이거나 앞 결과·순서를 확정할 수 없음, 또는 이름이 두배권 같음
+  multiplierReason?: string | null; // G7 이유 문구(없으면 기본 문구)
+  usageNotOwn: boolean; // G13a 그 표 자체의 저장 설정이 아니라 승계·기본값으로 계산됨
+  laterTurnedOff: boolean; // G13b 후원 뒤 저장 설정에서 같은 칸(뒤 버전은 같은 금액대·이름)을 껐음
   fixedPriceCandidate: boolean; // G8
   timeKnown: boolean; // G9
   preReset: boolean; // G9
@@ -27,7 +30,7 @@ export type DonationTimeFacts = {
   hiddenOnFan: boolean; // 꼬리표(분류는 안 바꿈)
 };
 
-export type DonationTimeClass = "green" | "yellow" | "grey";
+export type DonationTimeClass = "green" | "yellow" | "grey" | "orange";
 
 export type ClassifiedRow = {
   cls: DonationTimeClass;
@@ -51,6 +54,7 @@ const EXCLUDE_TEXT: Record<DonationTimeExcludeKind, string> = {
   disabled_then: "그때 '사용 안 함'으로 꺼 둔 상품이라 제외예요",
   modifier: "두배권 칸이라 제외예요",
   mission: "미션 정산 묶음(계정 없음)이라 제외예요",
+  policy: "앞으로 제외하기로 정한 종류예요",
 };
 
 export function excludeReasonText(kind: DonationTimeExcludeKind): string {
@@ -64,14 +68,17 @@ export function classifyDonationTimeRow(facts: DonationTimeFacts): ClassifiedRow
     return { cls: "grey", reasons: [], reasonText, tags };
   }
   const reasons: string[] = [];
+  // G13b 는 가짜 후보일 가능성이 가장 커서 맨 앞에 보여 준다(화면은 첫 이유만 크게 보인다).
+  if (facts.laterTurnedOff) reasons.push("나중에 같은 이름 칸을 껐어요");
   // G12 를 쓴 건 이름이 원래 다르니 G1 을 따로 세지 않는다(같은 이유 두 번 방지).
   if (!facts.exactName && !facts.aliasUsed) reasons.push("상품 이름 표기가 표와 조금 달라요(띄어쓰기 등)");
   if (!facts.probabilityKnown) reasons.push("확률이 표와 달라요(원본에 확률이 없어요)");
   if (!facts.amountKnown) reasons.push("후원 금액을 읽지 못했어요");
   if (facts.tableAmbiguity) reasons.push(AMBIGUITY_TEXT[facts.tableAmbiguity]);
   if (facts.usageApproximate) reasons.push("그때 사용 설정을 정확히 알 수 없어요(승계 규칙 바뀐 배포 확인 전)");
+  if (facts.usageNotOwn) reasons.push("이 표의 사용 설정이 저장되기 전이라 앞 표 설정으로 판단했어요");
   if (!facts.thresholdSafe) reasons.push("그때 기준확률이 확실하지 않아요");
-  if (facts.multiplierRisk) reasons.push("두배권이 있는 룰렛이라 2배 여부 확인이 필요해요");
+  if (facts.multiplierRisk) reasons.push(facts.multiplierReason || "두배권이 있는 룰렛이라 2배 여부 확인이 필요해요");
   if (facts.fixedPriceCandidate) reasons.push("정가 금액과 같아요");
   if (!facts.timeKnown) reasons.push("후원 시각을 읽지 못했어요");
   else if (facts.preReset) reasons.push("데이터 초기화 전 기록이라 그때 설정 이력이 없을 수 있어요");

@@ -59,6 +59,16 @@ import {
 } from "./judgeInputsAt";
 import type { ManualOverlapEntry } from "./manualOverlap";
 import { FEATURE_FLAGS_ACTION, mergeFeatureFlags, normalizeFeatureFlags, type UpboFeatureFlags } from "./featureFlags";
+import {
+  MISSING_CANDIDATE_POLICY_ACTION,
+  MISSING_PREVIEW_SNAPSHOT_ACTION,
+  SUSPECT_NUMBER_MAX_THRESHOLD,
+  countSuspects,
+  foldMissingCandidatePolicies,
+  missingKindKey,
+  sumSuspectCounts,
+  withSuspectCount,
+} from "./missingCandidate";
 import { buildAliasCandidates, cleanAliasMap, type ItemAliasMap } from "./itemAlias";
 import { isThemeId } from "./themes";
 import { normalizeNoticeFont } from "./noticeFonts";
@@ -89,13 +99,16 @@ import {
   type FixedPriceJudgeEntry,
 } from "./fixedPricePeriod";
 import {
+  collectedVersionLine,
   extensionInfoNotes,
   extensionScreenSummary,
   knownKeysFromRawRows,
+  latestCollectedVersions,
   mergeExtensionConfig,
   normalizeExtensionConfig,
   normalizeHeartbeat,
   trafficLight,
+  type CollectedExtensionVersion,
   type ExtensionConfig,
   type ExtensionLight,
   type ExtensionStatus,
@@ -1201,7 +1214,26 @@ export type AdminStreamerIndexRow = {
     // 색과 무관한 참고 정보(되읽기 중단됨 / 시드 실패: …)
     notes: string[];
   };
+  // 수집 원본 기준 확프 버전 한 줄. 하트비트가 없거나 수집 기록보다 뒤처졌을 때만 있다.
+  collectedVersionLine?: string;
 };
+
+// 수집 원본에 실린 확프 버전(스트리머별 최신 1건). 목록 보강용이라 실패하거나 늦으면 없이 뜬다(5초 제한).
+// 최근 14일로 범위를 묶어 표가 커져도 원본 JSON 을 읽는 양이 늘지 않게 하고, 그 안의 최신 1,000건(max-rows)만 본다.
+// 2026-11-08 실측: 1,000건 ≈ 8일치, 응답 약 130KB. 그보다 오래 저장이 없는 스트리머는 표시하지 않는다.
+async function getCollectedVersionMap(): Promise<Map<string, CollectedExtensionVersion>> {
+  try {
+    const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    const rows = await supabaseFetch<Array<{ streamer_id: string; saved_at: string; client_version: string | null }>>(
+      `/${tableName("raw_imports")}?type=eq.results&saved_at=gte.${since}&select=streamer_id,saved_at,client_version:raw->>clientVersion&order=saved_at.desc&limit=1000`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    return latestCollectedVersions(rows);
+  } catch (error) {
+    console.warn("[admin index] collected extension versions unavailable:", (error as Error).message);
+    return new Map();
+  }
+}
 
 // import_batches 전 스트리머 합산 조회를 "받은 게 없을 때까지" offset 으로 나눠 받는다.
 // 한 번에 limit 만 요청하면 Supabase 서버의 1회 응답 상한(Max rows)에서 조용히 잘려,
@@ -1223,15 +1255,20 @@ async function fetchAllImportBatchRows(): Promise<Array<{ streamer_id: string; a
 }
 
 // 운영자 목록 화면용 읽기 전용 집계. streamers 1쿼리 + import_batches 전량 페이지 순회를 JS에서 합친다.
-// 확프 신호등: 하트비트 상태 전량 1쿼리 + 원격 스위치 이벤트 1쿼리(스트리머별 추가 조회 없음).
-export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> {
-  const [streamers, batches, statusMap, configMap] = await Promise.all([
+// 확프 신호등: 하트비트 상태 전량 1쿼리 + 원격 스위치 이벤트 1쿼리 + 수집 버전 1쿼리(스트리머별 추가 조회 없음).
+// options.collectedVersions=false: 수집 버전 줄을 쓰지 않는 호출자(방문자 목록)는 그 조회를 건너뛴다.
+export async function getAdminStreamerIndex(
+  options: { collectedVersions?: boolean } = {},
+): Promise<AdminStreamerIndexRow[]> {
+  const { collectedVersions = true } = options;
+  const [streamers, batches, statusMap, configMap, collectedMap] = await Promise.all([
     supabaseFetch<StreamerRow[]>(
       `/${tableName("streamers")}?select=id,slug,display_name,threshold_percent,updated_at&order=updated_at.desc&limit=1000`,
     ),
     fetchAllImportBatchRows(),
     getExtensionStatusMap(),
     getExtensionConfigMap(),
+    collectedVersions ? getCollectedVersionMap() : Promise.resolve(new Map<string, CollectedExtensionVersion>()),
   ]);
   const now = new Date();
   const agg = new Map<string, { batchCount: number; lastAppliedAt?: string; recordSum: number; needsReviewSum: number }>();
@@ -1269,6 +1306,7 @@ export async function getAdminStreamerIndex(): Promise<AdminStreamerIndexRow[]> 
             notes: extensionInfoNotes(status.payload),
           }
         : undefined,
+      collectedVersionLine: collectedVersionLine(collectedMap.get(r.id), status?.updatedAt),
     };
   });
 }
@@ -4466,7 +4504,7 @@ const USAGE_ENGINE: UsageEngine = { computeEffectiveOverrides, applyCatalogUsage
 async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawUntil?: string | null } = {}) {
   const sid = streamer.id;
   const rawUntilFilter = options.rawUntil ? `&saved_at=lte.${encodeURIComponent(options.rawUntil)}` : "";
-  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases] = await Promise.all([
+  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases, policyRows] = await Promise.all([
     supabaseFetchAll<{ id: string; version: number; captured_at: string | null; created_at: string | null; groups: Json }>(
       `/${tableName("catalogs")}?streamer_id=eq.${sid}&select=id,version,captured_at,created_at,groups`,
       [{ column: "version", dir: "asc" }, { column: "id", dir: "asc" }],
@@ -4493,6 +4531,7 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
       [{ column: "saved_at", dir: "asc" }, { column: "id", dir: "asc" }],
     ),
     itemAliasesForStreamer(sid),
+    missingCandidatePolicyRows(sid),
   ]);
   const currentThreshold = Number(streamer.threshold_percent ?? 2);
   const history = buildJudgeHistory({
@@ -4550,6 +4589,7 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
     aliases,
     fanCatalogs,
     fanUsageByVersion: fanUsageByVersionLikeState(history, USAGE_ENGINE),
+    outsidePolicies: foldMissingCandidatePolicies(policyRows),
   });
   const rawUntil = options.rawUntil ?? rawRows.reduce<string | null>((max, row) => (row.saved_at && (!max || row.saved_at > max) ? row.saved_at : max), null);
   const aliasCandidates = buildAliasCandidates({
@@ -4577,15 +4617,136 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
   };
 }
 
+// "이 종류 앞으로 제외" 저장 이력(시각순). 공개 /state·페이지 로드 오버레이에는 넣지 않는다 — 다시판정 미리보기·의심 수만 읽는다.
+async function missingCandidatePolicyRows(streamerId: string, init: RequestInit = {}): Promise<Array<{ payload: unknown }>> {
+  // 최신 1,000건을 받아 시각순으로 뒤집는다(오름차순 limit 이면 1,000건이 넘을 때 최신 결정이 잘린다).
+  const rows = await supabaseFetch<Array<{ payload: unknown }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.${MISSING_CANDIDATE_POLICY_ACTION}&select=payload&order=created_at.desc&limit=1000`,
+    init,
+  );
+  return rows.reverse();
+}
+
+function badRequest(message: string): Error {
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = 400;
+  return error;
+}
+
+// 표 밖(🟠) 종류의 제외·제외 취소. 기록은 만들지 않고 audit 한 줄만 남긴다(스키마 0).
+export async function setMissingCandidatePolicy(
+  streamer: StreamerRow,
+  input: { amount: unknown; itemName: unknown; decision: unknown },
+): Promise<{ key: string; decision: "exclude" | "include" }> {
+  const decision = input.decision === "exclude" || input.decision === "include" ? input.decision : null;
+  if (!decision) throw badRequest('decision must be "exclude" or "include"');
+  const itemName = typeof input.itemName === "string" ? cleanText(input.itemName) : "";
+  if (!itemName || itemName.length > 200) throw badRequest("itemName must be 1 to 200 characters");
+  const amount = input.amount === null || input.amount === undefined ? null : Number(input.amount);
+  if (amount !== null && (!Number.isInteger(amount) || amount < 0 || amount > 1_000_000_000)) {
+    throw badRequest("amount must be a non-negative integer or null");
+  }
+  const key = missingKindKey(amount, normalizeName(itemName));
+  await supabaseFetch(`/${tableName("audit_logs")}`, {
+    method: "POST",
+    headers: { prefer: "return=minimal" },
+    body: JSON.stringify({
+      streamer_id: streamer.id,
+      action: MISSING_CANDIDATE_POLICY_ACTION,
+      actor: "sheet_admin",
+      payload: { key, amount, itemName, decision },
+    }),
+  });
+  return { key, decision };
+}
+
+// 미리보기의 미처리 수를 남긴다. 머리 표시가 "미처리 + 이 뒤 새 의심 수"를 계산하는 기준점이다.
+// 사람이 미리보기를 누를 때만(첫 쪽) 쓰이고, 실패해도 미리보기는 그대로 돌아간다.
+async function recordMissingPreviewSnapshot(streamerId: string, remaining: number, at: string): Promise<void> {
+  try {
+    await supabaseFetch(`/${tableName("audit_logs")}`, {
+      method: "POST",
+      headers: { prefer: "return=minimal" },
+      body: JSON.stringify({ streamer_id: streamerId, action: MISSING_PREVIEW_SNAPSHOT_ACTION, actor: "system", payload: { remaining, at } }),
+    });
+  } catch (error) {
+    console.warn("[missing-preview-snapshot] 저장 실패", error instanceof Error ? error.message : error);
+  }
+}
+
+// 관리자 머리 표시: 마지막 미리보기의 미처리 수 + 그 뒤 배치의 의심 수 합. 원본은 읽지 않는다.
+// 룰렛 범위 초기화가 스냅샷보다 뒤면 그 스냅샷은 지워진 원본을 센 것이라 버린다.
+export async function missingSuspectHeadline(streamer: StreamerRow) {
+  const events = await supabaseFetch<Array<{ action: string; payload: unknown; created_at: string }>>(
+    `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=in.(${MISSING_PREVIEW_SNAPSHOT_ACTION},data_reset)&select=action,payload,created_at&order=created_at.desc&limit=20`,
+  );
+  const objectOf = (value: unknown) => (value && typeof value === "object" ? (value as Record<string, unknown>) : {});
+  const latest = events.find(
+    (event) => event.action === MISSING_PREVIEW_SNAPSHOT_ACTION || objectOf(objectOf(event.payload).scope).roulette === true,
+  );
+  const snapshot = latest?.action === MISSING_PREVIEW_SNAPSHOT_ACTION ? latest : null;
+  const snapshotAt = snapshot ? objectOf(snapshot.payload).at : null;
+  const baseline = typeof snapshotAt === "string" ? snapshotAt : (latest?.created_at ?? null);
+  const since = baseline ? `&applied_at=gt.${encodeURIComponent(baseline)}` : "";
+  const batches = await supabaseFetch<Array<{ summary: unknown }>>(
+    `/${tableName("import_batches")}?streamer_id=eq.${streamer.id}${since}&select=summary&order=applied_at.desc&limit=1000`,
+  );
+  return {
+    remaining: snapshot ? Math.max(0, Math.floor(Number(objectOf(snapshot.payload).remaining ?? 0)) || 0) : 0,
+    newSince: sumSuspectCounts(batches),
+    previewedAt: snapshot?.created_at ?? null,
+    numberHidden: Number(streamer.threshold_percent ?? 2) >= SUSPECT_NUMBER_MAX_THRESHOLD,
+  };
+}
+
+// 수집 반영 때 배치에 남길 의심 수. 어떤 실패도 수집을 막지 않는다(실패하면 숫자만 안 남긴다).
+async function suspectCountForApply(
+  streamerId: string,
+  decisions: ReconcileDecision[],
+  catalogItems: NormalizedCatalogItem[],
+  thresholdPercent: number,
+  thresholdOverrides: ThresholdOverrides,
+): Promise<number | undefined> {
+  try {
+    // 수집 경로라 짧게 끊는다(늦어지면 숫자만 안 남기고 그대로 진행).
+    const signal = AbortSignal.timeout(1000);
+    const [usageRows, policyRows] = await Promise.all([
+      supabaseFetch<Array<{ created_at: string }>>(
+        `/${tableName("audit_logs")}?streamer_id=eq.${streamerId}&action=eq.catalog_usage_updated&select=created_at&order=created_at.desc&limit=1`,
+        { signal },
+      ),
+      missingCandidatePolicyRows(streamerId, { signal }),
+    ]);
+    const savedMs = usageRows[0] ? Date.parse(usageRows[0].created_at) : NaN;
+    return countSuspects({
+      decisions,
+      catalogItems,
+      thresholdPercent,
+      thresholdOverrides,
+      lastUsageSavedMs: Number.isFinite(savedMs) ? savedMs : null,
+      policies: foldMissingCandidatePolicies(policyRows),
+    });
+  } catch (error) {
+    console.warn("[suspect-count] 계산 실패", error instanceof Error ? error.message : error);
+    return undefined;
+  }
+}
+
 export async function previewDonationTimeRejudgeForStreamer(
   streamer: StreamerRow,
   options: { page?: number; rawUntil?: string | null } = {},
 ) {
+  // 원본을 읽기 전 시각 — 읽는 사이 들어온 배치의 의심 수가 스냅샷과 "그 뒤" 어느 쪽에서도 빠지지 않게.
+  const previewStartedAt = new Date().toISOString();
   const ctx = await donationTimeRejudgeContext(streamer, { rawUntil: options.rawUntil });
   const totalRows = ctx.rows.length;
   const pageCount = Math.max(1, Math.ceil(totalRows / DONATION_TIME_PAGE_SIZE));
   const requested = Math.floor(Number(options.page ?? 0));
   const page = Number.isFinite(requested) ? Math.min(Math.max(0, requested), pageCount - 1) : 0;
+  // 첫 쪽을 직접 요청했을 때만 기록한다(쪽 번호가 넘쳐 0으로 접힌 "다음 쪽" 요청은 쓰지 않는다).
+  if (requested === 0) {
+    await recordMissingPreviewSnapshot(streamer.id, ctx.summary.d + ctx.summary.outside.rows - ctx.summary.outside.manualOverlap, previewStartedAt);
+  }
   return {
     applied: false,
     mode: "donation_time" as const,
@@ -4610,6 +4771,9 @@ export async function previewDonationTimeRejudgeForStreamer(
     // 이름 연결 재료는 첫 쪽에만 싣는다(다음 쪽 요청마다 같은 걸 또 보내지 않게).
     aliasCandidates: page === 0 ? ctx.aliasCandidates : [],
     aliases: page === 0 ? ctx.aliases : {},
+    // 표 밖 종류 묶음은 첫 쪽에만 싣는다(다음 쪽은 줄만 이어 붙인다).
+    outsideKinds: page === 0 ? ctx.outsideKinds : [],
+    excludedKinds: page === 0 ? ctx.excludedKinds : [],
   };
 }
 
@@ -4719,6 +4883,11 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
     };
   }
   const recordDecisions = preview.decisions.filter((decision) => decision.decision === "record");
+  // 의심 수는 숫자만 남긴다 — 판정·기록·정가·쿠폰·두배권 상태에는 아무 영향이 없고, 계산에 실패하면 안 남긴다.
+  const suspectCount =
+    preview.summary.needsReviewCount > 0
+      ? await suspectCountForApply(streamer.id, preview.decisions, catalogItems, Number(streamer.threshold_percent ?? 2), thresholdOverrides)
+      : undefined;
   const batchRows = await supabaseFetch<BatchRow[]>(`/${tableName("import_batches")}`, {
     method: "POST",
     headers: { prefer: "return=representation" },
@@ -4732,7 +4901,7 @@ export async function applyResultsForStreamer(streamer: StreamerRow, capture: Re
       // 예외가 없으면 기존과 완전히 같은 summary 만 저장된다.
       // judgeRules: 위에서 실제 판정에 쓴 규칙을 그대로 스냅샷으로 남긴다. 검증실은 이 값이 없는 옛 배치를
       // 규칙 없이 재현해 저장 summary 와 맞춘다(기준확률 예외 스냅샷과 같은 원리, buildBatchSummary 순수 함수).
-      summary: buildBatchSummary(preview.summary, thresholdOverrides, judgeRules),
+      summary: withSuspectCount(buildBatchSummary(preview.summary, thresholdOverrides, judgeRules), suspectCount),
       entry_count: recordDecisions.length,
     }),
   });

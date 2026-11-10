@@ -234,6 +234,7 @@ export default function StreamerList({
               const f = freshness(s.lastAppliedAt);
               const extension = !readOnly && "extension" in s ? s.extension : undefined;
               const config = !readOnly && "extensionConfig" in s ? s.extensionConfig : undefined;
+              const collectedLine = !readOnly && "collectedVersionLine" in s ? s.collectedVersionLine : undefined;
               return (
                 <li key={s.slug}>
                   <div className={styles.row}>
@@ -260,6 +261,7 @@ export default function StreamerList({
                             확프{extension.clientVersion ? ` v${extension.clientVersion}` : ""} · {extension.screenSummary}
                           </span>
                         ) : null}
+                        {collectedLine ? <span className={styles.extLine}>{collectedLine}</span> : null}
                         {/* 초록이 아니면 사유를 글자로도 — 툴팁은 터치 화면에서 안 보인다 */}
                         {extension && extension.light.reasons.length > 0 ? (
                           <span className={styles.extReasons} data-light={extension.light.color}>
