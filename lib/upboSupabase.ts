@@ -7,6 +7,7 @@ import { DELIVERY_PERIOD_DEFAULT, sanitizeDeliveryPeriodConfig } from "./deliver
 import type { DeliveryPeriodConfig } from "./deliveryPeriod";
 import { normalizeSheetFont } from "./sheetFonts";
 import {
+  filterEntriesByCatalogUsage,
   jaccardStrings,
   normalizeAccountId,
   normalizeFanAxisPrefs,
@@ -24,6 +25,9 @@ import {
   type SignatureDetail,
   type WeflabLinkInfo,
   type ViewerHolding,
+  type Catalog,
+  type ItemEvent,
+  type UpboEntry,
 } from "./api";
 import {
   isMissionSettlementType,
@@ -49,7 +53,27 @@ import {
   type SpecialItemRule,
 } from "./upboCore";
 import type { JudgeRules } from "./upboCore";
-import { collectDonationTimeCandidates, collectRejudgeCandidates, type RejudgeSourceBatch } from "./rejudge";
+import {
+  collectDonationTimeCandidates,
+  collectRejudgeCandidates,
+  type ApproxInsertSource,
+  type DonationTimeRow,
+  type RejudgeSourceBatch,
+} from "./rejudge";
+import { approxCursorOf, compareApproxCursor, isInsertableApproxRow, type ApproxCursor } from "./rejudgeApplySelection";
+import {
+  APPROX_ORIGIN_KIND,
+  APPROX_PLAN_VERSION,
+  REJUDGE_APPROX_PLANNED_ACTION,
+  REJUDGE_APPROX_REVERT_PLANNED_ACTION,
+  REVERT_BLOCK_TEXT,
+  approxOriginNote,
+  approxOriginOf,
+  classifyRevertTargets,
+  recheckRevertTargets,
+  type RevertClassified,
+  type RevertClassifyInput,
+} from "./rejudgeRevert";
 import {
   buildJudgeHistory,
   DONATION_TIME_AUDIT_ACTIONS,
@@ -4499,12 +4523,24 @@ export async function setFeatureFlags(streamer: StreamerRow, patch: unknown): Pr
 const DONATION_TIME_PAGE_SIZE = 2000;
 const USAGE_ENGINE: UsageEngine = { computeEffectiveOverrides, applyCatalogUsage };
 
+// DB 시각 글자(PostgREST timestamptz, 소수 6자리까지) → 마이크로초. ms 로 자르면 같은 ms 안의 앞뒤가 뒤섞인다.
+function timestampMicros(text: string): number | null {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$/.exec(text.trim());
+  if (!m) {
+    const ms = Date.parse(text);
+    return Number.isFinite(ms) ? ms * 1000 : null;
+  }
+  const base = Date.parse(`${m[1]}${m[3] ?? "Z"}`);
+  if (!Number.isFinite(base)) return null;
+  return base * 1000 + Number(`${m[2] ?? ""}000000`.slice(0, 6));
+}
+
 // rawUntil: 첫 쪽에서 본 원본 마지막 저장 시각. 다음 쪽은 그때까지의 원본만 다시 판정해 방송 중 새 원본이 쌓여도
 // 쪽끼리 같은 행 목록·같은 지문이 된다(없으면 지금까지 전부).
 async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawUntil?: string | null } = {}) {
   const sid = streamer.id;
   const rawUntilFilter = options.rawUntil ? `&saved_at=lte.${encodeURIComponent(options.rawUntil)}` : "";
-  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases, policyRows] = await Promise.all([
+  const [catalogRows, auditRows, batchRows, entryRows, cancelRows, rawRows, aliases, policyRows, couponMap] = await Promise.all([
     supabaseFetchAll<{ id: string; version: number; captured_at: string | null; created_at: string | null; groups: Json }>(
       `/${tableName("catalogs")}?streamer_id=eq.${sid}&select=id,version,captured_at,created_at,groups`,
       [{ column: "version", dir: "asc" }, { column: "id", dir: "asc" }],
@@ -4532,12 +4568,26 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
     ),
     itemAliasesForStreamer(sid),
     missingCandidatePolicyRows(sid),
+    // 쿠폰 연결 상품(넣기 화면의 "쿠폰 반영" 안내용 — 판정·지문과 무관).
+    couponSourceMapForStreamer(sid),
   ]);
   const currentThreshold = Number(streamer.threshold_percent ?? 2);
+  const rawUntil = options.rawUntil ?? rawRows.reduce<string | null>((max, row) => (row.saved_at && (!max || row.saved_at > max) ? row.saved_at : max), null);
+  // 원본 기준 시각(rawUntil) 뒤에 반영된 배치는 판정 재료(기준% 이력)와 지문에서 똑같이 뺀다 — 미리보기 뒤 실시간 수집 배치가
+  // 하나 생겼다고 넣기가 409 가 되지 않게(관문 2 리뷰). 한 수집은 배치를 먼저 쓰고 원본을 저장하므로(applyResultsForStreamer),
+  // rawUntil 안의 원본이 속한 배치는 남는다. 첫 쪽(rawUntil 없음)도 같은 기준(원본 마지막 저장 시각)으로 거른다.
+  const untilMicros = rawUntil ? timestampMicros(rawUntil) : null;
+  const judgeBatches =
+    untilMicros === null
+      ? batchRows
+      : batchRows.filter((batch) => {
+          const at = timestampMicros(String(batch.applied_at ?? ""));
+          return at === null || at <= untilMicros;
+        });
   const history = buildJudgeHistory({
     catalogs: catalogRows,
     audits: auditRows,
-    batches: batchRows,
+    batches: judgeBatches,
     currentThresholdPercent: currentThreshold,
   });
   const cancelled = cancelledQuantityByEntry(
@@ -4580,18 +4630,23 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
     createdAt: m.createdAt,
   }));
   const fanCatalogs = history.catalogs.map((c) => ({ version: c.version, groups: c.groups }));
+  const existingKeys = new Set(entryRows.map((row) => row.source_key));
   const collected = collectDonationTimeCandidates({
-    batches: rawRows.map((row) => ({ batchId: row.batch_id ?? "", capture: (row.raw ?? {}) as ResultCapture, savedAt: row.saved_at ?? null })),
+    batches: rawRows.map((row) => ({
+      batchId: row.batch_id ?? "",
+      capture: (row.raw ?? {}) as ResultCapture,
+      savedAt: row.saved_at ?? null,
+      rawImportId: row.id ?? null,
+    })),
     history,
     engine: USAGE_ENGINE,
-    existingSourceKeys: new Set(entryRows.map((row) => row.source_key)),
+    existingSourceKeys: existingKeys,
     manualEntries,
     aliases,
     fanCatalogs,
     fanUsageByVersion: fanUsageByVersionLikeState(history, USAGE_ENGINE),
     outsidePolicies: foldMissingCandidatePolicies(policyRows),
   });
-  const rawUntil = options.rawUntil ?? rawRows.reduce<string | null>((max, row) => (row.saved_at && (!max || row.saved_at > max) ? row.saved_at : max), null);
   const aliasCandidates = buildAliasCandidates({
     results: collected.aliasUnmatched,
     catalogItems: collected.nowItems,
@@ -4605,6 +4660,8 @@ async function donationTimeRejudgeContext(streamer: StreamerRow, options: { rawU
     latestVersion: history.catalogs.at(-1)?.version ?? null,
     thresholdPercent: currentThreshold,
     rawUntil,
+    existingSourceKeys: existingKeys,
+    couponNames: couponExcludedNameSet(couponMap),
     // 수동기록(G11)·원본 묶음(G10·새 결과)도 지문에 넣는다 — 미리보기 뒤 생긴 겹침·새 원본을 묶음 4 넣기가 409 로 막게.
     inputFingerprint: judgeInputFingerprint(history, {
       aliases,
@@ -4754,12 +4811,17 @@ export async function previewDonationTimeRejudgeForStreamer(
     latestVersion: ctx.latestVersion,
     thresholdPercent: ctx.thresholdPercent,
     summary: ctx.summary,
-    rows: ctx.rows.slice(page * DONATION_TIME_PAGE_SIZE, (page + 1) * DONATION_TIME_PAGE_SIZE),
+    // 넣을 상품이 쿠폰에 연결돼 있으면 표시만 한다(넣어도 쿠폰은 자동으로 안 쌓인다 — 화면이 안내).
+    rows: ctx.rows
+      .slice(page * DONATION_TIME_PAGE_SIZE, (page + 1) * DONATION_TIME_PAGE_SIZE)
+      .map((row) => (row.kind === "new" && ctx.couponNames.has(normalizeName(row.judged.storeItemName)) ? { ...row, couponLinked: true } : row)),
     page,
     pageSize: DONATION_TIME_PAGE_SIZE,
     pageCount,
     totalRows,
     inputFingerprint: ctx.inputFingerprint,
+    // 넣기 계획 지문(관문 2): 넣기 요청이 이 값을 보내고, 서버는 같은 원본 범위로 다시 계산한 값과 다르면 409 로 막는다.
+    planFingerprint: approxPlanFingerprint(ctx.inputFingerprint),
     // 행 목록 자체의 지문(분류 순서 그대로). 화면은 쪽을 이어 붙이기 전에 이것이 첫 쪽과 같은지 본다 — 쪽 사이에
     // 목록 앞쪽 결과가 기록되거나 분류가 바뀌어 순서가 밀리면(행 건너뜀) 처음부터 다시 부른다.
     rowsToken: crypto
@@ -4775,6 +4837,513 @@ export async function previewDonationTimeRejudgeForStreamer(
     outsideKinds: page === 0 ? ctx.outsideKinds : [],
     excludedKinds: page === 0 ? ctx.excludedKinds : [],
   };
+}
+
+// ---------- 후원 시점 근사 다시판정 — 눌러 넣기·void 되돌리기(관문 2, PHASE1-DESIGN §6) ----------
+// 넣기는 미리보기와 같은 원본 범위(rawUntil)로 다시 계산해, 계획 지문이 같고 사람이 화면에서 본 줄(seenThrough 이하)의
+// 🟢·🟡 만 넣는다. 부수 쓰기 0(DESIGN-v0.2 §9): 정가·쿠폰 적립·두배권 상태(modifier_state·처리 키)·raw_imports 는 건드리지 않는다.
+// 라우트가 시트 관리자 인증 + 마스터키 세션 + 시범 스위치를 먼저 확인한다(이 함수들은 확인하지 않는다).
+const APPROX_INSERT_CHUNK = 500; // 운영 max-rows(1,000) 이하 — return=representation 응답이 잘리면 실제 삽입 수가 줄어 보인다
+const APPROX_VOID_REASON = "다시판정(후원 그때 표) 넣기 되돌리기"; // item_events 사유는 공개 /state 로 나간다 — 사람이 적은 이유는 audit 에만
+
+export function approxPlanFingerprint(inputFingerprint: string): string {
+  return crypto
+    .createHash("sha1")
+    .update(`rejudge-approx-plan:v${APPROX_PLAN_VERSION}:${inputFingerprint}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function httpStatusError(message: string, status: number): Error {
+  const error = new Error(message);
+  (error as Error & { status?: number }).status = status;
+  return error;
+}
+
+// 넣을 기록 한 줄: 실시간 기록과 같은 모양(buildUpboEntry)에 (판정 버전, 그 버전의 칸·라벨, 그 표의 확률) 한 세트.
+// ×1 고정 — admin_note 에 배수·수량 키를 넣지 않으므로 화면 수량은 1(×N 은 미리보기 이유로만 보인다).
+function approxEntryRow(
+  streamer: StreamerRow,
+  row: DonationTimeRow,
+  source: ApproxInsertSource,
+  adminNote: string,
+  now: string,
+) {
+  const entry = buildUpboEntry({
+    decision: source.decision,
+    streamerSlug: streamer.slug,
+    batchId: "",
+    catalogVersion: row.judged.version,
+    now,
+  });
+  // 미리보기 행과 판정 결정이 같은 칸을 가리키는지(같은 계산에서 나온 값 — 어긋나면 쓰지 않고 멈춘다).
+  if (
+    !entry ||
+    entry.sourceKey !== row.sourceKey ||
+    entry.catalogGroupIndex !== row.judged.groupIndex ||
+    entry.amountRangeLabel !== row.judged.amountRangeLabel ||
+    entry.itemName !== row.judged.storeItemName
+  ) {
+    throw httpStatusError("넣을 기록을 만들지 못했어요. 다시 미리보기 해 주세요.", 500);
+  }
+  return {
+    id: crypto.randomUUID(),
+    streamer_id: streamer.id,
+    source_key: entry.sourceKey,
+    batch_id: null,
+    catalog_version: row.judged.version,
+    status: "pending",
+    fan_nickname: entry.fanNickname,
+    fan_id: entry.fanId,
+    item_name: entry.itemName,
+    probability: entry.probability,
+    donate_time_text: entry.donateTimeText,
+    donation_type: entry.donationType,
+    donation_amount: entry.donationAmount,
+    donation_amount_text: entry.donationAmountText,
+    catalog_group_index: entry.catalogGroupIndex,
+    amount_range_label: entry.amountRangeLabel,
+    roulette_index: entry.rouletteIndex,
+    roulette_total: entry.rouletteTotal,
+    raw_text: entry.rawText,
+    public_note: "",
+    admin_note: adminNote,
+    raw_import_id: source.rawImportId,
+    // 실행 시각 공통(후원 시각으로 꾸미지 않는다 — 후원 시각은 donate_time_text 에 원문 그대로).
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export type ApproxApplyInput = {
+  fingerprint: string;
+  rawUntil: string;
+  seenThrough: ApproxCursor;
+  sourceKeys: string[];
+};
+
+export async function applyApproxRejudgeForStreamer(streamer: StreamerRow, input: ApproxApplyInput) {
+  const ctx = await donationTimeRejudgeContext(streamer, { rawUntil: input.rawUntil });
+  if (approxPlanFingerprint(ctx.inputFingerprint) !== input.fingerprint) {
+    throw httpStatusError("판정 기준이 바뀌었어요. 다시 미리보기 해 주세요.", 409);
+  }
+  // 화면이 마지막으로 그렸다는 줄(seenThrough)은 다시 계산한 목록에 실제로 있는 줄이어야 하고, 그 줄의 위치 표지와 같아야 한다.
+  // (키·분류·시각을 지어내 못 본 줄까지 허용 범위를 넓히는 요청을 막는다. 그 줄이 그사이 기록돼 목록에서 빠져도 409 → 다시 미리보기.)
+  const seenRow = ctx.rows.find((row) => row.sourceKey === input.seenThrough.k);
+  if (!seenRow || compareApproxCursor(approxCursorOf(seenRow), input.seenThrough) !== 0) {
+    throw httpStatusError("화면 목록이 지금 판정과 달라요. 다시 미리보기 해 주세요.", 409);
+  }
+  // 넣을 수 있는 줄 = 다시 계산한 목록의 🟢·🟡 중 화면이 마지막으로 그린 줄(seenThrough) 이하.
+  // 쪽 번호가 아니라 줄 위치 표지로 자른다 — 미리보기 뒤 앞쪽 결과가 기록돼 목록에서 빠져도 남은 줄의 표지는 그대로라,
+  // 사람이 못 본 뒤쪽 줄이 앞으로 밀려 들어오지 않는다(쪽 번호로 자르면 밀려 들어온다).
+  const allowed = new Map<string, DonationTimeRow>();
+  for (const row of ctx.rows) {
+    if (isInsertableApproxRow(row) && compareApproxCursor(approxCursorOf(row), input.seenThrough) <= 0) {
+      allowed.set(row.sourceKey, row);
+    }
+  }
+  const requestedKeys = [...new Set(input.sourceKeys)];
+  const targets: DonationTimeRow[] = [];
+  let notAllowed = 0;
+  for (const key of requestedKeys) {
+    const row = allowed.get(key);
+    if (row) targets.push(row);
+    // 미리보기 뒤 실시간 수집·다른 넣기가 먼저 기록한 결과 — 쓰지 않고 "이미 있었어요"로 센다.
+    else if (!(ctx.existingSourceKeys.has(key) && ctx.resultKeys.has(key))) notAllowed += 1;
+  }
+  if (notAllowed > 0) {
+    throw httpStatusError(
+      `고른 줄 중 ${notAllowed}건은 넣을 수 있는 목록(화면에서 본 🟢·🟡)에 없어요. 다시 미리보기 해 주세요.`,
+      400,
+    );
+  }
+  targets.sort((x, y) => compareApproxCursor(approxCursorOf(x), approxCursorOf(y)));
+  const runId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const adminNote = approxOriginNote({ runId, at: now });
+  // 쓰기 전에 전부 만들어 본다(한 줄이라도 못 만들면 아무것도 안 쓴다).
+  const rows = targets.map((row) => {
+    const source = ctx.newDecisions.get(row.sourceKey);
+    if (!source) throw httpStatusError("넣을 기록을 만들지 못했어요. 다시 미리보기 해 주세요.", 500);
+    return approxEntryRow(streamer, row, source, adminNote, now);
+  });
+  // 1) 계획 장부를 넣기 전에 먼저 쓴다: runId + 넣을 기록 id 전부(결과 키는 계정 ID 를 담고 있어 안 넣는다).
+  //    한 줄이라도 못 쓰면 아무것도 넣지 않는다 — "들어갔는데 장부가 없어 되돌리기에서 안 보이는" 기록이 생기지 않게.
+  //    id 는 우리가 정한 값이라, 중복으로 안 들어간 줄의 id 는 실제 기록에 없다(목록·되돌리기는 실제로 있는 기록만 센다).
+  try {
+    for (let i = 0, chunk = 0; i < rows.length; i += APPROX_INSERT_CHUNK, chunk += 1) {
+      await supabaseFetch(`/${tableName("audit_logs")}`, {
+        method: "POST",
+        headers: { prefer: "return=minimal" },
+        body: JSON.stringify({
+          streamer_id: streamer.id,
+          action: REJUDGE_APPROX_PLANNED_ACTION,
+          actor: "operator",
+          payload: {
+            runId,
+            chunk,
+            at: now,
+            v: APPROX_PLAN_VERSION,
+            entryIds: rows.slice(i, i + APPROX_INSERT_CHUNK).map((row) => row.id),
+          },
+        }),
+      });
+    }
+  } catch {
+    throw httpStatusError("넣기 장부를 쓰지 못해 아무것도 넣지 않았어요. 잠시 뒤 다시 해 주세요.", 503);
+  }
+  // 2) 넣기(500개씩). 중간에 멈춰도 이미 들어간 묶음은 같은 runId 계획 장부 + admin_note 로 목록·되돌리기에 잡힌다.
+  const storeNameByKey = new Map(targets.map((row) => [row.sourceKey, row.judged.storeItemName]));
+  const insertedEntryIds: string[] = [];
+  let couponLinked = 0;
+  for (let i = 0; i < rows.length; i += APPROX_INSERT_CHUNK) {
+    let inserted: Array<{ id: string; source_key: string }> | null;
+    try {
+      inserted = await supabaseFetch<Array<{ id: string; source_key: string }> | null>(
+        `/${tableName("upbo_entries")}?on_conflict=streamer_id,source_key&select=id,source_key`,
+        {
+          method: "POST",
+          headers: { prefer: "resolution=ignore-duplicates,return=representation" },
+          body: JSON.stringify(rows.slice(i, i + APPROX_INSERT_CHUNK)),
+        },
+      );
+    } catch {
+      throw httpStatusError(
+        `넣는 중에 멈췄어요(확인된 것 ${insertedEntryIds.length}건). 일부가 들어갔을 수 있어요 — "넣기 실행 기록"에서 확인·되돌리기 할 수 있어요.`,
+        502,
+      );
+    }
+    // 응답으로 받은 행만 "들어감"으로 센다(ON CONFLICT DO NOTHING + RETURNING = 실제 삽입 행만).
+    for (const row of inserted ?? []) {
+      if (typeof row?.id !== "string" || typeof row?.source_key !== "string") continue;
+      insertedEntryIds.push(row.id);
+      if (ctx.couponNames.has(normalizeName(storeNameByKey.get(row.source_key) ?? ""))) couponLinked += 1;
+    }
+  }
+  return {
+    runId,
+    requested: requestedKeys.length,
+    inserted: insertedEntryIds.length,
+    alreadyExisted: requestedKeys.length - insertedEntryIds.length,
+    insertedEntryIds,
+    // 넣은 줄 중 쿠폰 연결 상품 수 — 자동 적립은 안 한다(쿠폰 "지난 당첨 가져오기"로 반영, D9).
+    couponLinked,
+    at: now,
+  };
+}
+
+type ApproxPlanRow = { id: string; created_at: string; run_id: string | null; ids: unknown };
+
+function planEntryIds(rows: ApproxPlanRow[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.run_id || !UUID_RE.test(row.run_id) || !Array.isArray(row.ids)) continue;
+    const ids = out.get(row.run_id) ?? new Set<string>();
+    for (const id of row.ids) if (typeof id === "string" && UUID_RE.test(id)) ids.add(id);
+    out.set(row.run_id, ids);
+  }
+  return out;
+}
+
+// 이 스트리머의 넣기 실행 목록 전부(최근 것부터, 계획 장부 기준). 넣은 수·되돌린 수는 실제로 있는 기록·void 이벤트로 센다.
+// 실제로 들어간 기록이 하나도 없는 실행(장부만 쓰고 멈춤·전부 이미 있음)은 되돌릴 게 없어 뺀다. 결과 키는 내보내지 않는다.
+export async function approxRejudgeRuns(streamer: StreamerRow) {
+  const [plans, approxEntries, voids] = await Promise.all([
+    supabaseFetchAll<ApproxPlanRow>(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.${REJUDGE_APPROX_PLANNED_ACTION}&select=id,created_at,run_id:payload->>runId,ids:payload->entryIds`,
+      PAGE_CREATED_ASC,
+    ),
+    supabaseFetchAll<{ id: string; created_at: string; admin_note: string | null }>(
+      `/${tableName("upbo_entries")}?streamer_id=eq.${streamer.id}&admin_note=like.*${APPROX_ORIGIN_KIND}*&select=id,created_at,admin_note`,
+      PAGE_CREATED_ASC,
+    ),
+    supabaseFetchAll<{ id: string; created_at: string; upbo_entry_id: string; run_id: string | null }>(
+      `/${tableName("upbo_item_events")}?streamer_id=eq.${streamer.id}&event_type=eq.void&after_json->>rollbackRunId=not.is.null&select=id,created_at,upbo_entry_id,run_id:after_json->>rollbackRunId`,
+      PAGE_CREATED_ASC,
+    ),
+  ]);
+  const planned = planEntryIds(plans);
+  const firstAt = new Map<string, string>();
+  for (const row of plans) {
+    if (!row.run_id || !planned.has(row.run_id)) continue;
+    const at = firstAt.get(row.run_id);
+    if (!at || row.created_at < at) firstAt.set(row.run_id, row.created_at);
+  }
+  const insertedByRun = new Map<string, Set<string>>();
+  for (const entry of approxEntries) {
+    const runId = approxOriginOf(entry.admin_note)?.runId;
+    if (!runId || !planned.get(runId)?.has(entry.id)) continue;
+    const set = insertedByRun.get(runId) ?? new Set<string>();
+    set.add(entry.id);
+    insertedByRun.set(runId, set);
+  }
+  const runs: Array<{ runId: string; appliedAt: string; inserted: number; revertedAt: string | null; voided: number }> = [];
+  for (const [runId, inserted] of insertedByRun) {
+    const voidedIds = new Set<string>();
+    let revertedAt: string | null = null;
+    for (const ev of voids) {
+      if (ev.run_id !== runId || !inserted.has(ev.upbo_entry_id)) continue;
+      voidedIds.add(ev.upbo_entry_id);
+      if (!revertedAt || ev.created_at > revertedAt) revertedAt = ev.created_at;
+    }
+    runs.push({ runId, appliedAt: firstAt.get(runId) ?? "", inserted: inserted.size, revertedAt, voided: voidedIds.size });
+  }
+  return runs.sort((a, b) => b.appliedAt.localeCompare(a.appliedAt));
+}
+
+function couponItemKeysByName(sourceMap: CouponSourceMap[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const entry of sourceMap) {
+    for (const source of entry.sources) {
+      const name = normalizeName(source.itemName);
+      if (!name) continue;
+      const keys = out.get(name) ?? [];
+      if (!keys.includes(entry.itemKey)) keys.push(entry.itemKey);
+      out.set(name, keys);
+    }
+  }
+  return out;
+}
+
+// 되돌리기 재료: 대상 = 계획 장부(rejudge_approx_planned) id ∩ 실제로 있는 기록 ∩ admin_note runId.
+// 막힘 판정 재료는 팬 페이지와 같은 읽기(getStreamerState — 배송관리와 같은 기록·이벤트·처리 수량)에 배송 배정·쿠폰 적립 메모만 더한다.
+// 사람이 누를 때만 읽는다.
+async function approxRevertContext(streamer: StreamerRow, runId: string) {
+  if (!UUID_RE.test(runId)) throw badRequest("runId must be a uuid");
+  const [state, planRows, assignments, accrual, sourceMap] = await Promise.all([
+    getStreamerState(streamer.slug),
+    supabaseFetchAll<ApproxPlanRow>(
+      `/${tableName("audit_logs")}?streamer_id=eq.${streamer.id}&action=eq.${REJUDGE_APPROX_PLANNED_ACTION}&payload->>runId=eq.${runId}&select=id,created_at,run_id:payload->>runId,ids:payload->entryIds`,
+      PAGE_CREATED_ASC,
+    ),
+    getDeliveryAssignments(streamer.id),
+    autoAccrualIndex(streamer.id),
+    couponSourceMapForStreamer(streamer.id),
+  ]);
+  const plannedIds = planEntryIds(planRows).get(runId) ?? new Set<string>();
+  const entries = state.upboEntries as unknown as UpboEntry[];
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const noted = entries.filter((entry) => approxOriginOf(entry.adminNote)?.runId === runId);
+  const notedIds = new Set(noted.map((entry) => entry.id));
+  const targets = noted.filter((entry) => plannedIds.has(entry.id));
+  // 계획엔 있는데 기록이 없는 id: 이미 있던 결과라 안 들어감·넣다가 멈춤·그 뒤 초기화로 지워짐(되돌릴 것 없음).
+  const missing = [...plannedIds].filter((id) => !byId.has(id)).length;
+  const ledgerOnly = [...plannedIds].filter((id) => byId.has(id) && !notedIds.has(id)).length;
+  const noteOnly = noted.length - targets.length;
+  const classifyInput: RevertClassifyInput = {
+    targets,
+    deliveryEntries: filterEntriesByCatalogUsage(entries, state.catalogs as unknown as Catalog[], state.catalogUsageByVersion),
+    events: state.itemEvents as ItemEvent[],
+    assignmentEntryIds: new Set(assignments.map((a) => a.entryId)),
+    progress: state.deliveryProgress,
+    couponExcludedNames: couponExcludedNameSet(sourceMap),
+    accruedKeys: accrual.keys,
+    truncatedMarks: accrual.truncated,
+    couponItemKeysByName: couponItemKeysByName(sourceMap),
+  };
+  const classified = classifyRevertTargets(classifyInput);
+  return {
+    runId,
+    appliedAt: planRows[0]?.created_at ?? null,
+    targets,
+    byId,
+    classifyInput,
+    classified,
+    missing,
+    ledgerMismatch: ledgerOnly > 0 || noteOnly > 0 ? { ledgerOnly, noteOnly } : null,
+  };
+}
+
+function approxRevertView(ctx: Awaited<ReturnType<typeof approxRevertContext>>, classified: RevertClassified = ctx.classified) {
+  const entryView = (entryId: string) => {
+    const entry = ctx.byId.get(entryId);
+    return {
+      entryId,
+      itemName: entry?.itemName ?? "",
+      fanNickname: entry?.fanNickname ?? "",
+      donateTimeText: entry?.donateTimeText ?? "",
+    };
+  };
+  return {
+    runId: ctx.runId,
+    appliedAt: ctx.appliedAt,
+    targets: ctx.targets.length,
+    voidable: classified.voidable.length,
+    alreadyCancelled: classified.alreadyCancelled.length,
+    blocked: classified.blocked.map((b) => ({
+      ...entryView(b.entryId),
+      reasons: b.reasons.map((code) => ({ code, text: REVERT_BLOCK_TEXT[code] })),
+    })),
+    missing: ctx.missing,
+    ledgerMismatch: ctx.ledgerMismatch,
+  };
+}
+
+export async function previewApproxRejudgeRevert(streamer: StreamerRow, runId: string) {
+  return approxRevertView(await approxRevertContext(streamer, runId));
+}
+
+// 기록 하나에 근사 넣기 되돌리기 void 는 한 번만 — 이벤트 id 를 기록 id 로 정해(UUID 모양) 동시에 두 번 눌러도
+// on_conflict=id 가 두 번째를 막는다.
+function approxVoidEventId(entryId: string): string {
+  const hex = crypto.createHash("sha1").update(`rejudge-approx-void:${entryId}`).digest("hex");
+  const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+const RECHECK_ID_CHUNK = 100; // 한 조회에 넣는 기록 id 수(주소 길이)
+const RECHECK_PARALLEL = 5; // 재확인 이벤트 조회를 한 번에 이만큼만 보낸다(운영 DB 동시 요청 상한)
+
+// void 를 쓰기 직전 다시 읽는다: 대상 기록의 이벤트(종류 무관), 배송 배정 최신 스냅샷, 쿠폰 자동 적립 키, 배송 처리 수량.
+// 판정(approxRevertContext)과 이 읽기 사이에 생긴 양도·배송 배정·쿠폰 적립이 있으면 그 기록은 건너뛰고,
+// 새 처리 수량으로 "되돌린 뒤 처리 수량 > 보유"를 다시 판단한다(보유 계산 재료는 판정 때 읽은 기록·이벤트).
+async function recheckBeforeVoid(
+  streamer: StreamerRow,
+  entries: UpboEntry[],
+  base: RevertClassifyInput,
+): Promise<RevertClassified> {
+  const valid = entries.filter((entry) => UUID_RE.test(entry.id));
+  const idChunks: string[][] = [];
+  for (let i = 0; i < valid.length; i += RECHECK_ID_CHUNK) idChunks.push(valid.slice(i, i + RECHECK_ID_CHUNK).map((entry) => entry.id));
+  const readEvents = async () => {
+    const rows: Array<{ upbo_entry_id: string; event_type: string }> = [];
+    for (let i = 0; i < idChunks.length; i += RECHECK_PARALLEL) {
+      const wave = await Promise.all(
+        idChunks.slice(i, i + RECHECK_PARALLEL).map((ids) =>
+          supabaseFetch<Array<{ upbo_entry_id: string; event_type: string }>>(
+            `/${tableName("upbo_item_events")}?streamer_id=eq.${streamer.id}&upbo_entry_id=in.(${ids.join(",")})&select=upbo_entry_id,event_type`,
+          ),
+        ),
+      );
+      for (const list of wave) rows.push(...list);
+    }
+    return rows;
+  };
+  const [events, assignments, accrual, progress] = await Promise.all([
+    readEvents(),
+    getDeliveryAssignments(streamer.id),
+    autoAccrualIndex(streamer.id, { withTruncationMarks: false }),
+    getDeliveryProgress(streamer.id),
+  ]);
+  const assignmentEntryIds = new Set(assignments.map((a) => a.entryId));
+  const first = recheckRevertTargets({
+    targets: valid.map((entry) => ({ id: entry.id, sourceKey: entry.sourceKey })),
+    events: events.map((row) => ({ upboEntryId: row.upbo_entry_id, eventType: row.event_type })),
+    assignmentEntryIds,
+    accruedKeys: accrual.keys,
+  });
+  const passed = new Set(first.voidable);
+  const again = classifyRevertTargets({
+    ...base,
+    targets: valid.filter((entry) => passed.has(entry.id)),
+    progress,
+    assignmentEntryIds,
+    accruedKeys: accrual.keys,
+  });
+  return {
+    voidable: again.voidable,
+    alreadyCancelled: [...first.alreadyCancelled, ...again.alreadyCancelled],
+    blocked: [...first.blocked, ...again.blocked],
+  };
+}
+
+// void 를 배열로(500개씩) 넣는다. 전량(quantity_delta null), after_json.rollbackRunId. 물리 삭제 없음.
+// 넣기와 같이 계획 장부(rejudge_approx_revert_planned: runId·되돌릴 기록 id·이벤트 id·사유)를 먼저 쓰고, 못 쓰면 void 0.
+// 실제로 되돌린 것은 void 이벤트(이벤트 id = 기록 id 로 정한 값)로 센다.
+async function voidEntriesBulk(streamer: StreamerRow, entries: UpboEntry[], options: { runId: string; reason: string }) {
+  const revertId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  try {
+    for (let i = 0, chunk = 0; i < entries.length; i += APPROX_INSERT_CHUNK, chunk += 1) {
+      const part = entries.slice(i, i + APPROX_INSERT_CHUNK);
+      await supabaseFetch(`/${tableName("audit_logs")}`, {
+        method: "POST",
+        headers: { prefer: "return=minimal" },
+        body: JSON.stringify({
+          streamer_id: streamer.id,
+          action: REJUDGE_APPROX_REVERT_PLANNED_ACTION,
+          actor: "operator",
+          payload: {
+            runId: options.runId,
+            revertId,
+            chunk,
+            at: now,
+            reason: options.reason,
+            entryIds: part.map((entry) => entry.id),
+            eventIds: part.map((entry) => approxVoidEventId(entry.id)),
+          },
+        }),
+      });
+    }
+  } catch {
+    throw httpStatusError("되돌리기 장부를 쓰지 못해 아무것도 되돌리지 않았어요. 잠시 뒤 다시 해 주세요.", 503);
+  }
+  const voidedEntryIds: string[] = [];
+  for (let i = 0; i < entries.length; i += APPROX_INSERT_CHUNK) {
+    const part = entries.slice(i, i + APPROX_INSERT_CHUNK);
+    let inserted: Array<{ id: string; upbo_entry_id: string }> | null;
+    try {
+      inserted = await supabaseFetch<Array<{ id: string; upbo_entry_id: string }> | null>(
+        `/${tableName("upbo_item_events")}?on_conflict=id&select=id,upbo_entry_id`,
+        {
+          method: "POST",
+          headers: { prefer: "resolution=ignore-duplicates,return=representation" },
+          body: JSON.stringify(
+            part.map((entry) => ({
+              id: approxVoidEventId(entry.id),
+              upbo_entry_id: entry.id,
+              streamer_id: streamer.id,
+              event_type: "void",
+              actor_type: "operator",
+              actor_id: null,
+              before_json: { status: entry.status },
+              after_json: { status: "cancelled", rollbackRunId: options.runId },
+              quantity_delta: null,
+              reason: APPROX_VOID_REASON,
+              memo: null,
+              approval_status: "not_required",
+              created_at: now,
+            })),
+          ),
+        },
+      );
+    } catch {
+      throw httpStatusError(
+        `되돌리는 중에 멈췄어요(확인된 것 ${voidedEntryIds.length}건). 일부가 되돌려졌을 수 있어요 — 되돌리기 미리보기로 다시 확인해 주세요.`,
+        502,
+      );
+    }
+    for (const row of inserted ?? []) if (typeof row?.upbo_entry_id === "string") voidedEntryIds.push(row.upbo_entry_id);
+  }
+  return { voidedEntryIds };
+}
+
+export async function applyApproxRejudgeRevert(
+  streamer: StreamerRow,
+  runId: string,
+  input: { confirm: unknown; reason: unknown },
+) {
+  if (String(input.confirm ?? "") !== streamer.slug) throw badRequest("confirm must equal the streamer slug");
+  const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+  if (!reason || reason.length > 200) throw badRequest("되돌리는 이유를 1~200자로 적어 주세요.");
+  // 막힘 판정은 누른 순간의 데이터로 다시 하고(미리보기 뒤 양도·배송 처리가 생겼을 수 있다), 쓰기 직전에 한 번 더 확인한다.
+  const ctx = await approxRevertContext(streamer, runId);
+  const candidates = ctx.classified.voidable.map((id) => ctx.byId.get(id)).filter((entry): entry is UpboEntry => Boolean(entry));
+  const recheck = await recheckBeforeVoid(streamer, candidates, ctx.classifyInput);
+  const toVoid = recheck.voidable.map((id) => ctx.byId.get(id)).filter((entry): entry is UpboEntry => Boolean(entry));
+  const result = toVoid.length > 0 ? await voidEntriesBulk(streamer, toVoid, { runId, reason }) : { voidedEntryIds: [] };
+  const voidedSet = new Set(result.voidedEntryIds);
+  // 쓰기 직전 확인에서 걸린 것은 막힘·이미 취소에 더한다. on_conflict 로 안 들어간 것(같이 누른 다른 되돌리기)은 이미 취소.
+  const view = approxRevertView(ctx, {
+    voidable: result.voidedEntryIds,
+    alreadyCancelled: [
+      ...ctx.classified.alreadyCancelled,
+      ...recheck.alreadyCancelled,
+      ...recheck.voidable.filter((id) => !voidedSet.has(id)),
+    ],
+    blocked: [...ctx.classified.blocked, ...recheck.blocked],
+  });
+  return { ...view, voided: result.voidedEntryIds.length, voidedEntryIds: result.voidedEntryIds };
 }
 
 // 지금 판정에 쓰는 규칙 — 미리보기(preview)와 반영(apply)이 같은 값을 쓴다(둘이 어긋나면 미리보기가 거짓말을 한다).

@@ -62,12 +62,15 @@ import {
   type DonationTimeExcludeKind,
   type DonationTimeFacts,
 } from "./rejudgeClassify";
+import { approxCursorOf, compareApproxCursor } from "./rejudgeApplySelection";
 
 export type RejudgeSourceBatch = {
   batchId: string;
   capture: ResultCapture;
   // raw_imports.saved_at — 후원 시각을 못 읽는 결과의 대체 시각(후원 시점 근사 모드만 쓴다).
   savedAt?: string | null;
+  // raw_imports.id — 근사 모드 넣기(관문 2)가 기록의 raw_import_id 로 싣는다(원본 추적용).
+  rawImportId?: string | null;
 };
 
 export type RejudgeSummary = {
@@ -240,7 +243,11 @@ export type DonationTimeRow = {
   manualOverlap: ManualOverlap | null;
   ambiguity: DonationTimeFacts["tableAmbiguity"];
   kindKey?: string; // 🟠 줄의 종류 열쇠(화면이 종류별로 줄을 펼칠 때 쓴다). 화면이 판정 모듈을 끌어오지 않게 서버가 실어 준다.
+  couponLinked?: boolean; // 넣을 상품이 쿠폰에 연결돼 있음(서버가 실어 준다 — 넣어도 쿠폰은 자동으로 안 쌓인다는 안내용)
 };
+
+// 근사 모드 넣기(관문 2) 재료: 새로 기록될 결과 키 → 판정 엔진 결정(그때 표의 칸·확률) + 원본 행 id.
+export type ApproxInsertSource = { decision: ReconcileDecision; rawImportId: string | null };
 
 export type DonationTimeSummary = {
   batchCount: number;
@@ -276,7 +283,7 @@ export type OutsideKind = {
 };
 export type ExcludedKind = { key: string; amount: number | null; itemName: string; count: number };
 
-type Occurrence = { result: NormalizedResult; savedAt: string | null; signature: string };
+type Occurrence = { result: NormalizedResult; savedAt: string | null; signature: string; rawImportId: string | null };
 
 // 같은 결과 키가 원본 묶음마다 "판정에 영향을 주는 값"이 같은지(G10). 후원 시각·종류도 본다 — 시각이 다르면 그때 표·설정이,
 // 종류가 다르면 미션 정산 여부가 달라진다. 닉네임은 시청자가 바꿀 수 있고 판정과 무관해 뺀다.
@@ -344,6 +351,9 @@ export function collectDonationTimeCandidates({
   nowItems: NormalizedCatalogItem[];
   outsideKinds: OutsideKind[];
   excludedKinds: ExcludedKind[];
+  // 관문 2 넣기용(화면 응답에는 싣지 않는다): 새로 기록될 결과의 결정·원본 행, 원본에 나온 결과 키 전부.
+  newDecisions: Map<string, ApproxInsertSource>;
+  resultKeys: Set<string>;
 } {
   const summary: DonationTimeSummary = {
     batchCount: 0,
@@ -378,12 +388,13 @@ export function collectDonationTimeCandidates({
     summary.batchCount += 1;
     summary.scannedResults += normalized.results.length;
     const savedAt = batch.savedAt ?? normalized.capturedAt ?? null;
+    const rawImportId = batch.rawImportId ?? null;
     for (const result of normalized.results) {
       const signature = occurrenceSignature(result, savedAt);
       const variants = variantsByKey.get(result.sourceKey);
-      if (!variants) variantsByKey.set(result.sourceKey, [{ result, savedAt, signature }]);
+      if (!variants) variantsByKey.set(result.sourceKey, [{ result, savedAt, signature, rawImportId }]);
       else if (!variants.some((v) => v.signature === signature)) {
-        variants.push({ result, savedAt, signature });
+        variants.push({ result, savedAt, signature, rawImportId });
         unstable.add(result.sourceKey);
       }
     }
@@ -396,6 +407,7 @@ export function collectDonationTimeCandidates({
   const floorRaw = Math.min(...thresholdPercentCandidates(history));
   const thresholdFloor = Number.isFinite(floorRaw) ? floorRaw : Number.NEGATIVE_INFINITY;
   const rows: DonationTimeRow[] = [];
+  const newDecisions = new Map<string, ApproxInsertSource>();
   const aliasUnmatched: NormalizedResult[] = [];
   const outsideByKind = new Map<string, OutsideKind>();
   const excludedByKind = new Map<string, ExcludedKind>();
@@ -758,16 +770,12 @@ export function collectDonationTimeCandidates({
     if (hiddenOnFan) summary.hiddenOnFan += 1;
     if (nowDecision === "record") summary.alsoNowRecord += 1;
     rows.push({ ...base, kind: "new", ...classified, manualOverlap, ambiguity });
+    newDecisions.set(sourceKey, { decision, rawImportId: occ.rawImportId });
   }
 
-  // 🟢 → 🟡 → 🟠 → 오기록 의심, 같은 분류 안에서는 후원 시각 순(못 읽은 시각은 뒤).
-  const order = (r: DonationTimeRow) => (r.kind === "suspected" ? 3 : r.kind === "outside" ? 2 : r.cls === "green" ? 0 : 1);
-  rows.sort(
-    (x, y) =>
-      order(x) - order(y) ||
-      (x.timeMs ?? Number.MAX_SAFE_INTEGER) - (y.timeMs ?? Number.MAX_SAFE_INTEGER) ||
-      x.sourceKey.localeCompare(y.sourceKey),
-  );
+  // 🟢 → 🟡 → 🟠 → 오기록 의심, 같은 분류 안에서는 후원 시각 순(못 읽은 시각은 뒤), 그다음 결과 키.
+  // 넣기(관문 2)의 "본 줄까지만" 검사가 같은 비교 함수를 쓴다(lib/rejudgeApplySelection.ts).
+  rows.sort((x, y) => compareApproxCursor(approxCursorOf(x), approxCursorOf(y)));
   summary.outside.kinds = outsideByKind.size;
   const byCountThenName = <T extends { count: number; itemName: string }>(a: T, b: T) =>
     b.count - a.count || a.itemName.localeCompare(b.itemName);
@@ -778,5 +786,7 @@ export function collectDonationTimeCandidates({
     nowItems,
     outsideKinds: [...outsideByKind.values()].sort(byCountThenName),
     excludedKinds: [...excludedByKind.values()].sort(byCountThenName),
+    newDecisions,
+    resultKeys: new Set(variantsByKey.keys()),
   };
 }

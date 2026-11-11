@@ -38,6 +38,8 @@ function make({ deny = false, flag = true } = {}) {
         if (deny) throw Object.assign(new Error("관리자 인증이 필요합니다."), { status: 401 });
       },
     },
+    // 관문 2 에서 라우트가 새로 읽는 마스터키 세션 판별(여기 시험은 관문 1 범위라 늘 아님).
+    "@/lib/sheetMasterSession": { isSheetMasterSession: async () => false },
     "@/lib/upboSupabase": {
       getStreamerRowBySlug: async () => ({ id: "s1", slug: "demo" }),
       featureFlagsForStreamer: async () => ({ asofRejudge: flag, catalogDriftNotice: false }),

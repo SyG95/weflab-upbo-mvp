@@ -5,6 +5,8 @@
 // 지금 표 기준으로 다시 판정해 되살린다. 원본과 기존 기록은 건드리지 않고,
 // 새로 기록될 것만 추가한다(같은 걸 두 번 눌러도 두 번 들어가지 않음).
 // 시범 스위치가 켜진 스트리머는 "후원 그때 표로(근사)" 미리보기도 고를 수 있다(확프 0.5.0 1단계 묶음 3, 쓰기 0).
+// 관문 2: sy 마스터키로 연 세션(canApply)만 그 미리보기에서 🟢·🟡 를 골라 넣고, 실행별로 void 되돌리기를 할 수 있다.
+//   스트리머 개인 비밀번호 세션은 지금처럼 미리보기만(버튼 없음, 서버도 403).
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -13,6 +15,13 @@ import ItemAliasLinker, { type AliasCandidate } from "./ItemAliasLinker";
 import { forgetMissingSuspectCache } from "./MissingSuspectNotice";
 import type { DonationTimeRow, DonationTimeSummary, ExcludedKind, OutsideKind } from "@/lib/rejudge";
 import { prefillDateOf, stashManualPrefill } from "@/lib/manualPrefill";
+import {
+  approxApplyMessage,
+  approxSelection,
+  carryApproxPicks,
+  isApproxRowPicked,
+  isInsertableApproxRow,
+} from "@/lib/rejudgeApplySelection";
 
 type Candidate = {
   sourceKey: string;
@@ -48,6 +57,7 @@ type AsofPreview = {
   pageCount: number;
   totalRows: number;
   inputFingerprint: string;
+  planFingerprint: string;
   rowsToken: string;
   rawUntil: string | null;
   aliasCandidates?: AliasCandidate[];
@@ -56,6 +66,45 @@ type AsofPreview = {
 };
 
 type Mode = "now" | "donation_time";
+
+type ApproxRun = { runId: string; appliedAt: string; inserted: number; revertedAt: string | null; voided: number };
+
+type RevertPreview = {
+  runId: string;
+  appliedAt: string | null;
+  targets: number;
+  voidable: number;
+  alreadyCancelled: number;
+  blocked: Array<{
+    entryId: string;
+    itemName: string;
+    fanNickname: string;
+    donateTimeText: string;
+    reasons: Array<{ code: string; text: string }>;
+  }>;
+  missing: number;
+  ledgerMismatch: { ledgerOnly: number; noteOnly: number } | null;
+};
+
+const RUNS_SHOWN = 20;
+
+const APPLY_DOUBLE_NOTE =
+  "앞 줄이 수집에서 빠졌다면 두배권이 빠져 수량이 1개 적게 들어갈 수 있어요. 넣은 뒤 수량 조정으로 고칠 수 있어요.";
+
+function kstText(iso: string | null): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "—";
+  return new Date(ms).toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
 
 type CatalogGroupLike = {
   amountRangeLabel?: string;
@@ -75,7 +124,7 @@ const NOW_LABEL: Record<string, string> = {
 
 export default function RejudgeManager({ slug, groups = [] }: { slug: string; groups?: CatalogGroupLike[] }) {
   const router = useRouter();
-  const [busy, setBusy] = useState<"" | "preview" | "apply" | "more">("");
+  const [busy, setBusy] = useState<"" | "preview" | "apply" | "more" | "revert">("");
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [asof, setAsof] = useState<AsofPreview | null>(null);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
@@ -85,6 +134,15 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   // 서버는 한 번에 2,000행까지 보내고, 화면은 그중 앞부분만 그린 뒤 "더 보기"로 늘린다(서버 재요청은 받은 행을 다 본 뒤에만).
   const [asofShown, setAsofShown] = useState(MAX_ROWS_SHOWN);
   const [openKind, setOpenKind] = useState("");
+  // 관문 2: 넣기·되돌리기 버튼은 서버가 canApply(시범 스위치 + 마스터키 세션)를 줄 때만 보인다.
+  const [canApply, setCanApply] = useState(false);
+  // 사람이 바꾼 체크만 담는다(없으면 🟢 체크·🟡 해제 기본값). 새 미리보기마다 비운다.
+  const [picks, setPicks] = useState<Record<string, boolean>>({});
+  const [runs, setRuns] = useState<ApproxRun[] | null>(null);
+  const [runsReload, setRunsReload] = useState(0);
+  const [runsShown, setRunsShown] = useState(RUNS_SHOWN);
+  const [revertPreview, setRevertPreview] = useState<RevertPreview | null>(null);
+  const [revertReason, setRevertReason] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -92,12 +150,28 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (alive && data?.modes?.donationTime === true) setAsofAvailable(true);
+        if (alive && data?.canApply === true) setCanApply(true);
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, [slug]);
+
+  // 넣기 실행 기록(되돌리기용). 마스터키 세션 + "그때 표로" 모드일 때만 읽는다.
+  useEffect(() => {
+    if (!canApply || mode !== "donation_time") return;
+    let alive = true;
+    fetch(`/api/s/${encodeURIComponent(slug)}/rejudge-revert`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (alive && Array.isArray(data?.runs)) setRuns(data.runs as ApproxRun[]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [slug, canApply, mode, runsReload]);
 
   function errorText(status: number, data: { error?: string } | null): string {
     return status === 401
@@ -163,7 +237,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   }
 
   // 후원 그때 표로(근사) 미리보기. page 0 = 처음부터 다시, 그 뒤 쪽은 아래에 이어 붙인다.
-  async function callAsof(page: number, noticeAfter = "") {
+  // keepPicks: 넣기가 막히거나 멈춘 뒤 다시 부를 때 — 분류가 같은 줄은 사람이 고른 것을 그대로 두고, 바뀐 줄만 해제한다.
+  async function callAsof(page: number, noticeAfter = "", opts: { keepPicks?: boolean; noticeType?: "ok" | "err" } = {}) {
     setBusy(page === 0 ? "preview" : "more");
     if (page === 0) setMsg(null);
     try {
@@ -186,9 +261,14 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       }
       if (page === 0) {
         forgetMissingSuspectCache(slug);
+        if (opts.keepPicks && asof) {
+          setPicks(carryApproxPicks(asof.rows, picks, next.rows));
+        } else {
+          setAsofShown(MAX_ROWS_SHOWN);
+          setPicks({});
+        }
         setAsof(next);
-        setAsofShown(MAX_ROWS_SHOWN);
-        if (noticeAfter) setMsg({ type: "ok", text: noticeAfter });
+        if (noticeAfter) setMsg({ type: opts.noticeType ?? "ok", text: noticeAfter });
         else if (next.summary.d === 0 && next.summary.suspectedOver === 0 && next.summary.outside.rows === 0) {
           setMsg({ type: "ok", text: "새로 기록될 게 없어요. 후원 그때 표 기준으로도 빠진 기록이 없습니다." });
         }
@@ -254,6 +334,166 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
     router.push(`/${encodeURIComponent(slug)}?admin=1&atab=manual`);
   }
 
+  // 관문 2 넣기: 화면에 그린 줄 중 고른 🟢·🟡 만, 마지막으로 그린 줄 위치(seenThrough)와 계획 지문을 같이 보낸다.
+  // 서버는 같은 원본 범위로 다시 계산해 지문이 다르면 409, 못 본 줄·넣을 수 없는 줄이 섞이면 400(둘 다 쓰기 0).
+  async function onApplyAsof() {
+    if (!asof) return;
+    const { keys, seenThrough } = approxSelection(shownMainRows, picks);
+    if (keys.length === 0 || !seenThrough) return;
+    const ok = window.confirm(
+      `고른 ${keys.length}건을 업보 시트에 넣습니다.\n` +
+        `후원 그때 룰렛표의 상품·확률로 1개씩 들어가고, 기존 기록은 바뀌지 않아요.\n` +
+        `${APPLY_DOUBLE_NOTE}\n` +
+        `잘못 넣으면 "넣기 실행 기록"에서 되돌릴 수 있지만, 되돌린 결과는 다시 넣을 수 없어요.\n\n진행할까요?`,
+    );
+    if (!ok) return;
+    setBusy("apply");
+    setMsg(null);
+    let notice = "";
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mode: "donation_time",
+          apply: true,
+          confirm: slug,
+          fingerprint: asof.planFingerprint,
+          rawUntil: asof.rawUntil,
+          seenThrough,
+          sourceKeys: keys,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.status === 409) {
+        // 판정 재료가 바뀌었다(쓰기 0). 옛 목록으로 다시 누르지 않게 새 미리보기를 불러온다 — 분류가 같은 줄의 선택은 그대로.
+        await callAsof(0, `${data?.error ?? "판정 기준이 바뀌었어요."} 새 미리보기를 불러왔어요 — 고른 줄을 다시 확인해 주세요.`, {
+          keepPicks: true,
+          noticeType: "err",
+        });
+        return;
+      }
+      if (res.status >= 500) {
+        // 서버가 넣다가 멈췄을 수 있다(장부는 넣기 전에 먼저 쓴다) — 실행 기록과 미리보기를 다시 불러 실제 상태를 보여 준다.
+        setRunsReload((n) => n + 1);
+        router.refresh();
+        await callAsof(0, `${data?.error ?? "넣는 중에 문제가 생겼어요. 일부가 들어갔을 수 있어요."} 미리보기와 넣기 실행 기록을 다시 불러왔어요.`, {
+          keepPicks: true,
+          noticeType: "err",
+        });
+        return;
+      }
+      if (!res.ok) {
+        // 400·401·403 은 서버가 쓰기 전에 막은 것(쓰기 0).
+        setMsg({ type: "err", text: errorText(res.status, data) });
+        setBusy("");
+        return;
+      }
+      notice = approxApplyMessage({
+        requested: Number(data.requested ?? keys.length),
+        inserted: Number(data.inserted ?? 0),
+        alreadyExisted: Number(data.alreadyExisted ?? 0),
+        couponLinked: Number(data.couponLinked ?? 0),
+      });
+    } catch {
+      // 응답을 못 받았다 — 서버에서는 들어갔을 수도 있다. 실제 상태를 다시 불러온다.
+      setRunsReload((n) => n + 1);
+      router.refresh();
+      await callAsof(0, "연결이 끊겨 결과를 못 받았어요. 일부가 들어갔을 수 있어요 — 미리보기와 넣기 실행 기록을 다시 불러왔어요.", {
+        keepPicks: true,
+        noticeType: "err",
+      });
+      return;
+    }
+    setRunsReload((n) => n + 1);
+    router.refresh();
+    // 넣은 뒤 미리보기를 다시 불러 목록·미처리 수(머리 표시 기준점)를 맞춘다.
+    await callAsof(0, notice);
+  }
+
+  async function previewRevert(runId: string) {
+    setBusy("revert");
+    setMsg(null);
+    setRevertReason("");
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge-revert`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMsg({ type: "err", text: errorText(res.status, data) });
+        return;
+      }
+      setRevertPreview(data as RevertPreview);
+    } catch {
+      setMsg({ type: "err", text: "연결에 실패했어요. 잠시 뒤 다시 시도해 주세요." });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applyRevert() {
+    if (!revertPreview) return;
+    const reason = revertReason.trim();
+    if (!reason || revertPreview.voidable === 0) return;
+    const ok = window.confirm(
+      `이 실행으로 넣은 기록 ${revertPreview.voidable}건을 되돌립니다(취소 표시, 지우지 않음).\n` +
+        `막힌 ${revertPreview.blocked.length}건은 건너뛰어요. 되돌린 결과는 다시 넣을 수 없어요.\n\n진행할까요?`,
+    );
+    if (!ok) return;
+    setBusy("revert");
+    setMsg(null);
+    let notice = "";
+    try {
+      const res = await fetch(`/api/s/${encodeURIComponent(slug)}/rejudge-revert`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId: revertPreview.runId, apply: true, confirm: slug, reason }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.status >= 500) {
+        // 되돌리다 멈췄을 수 있다(장부는 void 전에 먼저 쓴다) — 실행 기록·미리보기를 다시 불러 실제 상태를 보여 준다.
+        setRevertPreview(null);
+        setRunsReload((n) => n + 1);
+        router.refresh();
+        const text = `${data?.error ?? "되돌리는 중에 문제가 생겼어요. 일부가 되돌려졌을 수 있어요."} 넣기 실행 기록을 다시 불러왔어요.`;
+        if (asof) await callAsof(0, text, { keepPicks: true, noticeType: "err" });
+        else {
+          setMsg({ type: "err", text });
+          setBusy("");
+        }
+        return;
+      }
+      if (!res.ok) {
+        setMsg({ type: "err", text: errorText(res.status, data) });
+        setBusy("");
+        return;
+      }
+      const blocked = Array.isArray(data.blocked) ? data.blocked.length : 0;
+      notice =
+        `${Number(data.voided ?? 0)}건을 되돌렸어요(취소 표시).` +
+        (Number(data.alreadyCancelled ?? 0) > 0 ? ` 이미 취소된 ${Number(data.alreadyCancelled)}건은 그대로 뒀어요.` : "") +
+        (blocked > 0 ? ` 막힌 ${blocked}건은 건너뛰었어요 — 따로 처리해 주세요.` : "");
+      setRevertPreview(null);
+      setRevertReason("");
+    } catch {
+      setRevertPreview(null);
+      setRunsReload((n) => n + 1);
+      setMsg({ type: "err", text: "연결이 끊겨 결과를 못 받았어요. 일부가 되돌려졌을 수 있어요 — 넣기 실행 기록을 다시 불러왔어요." });
+      setBusy("");
+      return;
+    }
+    setRunsReload((n) => n + 1);
+    router.refresh();
+    if (asof) await callAsof(0, notice);
+    else {
+      setMsg({ type: "ok", text: notice });
+      setBusy("");
+    }
+  }
+
   function onApply() {
     if (!preview) return;
     const ok = window.confirm(
@@ -269,6 +509,7 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
     setPreview(null);
     setAsof(null);
     setMsg(null);
+    setRevertPreview(null);
   }
 
   const s = preview?.summary;
@@ -279,6 +520,11 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
   const hasRecommendation = recommendCount > 0;
   const a = asof?.summary;
   const mainRows = asof ? asof.rows.filter((r) => r.kind !== "outside") : [];
+  // 화면에 그린 줄만 고를 수 있다(넣기 요청의 "본 줄까지만" 기준).
+  const shownMainRows = mainRows.slice(0, asofShown);
+  const selection = canApply ? approxSelection(shownMainRows, picks) : { keys: [] as string[], seenThrough: null };
+  const couponPicked = canApply ? shownMainRows.filter((r) => r.couponLinked && isApproxRowPicked(r, picks)).length : 0;
+  const unseenInsertable = a ? Math.max(0, a.d - shownMainRows.filter((r) => isInsertableApproxRow(r)).length) : 0;
   const outsideRowsOf = (key: string) => (asof?.rows ?? []).filter((r) => r.kind === "outside" && r.kindKey === key);
 
   const aliasLinker =
@@ -348,7 +594,12 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
           {mode === "donation_time" ? (
             <p className={styles.fieldHint} style={{ marginTop: 4 }}>
               후원한 시각에 쓰던 룰렛표·사용 설정·기준확률로 다시 판정해 봅니다. 확프가 끊겼거나 표 갱신이 늦어
-              검토함에 갇힌 당첨을 찾는 용도예요. <b>지금은 미리보기만 되고 시트에는 넣지 않아요.</b>
+              검토함에 갇힌 당첨을 찾는 용도예요.{" "}
+              {canApply ? (
+                <b>🟢는 처음부터 골라져 있고, 🟡는 이유를 보고 직접 골라 넣어요.</b>
+              ) : (
+                <b>여기서는 미리보기만 되고 시트에는 넣지 않아요.</b>
+              )}
             </p>
           ) : null}
         </fieldset>
@@ -366,6 +617,101 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
       </div>
 
       {msg ? <p className={msg.type === "ok" ? styles.fieldOk : styles.fieldErr}>{msg.text}</p> : null}
+
+      {mode === "donation_time" && canApply ? (
+        <details className={styles.dmItem} style={{ marginTop: 10, padding: "8px 10px" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+            넣기 실행 기록{runs ? ` ${runs.length}건` : ""}
+          </summary>
+          <p className={styles.fieldHint}>
+            잘못 넣었으면 실행별로 되돌릴 수 있어요. 되돌리기는 지우는 게 아니라 &lsquo;취소&rsquo; 표시라서{" "}
+            <b>되돌린 결과는 다시 넣을 수 없어요</b>(팬 &ldquo;획득 기록&rdquo; 탭에는 취소된 채로 남아요). 양도·배송
+            처리·쿠폰 적립이 있는 기록은 막고 이유를 보여 줘요.
+          </p>
+          {runs && runs.length === 0 ? <p className={styles.fieldHint}>아직 넣은 실행이 없어요.</p> : null}
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {(runs ?? []).slice(0, runsShown).map((run) => {
+              const open = revertPreview?.runId === run.runId ? revertPreview : null;
+              return (
+                <div key={run.runId} style={{ borderTop: "1px solid rgba(127,127,127,0.25)", paddingTop: 8 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 10px" }}>
+                    <span>{kstText(run.appliedAt)}</span>
+                    <span className={styles.tagMuted}>넣음 {run.inserted}건</span>
+                    {run.voided > 0 ? <span className={styles.tagWarn}>되돌림 {run.voided}건</span> : null}
+                    <button type="button" onClick={() => void previewRevert(run.runId)} disabled={busy !== ""}>
+                      {busy === "revert" && !open ? "확인 중…" : "되돌리기 미리보기"}
+                    </button>
+                  </div>
+                  {open ? (
+                    <div style={{ marginTop: 8 }}>
+                      <p className={styles.fieldHint} style={{ marginTop: 0 }}>
+                        이 실행의 기록 {open.targets}건: 되돌릴 수 있음 <b>{open.voidable}</b> · 이미 취소 {open.alreadyCancelled} ·
+                        막힘 {open.blocked.length}
+                        {open.missing > 0 ? ` · 장부엔 있지만 기록이 없음 ${open.missing}(이미 있던 결과라 안 들어갔거나 중간에 멈춤·지워짐)` : ""}
+                      </p>
+                      {open.ledgerMismatch ? (
+                        <p className={styles.fieldErr}>
+                          넣기 장부와 기록 표시가 서로 달라요(장부에만 {open.ledgerMismatch.ledgerOnly}건, 기록에만{" "}
+                          {open.ledgerMismatch.noteOnly}건). 둘 다에 있는 기록만 되돌려요.
+                        </p>
+                      ) : null}
+                      {open.blocked.length > 0 ? (
+                        <div className={styles.tableWrap} style={{ marginTop: 6 }}>
+                          <table className={styles.table}>
+                            <thead>
+                              <tr>
+                                <th>후원시간</th>
+                                <th>닉네임</th>
+                                <th>상품</th>
+                                <th>막힌 이유</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {open.blocked.map((b) => (
+                                <tr key={b.entryId}>
+                                  <td style={{ whiteSpace: "nowrap" }}>{b.donateTimeText || "—"}</td>
+                                  <td style={{ whiteSpace: "nowrap" }}>{b.fanNickname || "—"}</td>
+                                  <td style={{ whiteSpace: "nowrap" }}>{b.itemName}</td>
+                                  <td style={{ minWidth: 160 }}>{b.reasons.map((r) => r.text).join(" · ")}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                      {open.voidable > 0 ? (
+                        <div className={styles.thresholdRow} style={{ marginTop: 8, flexWrap: "wrap" }}>
+                          <input
+                            type="text"
+                            value={revertReason}
+                            maxLength={200}
+                            placeholder="되돌리는 이유(필수)"
+                            onChange={(e) => setRevertReason(e.target.value)}
+                            disabled={busy !== ""}
+                            style={{ minWidth: 0, flex: "1 1 160px" }}
+                          />
+                          <button type="button" onClick={() => void applyRevert()} disabled={busy !== "" || !revertReason.trim()}>
+                            {busy === "revert" ? "되돌리는 중…" : `${open.voidable}건 되돌리기`}
+                          </button>
+                        </div>
+                      ) : (
+                        <p className={styles.fieldHint}>되돌릴 수 있는 기록이 없어요.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {runs && runs.length > runsShown ? (
+            <div className={styles.thresholdRow} style={{ marginTop: 8 }}>
+              <button type="button" onClick={() => setRunsShown((n) => n + RUNS_SHOWN)} disabled={busy !== ""}>
+                {`실행 더 보기 (${runsShown}/${runs.length})`}
+              </button>
+            </div>
+          ) : null}
+        </details>
+      ) : null}
 
       {mode === "now" && preview && s ? (
         <div style={{ marginTop: 12 }}>
@@ -453,8 +799,8 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
           ) : null}
           <p className={styles.fieldHint}>
             🟢 = 그때 표·사용 설정·기준과 전부 정확히 맞음, 🟡 = 하나라도 확실하지 않음(이유 참고), 🟠 = 그때 표에 없는
-            저확률 결과. 미리보기만 되고 시트에는 넣지 않아요. 🟢도 수집에서 통째로 빠진 앞 줄까지 보증하지는 않아서, 2배
-            여부는 원본과 달라질 수 있어요.
+            저확률 결과.{canApply ? " 🟠는 이 목록으로 넣지 않고 수동기록으로 넣어요." : " 미리보기만 되고 시트에는 넣지 않아요."}{" "}
+            🟢도 수집에서 통째로 빠진 앞 줄까지 보증하지는 않아서, 2배 여부는 원본과 달라질 수 있어요.
           </p>
           {a.c > a.outside.rows ? (
             <p className={styles.fieldHint}>
@@ -579,11 +925,35 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
             </details>
           ) : null}
 
+          {canApply && a.d > 0 ? (
+            <div className={styles.dmItem} style={{ marginTop: 10, padding: "8px 10px" }}>
+              <div className={styles.thresholdRow} style={{ margin: 0 }}>
+                <button type="button" onClick={() => void onApplyAsof()} disabled={busy !== "" || selection.keys.length === 0}>
+                  {busy === "apply" ? "넣는 중…" : `고른 ${selection.keys.length}건 시트에 넣기`}
+                </button>
+              </div>
+              <p className={styles.fieldHint}>{APPLY_DOUBLE_NOTE}</p>
+              {couponPicked > 0 ? (
+                <p className={styles.fieldHint}>
+                  <span className={styles.tagWarn}>쿠폰 반영</span> 고른 줄 중 {couponPicked}건은 쿠폰에 연결된 상품이에요. 넣어도
+                  쿠폰은 자동으로 안 쌓여요 — 넣은 뒤 쿠폰 탭 &ldquo;지난 당첨 가져오기&rdquo;로 반영해 주세요(안 하면 팬 보유에서도
+                  빠지고 쿠폰도 안 붙어요).
+                </p>
+              ) : null}
+              {unseenInsertable > 0 ? (
+                <p className={styles.fieldHint}>
+                  아직 화면에 안 펼친 🟢·🟡 {unseenInsertable}건은 넣지 않아요. 아래 &ldquo;더 보기&rdquo;로 펼친 줄만 고를 수 있어요.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {mainRows.length > 0 ? (
             <div className={styles.tableWrap} style={{ marginTop: 10 }}>
               <table className={styles.table}>
                 <thead>
                   <tr>
+                    {canApply ? <th>넣기</th> : null}
                     <th>분류</th>
                     <th>이유</th>
                     <th>후원시간</th>
@@ -597,8 +967,24 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
                   </tr>
                 </thead>
                 <tbody>
-                  {mainRows.slice(0, asofShown).map((r) => (
+                  {shownMainRows.map((r) => (
                     <tr key={r.sourceKey}>
+                      {canApply ? (
+                        <td>
+                          {isInsertableApproxRow(r) ? (
+                            <input
+                              type="checkbox"
+                              aria-label={`${r.itemName} 넣기`}
+                              checked={isApproxRowPicked(r, picks)}
+                              disabled={busy !== ""}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setPicks((prev) => ({ ...prev, [r.sourceKey]: checked }));
+                              }}
+                            />
+                          ) : null}
+                        </td>
+                      ) : null}
                       <td style={{ whiteSpace: "nowrap" }}>{CLS_LABEL[r.kind === "suspected" ? "grey" : r.cls]}</td>
                       <td style={{ minWidth: 180 }}>
                         {r.reasonText}
@@ -608,6 +994,11 @@ export default function RejudgeManager({ slug, groups = [] }: { slug: string; gr
                             {t}
                           </span>
                         ))}
+                        {canApply && r.couponLinked ? (
+                          <span className={`${styles.tagWarn} ${styles.tagWrap}`} style={{ display: "block", marginTop: 4 }}>
+                            쿠폰 연결 상품 — 넣은 뒤 쿠폰 반영 필요
+                          </span>
+                        ) : null}
                       </td>
                       <td style={{ whiteSpace: "nowrap" }}>{r.donateTimeText || "—"}</td>
                       <td style={{ whiteSpace: "nowrap" }}>{r.fanNickname || "—"}</td>
